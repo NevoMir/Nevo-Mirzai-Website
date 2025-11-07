@@ -1,24 +1,26 @@
-import nccuLogo from "./images/nccu_logo.svg";
-import ntuLogo from "./images/ntu_logo.svg";
-import asuLogo from "./images/asu_logo.svg";
+//import nccuLogo from "./images/nccu_logo.svg";
+//import ntuLogo from "./images/ntu_logo.svg";
+//import asuLogo from "./images/asu_logo.svg";
+import epflLogo from "./images/epfl_logo.svg";
+import cuhkLogo from "./images/cuhk_logo.png";
 
 export const EduData = [
   {
-    degree: "Ph.D. in Computer Science",
-    school: "Arizona State University",
-    years: "2022 - Present",
-    logo: asuLogo,
+    degree: "M.S. in Robotics with minor in Data Science",
+    school: "École polytechnique fédérale de Lausanne",
+    years: "2024 - Present",
+    logo: epflLogo,
   },
   {
-    degree: "M.S. in Computer Science",
-    school: "National Taiwan University",
-    years: "2020 - 2022",
-    logo: ntuLogo,
+    degree: "Exchange Student Program",
+    school: "Chinese University of Hong Kong (CUHK)",
+    years: "2023 - 2024",
+    logo: cuhkLogo,
   },
   {
-    degree: "B.S. in Computer Science",
-    school: "National Chengchi University",
-    years: "2018 - 2020",
-    logo: nccuLogo,
+    degree: "B.S. in Mechanical Engineering",
+    school: "École polytechnique fédérale de Lausanne",
+    years: "2021 - 2024",
+    logo: epflLogo,
   },
 ];
