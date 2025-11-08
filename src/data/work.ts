@@ -1,24 +1,27 @@
-import uiucLogo from "./images/uiuc_logo.png";
-import googleLogo from "./images/google_logo.svg";
-import nvidiaLogo from "./images/nvidia_logo.webp";
+import rocketTeamDarkLogo from "./images/logoRocketTeamDarkMode.png";
+import rocketTeamLightLogo from "./images/logoRocketTeamLightMode.jpeg";
+import epflLogo from "./images/epfl_logo.svg";
 
 export const WorkData = [
   {
-    title: "Software Engineer",
-    company: "Nvidia",
-    years: "2022 - Present",
-    logo: nvidiaLogo,
+    title: "Mechanical Engineer",
+    company: "EPFL Rocket Team",
+    years: "2022 - 2023",
+    // Use dark mode logo by default; light mode logo can be handled in the component
+    logo: rocketTeamLightLogo,
+    // alternative
+    darkLogo: rocketTeamDarkLogo,
   },
   {
-    title: "Software Engineering Intern",
-    company: "Google",
-    years: "2020 - 2022",
-    logo: googleLogo,
+    title: "Student Mentor",
+    company: "École polytechnique fédérale de Lausanne",
+    years: "2022 - 2025",
+    logo: epflLogo,
   },
   {
-    title: "Research Assistant",
-    company: "University of Illinois Urbana-Champaign",
-    years: "Jul 2019 - Sep 2019",
-    logo: uiucLogo,
+    title: "Teaching Assistant",
+    company: "École polytechnique fédérale de Lausanne",
+    years: "2022 - 2025",
+    logo: epflLogo,
   },
 ];
