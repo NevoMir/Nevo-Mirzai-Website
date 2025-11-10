@@ -175,7 +175,6 @@ function ProjectMediaRail({ project }: { project: Project }) {
                         </div>
                     ))}
                 </div>
-                <p className="text-xs text-muted-foreground">Scroll horizontally to browse the gallery.</p>
             </div>
         </div>
     );
@@ -227,37 +226,43 @@ function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: str
         <div className="space-y-2">
             <div className="flex items-center gap-2 text-xl font-semibold">
                 <FaFileLines className="w-5 h-5" />
-                {resource.label}
+                <a
+                    href={resource.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:underline underline-offset-4"
+                >
+                    {resource.label}
+                </a>
             </div>
-            <div className="w-full h-[40vh] min-h-[240px]">
+            <div className="w-full h-[50vh] min-h-[320px]">
                 <div className="h-full rounded-md border bg-muted/30 overflow-hidden flex items-center justify-center">
                     {errorMessage && <PdfFallback text={errorMessage} />}
                     {!errorMessage && (
-                        <div className="h-full overflow-x-auto w-full">
-                            <Document
-                                file={resource.url}
-                                onLoadSuccess={onDocumentLoadSuccess}
-                                onLoadError={onDocumentError}
-                                loading={<PdfFallback text="Loading PDF…" />}
-                                className="flex h-full gap-4 px-4 py-3"
-                            >
-                                {Array.from({ length: numPages }, (_, index) => (
-                                    <Page
-                                        key={`page_${index + 1}`}
-                                        pageNumber={index + 1}
-                                        height={pageHeight}
-                                        renderAnnotationLayer={false}
-                                        renderTextLayer={false}
-                                        className="flex-shrink-0 rounded-md border bg-background shadow"
-                                    />
-                                ))}
-                            </Document>
+                        <div className="h-full w-full overflow-hidden">
+                            <div className="h-full overflow-x-auto overflow-y-hidden">
+                                <Document
+                                    file={resource.url}
+                                    onLoadSuccess={onDocumentLoadSuccess}
+                                    onLoadError={onDocumentError}
+                                    loading={<PdfFallback text="Loading PDF…" />}
+                                    className="flex h-full gap-4 px-4 py-3"
+                                >
+                                    {Array.from({ length: numPages }, (_, index) => (
+                                        <Page
+                                            key={`page_${index + 1}`}
+                                            pageNumber={index + 1}
+                                            height={pageHeight}
+                                            renderAnnotationLayer={false}
+                                            renderTextLayer={false}
+                                            className="flex-shrink-0 rounded-md border bg-background shadow"
+                                        />
+                                    ))}
+                                </Document>
+                            </div>
                         </div>
                     )}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                    Scroll horizontally to read the report without leaving the page.
-                </p>
             </div>
             {resource.description && (
                 <p className="text-xs text-muted-foreground">{resource.description}</p>
@@ -283,7 +288,8 @@ function usePdfPageHeight() {
 
     useEffect(() => {
         const update = () => {
-            const next = typeof window !== "undefined" ? Math.max(220, window.innerHeight * 0.4) : 320;
+            const next =
+                typeof window !== "undefined" ? Math.max(240, window.innerHeight * 0.45) : 320;
             setHeight(next);
         };
 

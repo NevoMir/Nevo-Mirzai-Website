@@ -393,6 +393,35 @@ export const ProjectsData: Project[] = [
             },
         ],
     },
+    {
+        slug: "personal-website-simpleplain",
+        title: "Personal Website Built on SimplePlain",
+        timeline: "2025",
+        summary: "Customized the SimplePlain template to showcase robotics work, interactive project pages, and inline media viewers.",
+        description:
+            "Cloned the SimplePlain template and transformed it into a tailored personal site with data-driven sections, immersive project detail routes, and horizontal media rails for reports, videos, and galleries.",
+        highlights: [
+            "Replaced GitHub auto-fetch with a curated CV-driven dataset for full control over messaging.",
+            "Implemented inline PDF + media viewers optimized for 50% viewport height and horizontal scrolling.",
+            "Extended routing to support slugged project pages with related-project carousels and responsive layout tweaks.",
+        ],
+        tags: ["Web", "React", "SimplePlain"],
+        media: [
+            {
+                type: "image",
+                url: placeholder("SimplePlain+Portfolio"),
+                label: "Portfolio UI mock",
+            },
+        ],
+        resources: [
+            {
+                type: "demo",
+                label: "SimplePlain GitHub",
+                url: "https://github.com/pm25/simpleplain",
+                description: "Base template used as the starting point for this website.",
+            },
+        ],
+    },
 ];
 
 export const FeaturedProjects = ProjectsData.filter((project) => project.featured);
