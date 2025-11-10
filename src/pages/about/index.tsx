@@ -3,9 +3,9 @@ import { usePageTitle } from "@/hooks/use-pagetitle";
 
 import Introduction from "./sections/introduction";
 import Experience from "./sections/experience";
+import Skills from "./sections/skills";
 import Publication from "./sections/publication";
 import Project from "./sections/project";
-import Talk from "./sections/talk";
 
 export default function About() {
     usePageTitle("About Me");
@@ -15,11 +15,11 @@ export default function About() {
             <Introduction />
             <Experience />
             <Separator orientation="horizontal" className="max-w-5xl mt-8" />
+            <Skills />
+            <Separator orientation="horizontal" className="max-w-5xl mt-8" />
             <Publication />
             <Separator orientation="horizontal" className="max-w-5xl mt-8" />
             <Project />
-            <Separator orientation="horizontal" className="max-w-5xl mt-8" />
-            <Talk />
         </div>
     );
 }
