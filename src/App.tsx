@@ -25,6 +25,7 @@ export default function App() {
                         <Route path="movies" element={<Movies />} />
                         <Route path="music" element={<Music />} />
                         <Route path="projects" element={<Projects />} />
+                        <Route path="projects/:slug" element={<Projects />} />
                         <Route path="publications" element={<Publications />} />
                         <Route path="articles" element={<Articles />} />
                         <Route path="/articles/:slug" element={<ArticlePage />} />

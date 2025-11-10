@@ -1,101 +1,55 @@
 import { useEffect, useState } from "react";
-import { useSearchParams, useNavigate } from "react-router";
-import { FaWrench, FaGithub, FaGlobe, FaRegStar } from "react-icons/fa6";
+import { useNavigate, useParams } from "react-router";
+import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ProjectPreviewCard } from "@/components/project-card";
 import { usePageTitle } from "@/hooks/use-pagetitle";
-import AllRepoData from "@/data/repos.json";
+import { ProjectsData } from "@/data/projects";
+import type { Project, ProjectResource } from "@/data/projects";
+import { Document, Page, pdfjs } from "react-pdf";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-type SortByType = "stars" | "updated" | "created";
-
-const allTopics = Array.from(
-    new Set(Object.values(AllRepoData).flatMap((repo) => repo.topics ?? []))
-).sort();
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export default function Projects() {
-    const [sortBy, setSortBy] = useState<SortByType>("updated");
-    const [topicFilter, setTopicFilter] = useState("all");
-
-    usePageTitle("Projects");
-
-    const [searchParams] = useSearchParams();
+    const { slug } = useParams<{ slug?: string }>();
     const navigate = useNavigate();
+    const project = slug ? ProjectsData.find((item) => item.slug === slug) : undefined;
 
-    const topic = searchParams.get("topic");
+    usePageTitle(slug && project ? project.title : "Projects");
 
     useEffect(() => {
-        if (topic && allTopics.includes(topic)) {
-            setTopicFilter(topic);
-        } else if (!topic) {
-            setTopicFilter("all");
+        if (slug && !project) {
+            navigate("/projects", { replace: true });
         }
-    }, [topic]);
+    }, [slug, project, navigate]);
 
-    const updateTopicFilter = (newTopic: string) => {
-        setTopicFilter(newTopic);
+    if (!slug || !project) {
+        return <ProjectsGallery />;
+    }
 
-        const params = new URLSearchParams(searchParams);
-        if (newTopic === "all") {
-            params.delete("topic");
-        } else {
-            params.set("topic", newTopic);
-        }
+    return <ProjectDetailPage project={project} onBack={() => navigate("/projects")} />;
+}
 
-        navigate({ search: params.toString() }, { replace: true });
-    };
-
-    const filteredProjects = (Object.keys(AllRepoData) as (keyof typeof AllRepoData)[])
-        .filter((project_name) => {
-            const project = AllRepoData[project_name];
-            const topics = (project.topics ?? []) as string[];
-            const matchesTopic = topicFilter === "all" || topics.includes(topicFilter);
-            return matchesTopic;
-        })
-        .sort((a, b) => {
-            const aData = AllRepoData[a];
-            const bData = AllRepoData[b];
-
-            if (sortBy === "stars") {
-                return (bData.stargazers_count ?? 0) - (aData.stargazers_count ?? 0);
-            } else if (sortBy === "created") {
-                return new Date(bData.created_at).getTime() - new Date(aData.created_at).getTime();
-            } else {
-                return new Date(bData.pushed_at).getTime() - new Date(aData.pushed_at).getTime();
-            }
-        });
-
+function ProjectsGallery() {
     return (
         <div className="flex flex-1 flex-col items-center gap-10">
-            <div className="w-full max-w-6xl space-y-10">
+            <div className="w-full max-w-6xl space-y-6">
                 <div className="flex flex-row justify-center items-center gap-4 text-4xl font-semibold">
                     <FaWrench />
                     Projects
                 </div>
 
-                <div className="flex justify-between flex-wrap gap-2 items-center mx-2 sm:mx-6 my-1 relative -top-2">
-                    <TopicFilter topicFilter={topicFilter} setTopicFilter={updateTopicFilter} />
-                    <SortSelector sortBy={sortBy} setSortBy={setSortBy} />
-                </div>
+                <p className="text-center text-muted-foreground max-w-3xl mx-auto px-4">
+                    Browse the full collection of robotics, AI, and embedded systems projects. Tap any card to deep dive into the build log, gallery, and references.
+                </p>
 
-                <Separator />
-
-                <div className="grid grid-cols-1 w-full gap-4 px-2 sm:px-6">
-                    {filteredProjects.map((projectName) => (
-                        <ProjectCard
-                            key={projectName}
-                            project_name={projectName}
-                            setTopicFilter={updateTopicFilter}
-                        />
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 px-2 sm:px-0">
+                    {ProjectsData.map((project) => (
+                        <ProjectPreviewCard key={project.slug} project={project} />
                     ))}
                 </div>
             </div>
@@ -103,201 +57,240 @@ export default function Projects() {
     );
 }
 
-function TopicFilter({
-    topicFilter,
-    setTopicFilter,
-}: {
-    topicFilter: string;
-    setTopicFilter: (val: string) => void;
-}) {
-    return (
-        <div className="flex items-center gap-2">
-            <label>Filter by topic:</label>
-            <Select value={topicFilter} onValueChange={setTopicFilter}>
-                <SelectTrigger className="w-[180px] cursor-pointer">
-                    <SelectValue placeholder="Topic" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">📂 All Topics</SelectItem>
-                    {allTopics.map((topic) => (
-                        <SelectItem key={topic} value={topic}>
-                            {topic}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
+function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () => void }) {
+    const otherProjects = ProjectsData.filter((item) => item.slug !== project.slug);
+    const resources = project.resources ?? [];
+    const pdfResources = resources.filter(isPdfResource);
+    const otherResources = resources.filter((resource) => !isPdfResource(resource));
 
-            {topicFilter !== "all" && (
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setTopicFilter("all")}
-                    className="px-2 text-sm cursor-pointer text-muted-foreground"
-                >
-                    Clear filter ✕
+    return (
+        <div className="flex flex-1 flex-col items-center gap-10">
+            <div className="w-full max-w-5xl space-y-8">
+                <Button variant="ghost" size="sm" className="gap-2 w-fit" onClick={onBack}>
+                    <FaArrowLeft className="w-4 h-4" /> Back to list
                 </Button>
+
+                <div className="space-y-3">
+                    <p className="text-sm uppercase tracking-wide text-muted-foreground">
+                        {project.course || "Independent"}
+                    </p>
+                    <h1 className="text-4xl font-semibold leading-tight">{project.title}</h1>
+                    {project.timeline && (
+                        <p className="text-base text-muted-foreground">{project.timeline}</p>
+                    )}
+                </div>
+
+                <div className="space-y-4">
+                    <p className="text-lg text-muted-foreground">{project.description}</p>
+                    <ul className="list-disc list-inside space-y-2 text-base">
+                        {project.highlights.map((highlight) => (
+                            <li key={highlight}>{highlight}</li>
+                        ))}
+                    </ul>
+                </div>
+
+                <ProjectMediaRail project={project} />
+
+                {(pdfResources.length > 0 || otherResources.length > 0) && (
+                    <div className="space-y-6">
+                        {pdfResources.map((resource) => (
+                            <ProjectPdfViewer key={resource.url} resource={resource} />
+                        ))}
+
+                        {otherResources.length > 0 && (
+                            <div className="space-y-2">
+                                <h3 className="text-xl font-semibold">Resources</h3>
+                                <div className="flex flex-col gap-2">
+                                    {otherResources.map((resource, index) => (
+                                        <ResourceRow key={`${resource.label}-${index}`} resource={resource} />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {resources.length === 0 && (
+                    <Card className="p-4 text-sm text-muted-foreground">
+                        Add videos, demos, or PDF reports when they are ready.
+                    </Card>
+                )}
+
+                <Separator className="my-4" />
+
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-2xl font-semibold">
+                        <FaWrench />
+                        Explore other projects
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {otherProjects.map((item) => (
+                            <ProjectPreviewCard key={item.slug} project={item} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ProjectMediaRail({ project }: { project: Project }) {
+    if (!project.media.length) {
+        return (
+            <Card className="p-4 text-sm text-muted-foreground">
+                Add photos, renders, or demo videos to this project.
+            </Card>
+        );
+    }
+
+    return (
+        <div className="space-y-2">
+            <h3 className="text-xl font-semibold">Media showcase</h3>
+            <div className="w-full h-[50vh] min-h-[280px]">
+                <div className="flex h-full gap-4 overflow-x-auto rounded-md bg-muted/30 p-3">
+                    {project.media.map((item) => (
+                        <div
+                            key={`${item.url}-${item.label}`}
+                            className="min-w-[280px] h-full bg-background rounded-md shadow-sm overflow-hidden flex flex-col"
+                        >
+                            {item.type === "video" ? (
+                                <video controls className="w-full h-full object-cover flex-1">
+                                    <source src={item.url} />
+                                </video>
+                            ) : (
+                                <img
+                                    src={item.url}
+                                    alt={item.label || project.title}
+                                    className="w-full h-full object-cover flex-1"
+                                />
+                            )}
+                            {(item.label || item.description) && (
+                                <div className="p-3 border-t">
+                                    <p className="text-sm font-medium">{item.label}</p>
+                                    {item.description && (
+                                        <p className="text-xs text-muted-foreground">{item.description}</p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+                <p className="text-xs text-muted-foreground">Scroll horizontally to browse the gallery.</p>
+            </div>
+        </div>
+    );
+}
+
+function ResourceRow({ resource }: { resource: ProjectResource }) {
+    const icon = resource.type === "report" ? <FaFileLines className="w-4 h-4" /> : resource.type === "slides" ? <FaVideo className="w-4 h-4" /> : <FaLink className="w-4 h-4" />;
+
+    return (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-muted-foreground flex items-center gap-2">
+                {icon}
+                {resource.label}
+            </span>
+            {resource.url ? (
+                <a
+                    href={resource.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                >
+                    Open
+                </a>
+            ) : (
+                <span className="text-xs italic text-muted-foreground">Add a link when ready</span>
+            )}
+            {resource.description && (
+                <span className="text-xs text-muted-foreground">{resource.description}</span>
             )}
         </div>
     );
 }
 
-function SortSelector({
-    sortBy,
-    setSortBy,
-}: {
-    sortBy: SortByType;
-    setSortBy: (val: SortByType) => void;
-}) {
+function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: string } }) {
+    const [numPages, setNumPages] = useState(0);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const pageHeight = usePdfPageHeight();
+
+    const onDocumentLoadSuccess = ({ numPages: nextNumPages }: { numPages: number }) => {
+        setNumPages(nextNumPages);
+        setErrorMessage(null);
+    };
+
+    const onDocumentError = (error: Error) => {
+        setErrorMessage(error.message || "Unable to load PDF.");
+    };
+
     return (
-        <div className="flex items-center gap-2">
-            <label>Sort by:</label>
-            <Select value={sortBy} onValueChange={setSortBy}>
-                <SelectTrigger className="w-[160px] cursor-pointer">
-                    <SelectValue placeholder="Sort by" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="updated">🕒 Last Updated</SelectItem>
-                    <SelectItem value="created">📅 Created Time</SelectItem>
-                    <SelectItem value="stars">⭐ Star Count</SelectItem>
-                </SelectContent>
-            </Select>
+        <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xl font-semibold">
+                <FaFileLines className="w-5 h-5" />
+                {resource.label}
+            </div>
+            <div className="w-full h-[40vh] min-h-[240px]">
+                <div className="h-full rounded-md border bg-muted/30 overflow-hidden flex items-center justify-center">
+                    {errorMessage && <PdfFallback text={errorMessage} />}
+                    {!errorMessage && (
+                        <div className="h-full overflow-x-auto w-full">
+                            <Document
+                                file={resource.url}
+                                onLoadSuccess={onDocumentLoadSuccess}
+                                onLoadError={onDocumentError}
+                                loading={<PdfFallback text="Loading PDF…" />}
+                                className="flex h-full gap-4 px-4 py-3"
+                            >
+                                {Array.from({ length: numPages }, (_, index) => (
+                                    <Page
+                                        key={`page_${index + 1}`}
+                                        pageNumber={index + 1}
+                                        height={pageHeight}
+                                        renderAnnotationLayer={false}
+                                        renderTextLayer={false}
+                                        className="flex-shrink-0 rounded-md border bg-background shadow"
+                                    />
+                                ))}
+                            </Document>
+                        </div>
+                    )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                    Scroll horizontally to read the report without leaving the page.
+                </p>
+            </div>
+            {resource.description && (
+                <p className="text-xs text-muted-foreground">{resource.description}</p>
+            )}
         </div>
     );
 }
 
-function ProjectCard({
-    project_name,
-    setTopicFilter,
-}: {
-    project_name: keyof typeof AllRepoData;
-    setTopicFilter: (val: string) => void;
-}) {
-    const repo = AllRepoData[project_name];
-    const {
-        html_url,
-        preview_image,
-        display_name,
-        name,
-        description,
-        topics = [],
-        language,
-        stargazers_count,
-        homepage,
-    } = repo;
+function isPdfResource(resource: ProjectResource): resource is ProjectResource & { url: string } {
+    return Boolean(resource.url && resource.url.toLowerCase().endsWith(".pdf"));
+}
 
+function PdfFallback({ text }: { text: string }) {
     return (
-        <Card className="rounded-lg overflow-hidden gap-0 py-0 w-full">
-            <div className="flex flex-col lg:flex-row">
-                <a href={html_url} target="_blank" rel="noopener noreferrer" className="block">
-                    <div className="aspect-3/2 w-full max-h-72 lg:max-w-75 lg:h-50 overflow-hidden">
-                        {preview_image ? (
-                            <img
-                                src={preview_image}
-                                alt={name || "Project image"}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                            />
-                        ) : (
-                            <div className="flex flex-col items-center justify-center p-4 w-full h-full bg-muted">
-                                <span className="text-lg font-semibold opacity-80 text-center">
-                                    {name || "Unnamed Project"}
-                                </span>
-                                <span className="text-sm text-muted-foreground text-center">
-                                    Image not available
-                                </span>
-                            </div>
-                        )}
-                    </div>
-                </a>
-
-                <div className="w-full border-t block lg:hidden" />
-                <div className="h-full border-l hidden lg:block" />
-
-                <div className="flex flex-col p-4 lg:py-2.5 lg:px-5 flex-1 lg:h-50">
-                    <ScrollArea className="flex-1 min-h-0">
-                        <div className="flex flex-col gap-y-2">
-                            <div className="text-base font-semibold">
-                                {html_url ? (
-                                    <a
-                                        href={html_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        aria-label="GitHub repository"
-                                        className="hover:underline underline-offset-4"
-                                    >
-                                        {display_name || name}
-                                    </a>
-                                ) : (
-                                    display_name || name
-                                )}
-                            </div>
-
-                            <p className="text-sm text-muted-foreground">
-                                {description || "Details unavailable"}
-                            </p>
-
-                            {topics.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5">
-                                    {topics.map((topic: string) => (
-                                        <Button
-                                            key={topic}
-                                            variant="secondary"
-                                            size="sm"
-                                            onClick={() => setTopicFilter(topic)}
-                                            className="rounded-sm cursor-pointer font-normal px-2 h-7.5 text-sm"
-                                        >
-                                            {topic}
-                                        </Button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </ScrollArea>
-
-                    <div className="flex flex-row items-center justify-between text-muted-foreground pt-2">
-                        <div className="flex items-center gap-2 text-sm">
-                            <p>Language: {language || "Unknown"}</p>
-                            {stargazers_count !== null && (
-                                <a
-                                    href={`${html_url}/stargazers`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    aria-label="Stargazers"
-                                    className="flex items-center gap-1 text-yellow-600 hover:text-yellow-500"
-                                >
-                                    <FaRegStar className="w-4 h-4" />
-                                    <span>{stargazers_count}</span>
-                                </a>
-                            )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            {homepage && (
-                                <a
-                                    href={homepage}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    aria-label="Project homepage"
-                                    className="hover:text-foreground"
-                                >
-                                    <FaGlobe className="w-6 h-6" />
-                                </a>
-                            )}
-                            {html_url && (
-                                <a
-                                    href={html_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    aria-label="GitHub repository"
-                                    className="hover:text-foreground"
-                                >
-                                    <FaGithub className="w-6 h-6" />
-                                </a>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </Card>
+        <div className="flex items-center justify-center w-full text-sm text-muted-foreground">
+            {text}
+        </div>
     );
+}
+
+function usePdfPageHeight() {
+    const [height, setHeight] = useState(320);
+
+    useEffect(() => {
+        const update = () => {
+            const next = typeof window !== "undefined" ? Math.max(220, window.innerHeight * 0.4) : 320;
+            setHeight(next);
+        };
+
+        update();
+        window.addEventListener("resize", update);
+        return () => window.removeEventListener("resize", update);
+    }, []);
+
+    return height;
 }

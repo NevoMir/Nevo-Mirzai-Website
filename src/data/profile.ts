@@ -1,10 +1,4 @@
-import {
-    FaLinkedin,
-    FaGoogleScholar,
-    FaRegIdBadge,
-    FaGithub,
-    FaSquareFacebook,
-} from "react-icons/fa6";
+import { FaLinkedin, FaRegIdBadge, FaGithub } from "react-icons/fa6";
 
 
 export const UserInfo = {
