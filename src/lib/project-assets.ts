@@ -12,29 +12,36 @@ const pdfModules = import.meta.glob<AssetModule>("@/assets/projects/*/pdf/*", {
     eager: true,
 });
 
-const slideModules = import.meta.glob<AssetModule>("@/assets/projects/*/slides/*", {
-    eager: true,
-});
-
 const imagesBySlug: Record<string, string[]> = {};
 const videosBySlug: Record<string, string[]> = {};
 const pdfBySlug: Record<string, string> = {};
-const slidesBySlug: Record<string, string> = {};
+const imageLookupBySlug: Record<string, Record<string, string>> = {};
+const videoLookupBySlug: Record<string, Record<string, string>> = {};
 
 for (const [path, module] of Object.entries(imageModules)) {
     const match = path.match(/projects\/([^/]+)\/images\//);
     if (!match) continue;
     const slug = match[1];
+    const fileName = path.split("/").pop() ?? "";
     imagesBySlug[slug] ??= [];
+    imageLookupBySlug[slug] ??= {};
     imagesBySlug[slug].push(module.default);
+    if (fileName) {
+        imageLookupBySlug[slug][fileName] = module.default;
+    }
 }
 
 for (const [path, module] of Object.entries(videoModules)) {
     const match = path.match(/projects\/([^/]+)\/videos\//);
     if (!match) continue;
     const slug = match[1];
+    const fileName = path.split("/").pop() ?? "";
     videosBySlug[slug] ??= [];
+    videoLookupBySlug[slug] ??= {};
     videosBySlug[slug].push(module.default);
+    if (fileName) {
+        videoLookupBySlug[slug][fileName] = module.default;
+    }
 }
 
 for (const [path, module] of Object.entries(pdfModules)) {
@@ -47,15 +54,6 @@ for (const [path, module] of Object.entries(pdfModules)) {
     }
 }
 
-for (const [path, module] of Object.entries(slideModules)) {
-    const match = path.match(/projects\/([^/]+)\/slides\//);
-    if (!match) continue;
-    const slug = match[1];
-    if (!slidesBySlug[slug]) {
-        slidesBySlug[slug] = module.default;
-    }
-}
-
 Object.values(imagesBySlug).forEach((images) => images.sort());
 Object.values(videosBySlug).forEach((videos) => videos.sort());
 
@@ -64,11 +62,27 @@ export function getProjectAssets(slug: string) {
         images: imagesBySlug[slug] ?? [],
         videos: videosBySlug[slug] ?? [],
         pdf: pdfBySlug[slug],
-        slides: slidesBySlug[slug],
     };
 }
 
 export function getProjectCover(slug: string) {
     const images = imagesBySlug[slug];
     return images && images.length > 0 ? images[0] : undefined;
+}
+
+export function resolveProjectMedia(slug: string, relativePath?: string) {
+    if (!relativePath) return undefined;
+    const normalized = relativePath.replace(/^\.?\//, "");
+
+    if (normalized.startsWith("images/")) {
+        const key = normalized.slice("images/".length);
+        return imageLookupBySlug[slug]?.[key];
+    }
+
+    if (normalized.startsWith("videos/")) {
+        const key = normalized.slice("videos/".length);
+        return videoLookupBySlug[slug]?.[key];
+    }
+
+    return undefined;
 }

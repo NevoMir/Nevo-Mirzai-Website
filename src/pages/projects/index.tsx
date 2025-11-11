@@ -9,11 +9,21 @@ import { ProjectPreviewCard } from "@/components/project-card";
 import { usePageTitle } from "@/hooks/use-pagetitle";
 import { ProjectsData } from "@/data/projects";
 import type { Project, ProjectResource } from "@/data/projects";
-import { getProjectAssets } from "@/lib/project-assets";
+import { getProjectAssets, resolveProjectMedia } from "@/lib/project-assets";
+import { cn } from "@/lib/utils";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
+
+const projectMarkdownFiles = import.meta.glob("/src/assets/projects/*/content.md", {
+    query: "?raw",
+    import: "default",
+    eager: false,
+});
 
 export default function Projects() {
     const { slug } = useParams<{ slug?: string }>();
@@ -69,15 +79,61 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
               description: project.pdfDescription,
           }
         : null;
-    const slidesMeta =
-        assets.slides || project.slidesEmbedUrl
-            ? {
-                  url: assets.slides,
-                  embedUrl: project.slidesEmbedUrl,
-                  label: project.slidesLabel ?? "Presentation deck",
-                  description: project.slidesDescription,
-              }
-            : null;
+
+    const [markdownContent, setMarkdownContent] = useState<string | null>(null);
+    const [markdownLoading, setMarkdownLoading] = useState(false);
+    const [markdownError, setMarkdownError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const path = `/src/assets/projects/${project.slug}/content.md`;
+        if (projectMarkdownFiles[path]) {
+            setMarkdownLoading(true);
+            setMarkdownError(null);
+            projectMarkdownFiles[path]()
+                .then((raw) => {
+                    setMarkdownContent(raw as string);
+                    setMarkdownLoading(false);
+                })
+                .catch((err) => {
+                    console.error(err);
+                    setMarkdownError("Failed to load project notes.");
+                    setMarkdownContent(null);
+                    setMarkdownLoading(false);
+                });
+        } else {
+            setMarkdownContent(null);
+            setMarkdownError(null);
+            setMarkdownLoading(false);
+        }
+    }, [project.slug]);
+
+    const markdownComponents = useMemo<Components>(
+        () => ({
+            img({ src, alt, ...props }) {
+                const resolved =
+                    typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
+                return (
+                    <img
+                        {...props}
+                        src={resolved}
+                        alt={alt}
+                        className={cn("rounded-lg border bg-background shadow-sm", props.className)}
+                    />
+                );
+            },
+        }),
+        [project.slug]
+    );
+
+    const fallbackMarkdown = useMemo(() => {
+        const metaParts = [project.course, project.timeline].filter(Boolean);
+        const metaLine = metaParts.length ? `_${metaParts.join(" • ")}_\n\n` : "";
+        const highlights =
+            project.highlights.length > 0
+                ? `\n## Highlights\n${project.highlights.map((item) => `- ${item}`).join("\n")}\n`
+                : "";
+        return `# ${project.title}\n\n${metaLine}${project.description}\n${highlights}`;
+    }, [project]);
 
     return (
         <div className="flex flex-1 flex-col items-center gap-10">
@@ -86,32 +142,24 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     <FaArrowLeft className="w-4 h-4" /> Back to list
                 </Button>
 
-                <div className="space-y-3">
-                    <p className="text-sm uppercase tracking-wide text-muted-foreground">
-                        {project.course || "Independent"}
-                    </p>
-                    <h1 className="text-4xl font-semibold leading-tight">{project.title}</h1>
-                    {project.timeline && (
-                        <p className="text-base text-muted-foreground">{project.timeline}</p>
-                    )}
+                {markdownLoading && (
+                    <Card className="p-4 text-sm text-muted-foreground">Loading project notes…</Card>
+                )}
+
+                {markdownError && (
+                    <Card className="p-4 text-sm text-destructive bg-destructive/10">{markdownError}</Card>
+                )}
+
+                <div className="prose dark:prose-invert max-w-none bg-muted/40 rounded-lg p-6 border">
+                    <ReactMarkdown
+                        rehypePlugins={[rehypeRaw]}
+                        skipHtml={false}
+                        components={markdownComponents}
+                    >
+                        {markdownContent ?? fallbackMarkdown}
+                    </ReactMarkdown>
                 </div>
 
-                <div className="space-y-4">
-                    <p className="text-lg text-muted-foreground">{project.description}</p>
-                    <ul className="list-disc list-inside space-y-2 text-base">
-                        {project.highlights.map((highlight) => (
-                            <li key={highlight}>{highlight}</li>
-                        ))}
-                    </ul>
-                </div>
-
-                <ProjectMediaRail
-                    slug={project.slug}
-                    images={assets.images}
-                    videos={assets.videos}
-                />
-
-                {slidesMeta && <ProjectSlidesViewer slides={slidesMeta} />}
                 {pdfMeta && <ProjectPdfViewer pdf={pdfMeta} />}
 
                 {resources.length > 0 && (
@@ -125,7 +173,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     </div>
                 )}
 
-                {!slidesMeta && !pdfMeta && resources.length === 0 && (
+                {!pdfMeta && resources.length === 0 && (
                     <Card className="p-4 text-sm text-muted-foreground">
                         Add videos, demos, or PDF reports when they are ready.
                     </Card>
@@ -143,62 +191,6 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                             <ProjectPreviewCard key={item.slug} project={item} />
                         ))}
                     </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function ProjectMediaRail({
-    slug,
-    images,
-    videos,
-}: {
-    slug: string;
-    images: string[];
-    videos: string[];
-}) {
-    if (images.length === 0 && videos.length === 0) {
-        return (
-            <Card className="p-4 text-sm text-muted-foreground">
-                Add media to <code>src/assets/projects/{slug}/images</code> or{" "}
-                <code>src/assets/projects/{slug}/videos</code> to showcase them here.
-            </Card>
-        );
-    }
-
-    const galleryItems = [
-        ...images.map((url) => ({ type: "image" as const, url })),
-        ...videos.map((url) => ({ type: "video" as const, url })),
-    ];
-
-    return (
-        <div className="space-y-2">
-            <h3 className="text-xl font-semibold">Media showcase</h3>
-            <div className="w-full h-[50vh] min-h-[280px]">
-                <div className="flex h-full gap-4 overflow-x-auto rounded-md bg-muted/30 p-3">
-                    {galleryItems.map((item, index) => (
-                        <div
-                            key={`${item.url}-${index}`}
-                            className="min-w-[320px] h-full bg-background rounded-md shadow-sm overflow-hidden flex flex-col"
-                        >
-                            {item.type === "video" ? (
-                                <video
-                                    controls
-                                    className="w-full h-full object-cover flex-1 bg-black"
-                                    preload="metadata"
-                                >
-                                    <source src={item.url} />
-                                </video>
-                            ) : (
-                                <img
-                                    src={item.url}
-                                    alt={`${slug} media ${index + 1}`}
-                                    className="w-full h-full object-cover flex-1"
-                                />
-                            )}
-                        </div>
-                    ))}
                 </div>
             </div>
         </div>
@@ -295,112 +287,6 @@ function ProjectPdfViewer({
             </div>
             {pdf.description && (
                 <p className="text-xs text-muted-foreground">{pdf.description}</p>
-            )}
-        </div>
-    );
-}
-
-function ProjectSlidesViewer({
-    slides,
-}: {
-    slides: { url?: string; embedUrl?: string; label: string; description?: string };
-}) {
-    const { embedUrl, isLocalOnly } = useMemo(() => {
-        if (typeof window === "undefined") {
-            return { embedUrl: null, isLocalOnly: false };
-        }
-        if (slides.embedUrl) {
-            return { embedUrl: slides.embedUrl, isLocalOnly: false };
-        }
-        if (!slides.url) {
-            return { embedUrl: null, isLocalOnly: false };
-        }
-        try {
-            const absolute = new URL(slides.url, window.location.origin).href;
-            const googleMatch = absolute.match(/https:\/\/docs\.google\.com\/presentation\/d\/([^/]+)/i);
-            if (googleMatch) {
-                const docId = googleMatch[1];
-                return {
-                    embedUrl: `https://docs.google.com/presentation/d/${docId}/embed?start=false&loop=false&delayms=10000`,
-                    isLocalOnly: false,
-                };
-            }
-            const isLocal =
-                absolute.startsWith("http://localhost") ||
-                absolute.startsWith("http://127.0.0.1") ||
-                absolute.startsWith("http://0.0.0.0");
-            if (isLocal) {
-                return { embedUrl: null, isLocalOnly: true };
-            }
-            return {
-                embedUrl: `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
-                    absolute
-                )}`,
-                isLocalOnly: false,
-            };
-        } catch {
-            return { embedUrl: null, isLocalOnly: false };
-        }
-    }, [slides.url, slides.embedUrl]);
-
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xl font-semibold">
-                <FaFileLines className="w-5 h-5" />
-                {(slides.url || slides.embedUrl) && (
-                    <a
-                        href={slides.url || slides.embedUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:underline underline-offset-4"
-                    >
-                        {slides.label}
-                    </a>
-                )}
-            </div>
-            {embedUrl ? (
-                <div className="relative w-full max-w-4xl aspect-video mx-auto overflow-hidden rounded-md border bg-background">
-                    <iframe
-                        title={slides.label}
-                        src={embedUrl}
-                        className="absolute inset-0 w-full h-full"
-                        allowFullScreen
-                    />
-                </div>
-            ) : (
-                <Card className="p-4 text-sm text-muted-foreground">
-                    {isLocalOnly ? (
-                        <>
-                            Slide embedding only works after the site is deployed to a public URL. While
-                            developing locally, please{" "}
-                            <a
-                                href={slides.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary underline-offset-2 hover:underline"
-                            >
-                                download the deck
-                            </a>{" "}
-                            to view it.
-                        </>
-                    ) : (
-                        <>
-                            Unable to embed this presentation. You can still{" "}
-                            <a
-                                href={slides.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary underline-offset-2 hover:underline"
-                            >
-                                download it
-                            </a>
-                            .
-                        </>
-                    )}
-                </Card>
-            )}
-            {slides.description && (
-                <p className="text-xs text-muted-foreground">{slides.description}</p>
             )}
         </div>
     );
