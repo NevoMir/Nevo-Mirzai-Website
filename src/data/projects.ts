@@ -18,6 +18,9 @@ export type Project = {
     featured?: boolean;
     pdfLabel?: string;
     pdfDescription?: string;
+    slidesLabel?: string;
+    slidesDescription?: string;
+    slidesEmbedUrl?: string;
 };
 
 export const ProjectsData: Project[] = [
@@ -189,6 +192,9 @@ export const ProjectsData: Project[] = [
         pdfLabel: "Final report",
         pdfDescription: "Aerial Swarm Hand Control write-up (PDF).",
         featured: true,
+        slidesLabel: "Project presentation",
+        slidesDescription: "Google Slides deck from the final demo",
+        slidesEmbedUrl: "https://docs.google.com/presentation/d/1FshBk1suVUCHNCBTP1fp5eQhe4eJct6a/edit?usp=sharing&ouid=101636861431520410803&rtpof=true&sd=true",
     },
     {
         slug: "robotic-arm-scaffolding",

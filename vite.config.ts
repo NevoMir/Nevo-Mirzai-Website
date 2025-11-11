@@ -7,6 +7,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
     base: "/simpleplain/",
     plugins: [react(), tailwindcss()],
+    assetsInclude: ["**/*.pptx", "**/*.ppt"],
     resolve: {
         alias: {
             "@": path.resolve(__dirname, "./src"),

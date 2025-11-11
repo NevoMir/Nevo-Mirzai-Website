@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
 
@@ -69,6 +69,15 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
               description: project.pdfDescription,
           }
         : null;
+    const slidesMeta =
+        assets.slides || project.slidesEmbedUrl
+            ? {
+                  url: assets.slides,
+                  embedUrl: project.slidesEmbedUrl,
+                  label: project.slidesLabel ?? "Presentation deck",
+                  description: project.slidesDescription,
+              }
+            : null;
 
     return (
         <div className="flex flex-1 flex-col items-center gap-10">
@@ -96,26 +105,27 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     </ul>
                 </div>
 
-                <ProjectMediaRail slug={project.slug} images={assets.images} videos={assets.videos} />
+                <ProjectMediaRail
+                    slug={project.slug}
+                    images={assets.images}
+                    videos={assets.videos}
+                />
 
-                {(pdfMeta || resources.length > 0) && (
-                    <div className="space-y-6">
-                        {pdfMeta && <ProjectPdfViewer pdf={pdfMeta} />}
+                {slidesMeta && <ProjectSlidesViewer slides={slidesMeta} />}
+                {pdfMeta && <ProjectPdfViewer pdf={pdfMeta} />}
 
-                        {resources.length > 0 && (
-                            <div className="space-y-2">
-                                <h3 className="text-xl font-semibold">Resources</h3>
-                                <div className="flex flex-col gap-2">
-                                    {resources.map((resource, index) => (
-                                        <ResourceRow key={`${resource.label}-${index}`} resource={resource} />
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                {resources.length > 0 && (
+                    <div className="space-y-2">
+                        <h3 className="text-xl font-semibold">Resources</h3>
+                        <div className="flex flex-col gap-2">
+                            {resources.map((resource, index) => (
+                                <ResourceRow key={`${resource.label}-${index}`} resource={resource} />
+                            ))}
+                        </div>
                     </div>
                 )}
 
-                {!pdfMeta && resources.length === 0 && (
+                {!slidesMeta && !pdfMeta && resources.length === 0 && (
                     <Card className="p-4 text-sm text-muted-foreground">
                         Add videos, demos, or PDF reports when they are ready.
                     </Card>
@@ -285,6 +295,112 @@ function ProjectPdfViewer({
             </div>
             {pdf.description && (
                 <p className="text-xs text-muted-foreground">{pdf.description}</p>
+            )}
+        </div>
+    );
+}
+
+function ProjectSlidesViewer({
+    slides,
+}: {
+    slides: { url?: string; embedUrl?: string; label: string; description?: string };
+}) {
+    const { embedUrl, isLocalOnly } = useMemo(() => {
+        if (typeof window === "undefined") {
+            return { embedUrl: null, isLocalOnly: false };
+        }
+        if (slides.embedUrl) {
+            return { embedUrl: slides.embedUrl, isLocalOnly: false };
+        }
+        if (!slides.url) {
+            return { embedUrl: null, isLocalOnly: false };
+        }
+        try {
+            const absolute = new URL(slides.url, window.location.origin).href;
+            const googleMatch = absolute.match(/https:\/\/docs\.google\.com\/presentation\/d\/([^/]+)/i);
+            if (googleMatch) {
+                const docId = googleMatch[1];
+                return {
+                    embedUrl: `https://docs.google.com/presentation/d/${docId}/embed?start=false&loop=false&delayms=10000`,
+                    isLocalOnly: false,
+                };
+            }
+            const isLocal =
+                absolute.startsWith("http://localhost") ||
+                absolute.startsWith("http://127.0.0.1") ||
+                absolute.startsWith("http://0.0.0.0");
+            if (isLocal) {
+                return { embedUrl: null, isLocalOnly: true };
+            }
+            return {
+                embedUrl: `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
+                    absolute
+                )}`,
+                isLocalOnly: false,
+            };
+        } catch {
+            return { embedUrl: null, isLocalOnly: false };
+        }
+    }, [slides.url, slides.embedUrl]);
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xl font-semibold">
+                <FaFileLines className="w-5 h-5" />
+                {(slides.url || slides.embedUrl) && (
+                    <a
+                        href={slides.url || slides.embedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline underline-offset-4"
+                    >
+                        {slides.label}
+                    </a>
+                )}
+            </div>
+            {embedUrl ? (
+                <div className="relative w-full max-w-4xl aspect-video mx-auto overflow-hidden rounded-md border bg-background">
+                    <iframe
+                        title={slides.label}
+                        src={embedUrl}
+                        className="absolute inset-0 w-full h-full"
+                        allowFullScreen
+                    />
+                </div>
+            ) : (
+                <Card className="p-4 text-sm text-muted-foreground">
+                    {isLocalOnly ? (
+                        <>
+                            Slide embedding only works after the site is deployed to a public URL. While
+                            developing locally, please{" "}
+                            <a
+                                href={slides.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary underline-offset-2 hover:underline"
+                            >
+                                download the deck
+                            </a>{" "}
+                            to view it.
+                        </>
+                    ) : (
+                        <>
+                            Unable to embed this presentation. You can still{" "}
+                            <a
+                                href={slides.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary underline-offset-2 hover:underline"
+                            >
+                                download it
+                            </a>
+                            .
+                        </>
+                    )}
+                </Card>
+            )}
+            {slides.description && (
+                <p className="text-xs text-muted-foreground">{slides.description}</p>
             )}
         </div>
     );
