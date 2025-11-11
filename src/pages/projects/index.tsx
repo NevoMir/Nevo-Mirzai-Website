@@ -9,6 +9,7 @@ import { ProjectPreviewCard } from "@/components/project-card";
 import { usePageTitle } from "@/hooks/use-pagetitle";
 import { ProjectsData } from "@/data/projects";
 import type { Project, ProjectResource } from "@/data/projects";
+import { getProjectAssets } from "@/lib/project-assets";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
@@ -59,9 +60,15 @@ function ProjectsGallery() {
 
 function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () => void }) {
     const otherProjects = ProjectsData.filter((item) => item.slug !== project.slug);
+    const assets = getProjectAssets(project.slug);
     const resources = project.resources ?? [];
-    const pdfResources = resources.filter(isPdfResource);
-    const otherResources = resources.filter((resource) => !isPdfResource(resource));
+    const pdfMeta = assets.pdf
+        ? {
+              url: assets.pdf,
+              label: project.pdfLabel ?? "Project PDF",
+              description: project.pdfDescription,
+          }
+        : null;
 
     return (
         <div className="flex flex-1 flex-col items-center gap-10">
@@ -89,19 +96,17 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     </ul>
                 </div>
 
-                <ProjectMediaRail project={project} />
+                <ProjectMediaRail slug={project.slug} images={assets.images} videos={assets.videos} />
 
-                {(pdfResources.length > 0 || otherResources.length > 0) && (
+                {(pdfMeta || resources.length > 0) && (
                     <div className="space-y-6">
-                        {pdfResources.map((resource) => (
-                            <ProjectPdfViewer key={resource.url} resource={resource} />
-                        ))}
+                        {pdfMeta && <ProjectPdfViewer pdf={pdfMeta} />}
 
-                        {otherResources.length > 0 && (
+                        {resources.length > 0 && (
                             <div className="space-y-2">
                                 <h3 className="text-xl font-semibold">Resources</h3>
                                 <div className="flex flex-col gap-2">
-                                    {otherResources.map((resource, index) => (
+                                    {resources.map((resource, index) => (
                                         <ResourceRow key={`${resource.label}-${index}`} resource={resource} />
                                     ))}
                                 </div>
@@ -110,7 +115,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     </div>
                 )}
 
-                {resources.length === 0 && (
+                {!pdfMeta && resources.length === 0 && (
                     <Card className="p-4 text-sm text-muted-foreground">
                         Add videos, demos, or PDF reports when they are ready.
                     </Card>
@@ -134,43 +139,53 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
     );
 }
 
-function ProjectMediaRail({ project }: { project: Project }) {
-    if (!project.media.length) {
+function ProjectMediaRail({
+    slug,
+    images,
+    videos,
+}: {
+    slug: string;
+    images: string[];
+    videos: string[];
+}) {
+    if (images.length === 0 && videos.length === 0) {
         return (
             <Card className="p-4 text-sm text-muted-foreground">
-                Add photos, renders, or demo videos to this project.
+                Add media to <code>src/assets/projects/{slug}/images</code> or{" "}
+                <code>src/assets/projects/{slug}/videos</code> to showcase them here.
             </Card>
         );
     }
+
+    const galleryItems = [
+        ...images.map((url) => ({ type: "image" as const, url })),
+        ...videos.map((url) => ({ type: "video" as const, url })),
+    ];
 
     return (
         <div className="space-y-2">
             <h3 className="text-xl font-semibold">Media showcase</h3>
             <div className="w-full h-[50vh] min-h-[280px]">
                 <div className="flex h-full gap-4 overflow-x-auto rounded-md bg-muted/30 p-3">
-                    {project.media.map((item) => (
+                    {galleryItems.map((item, index) => (
                         <div
-                            key={`${item.url}-${item.label}`}
-                            className="min-w-[280px] h-full bg-background rounded-md shadow-sm overflow-hidden flex flex-col"
+                            key={`${item.url}-${index}`}
+                            className="min-w-[320px] h-full bg-background rounded-md shadow-sm overflow-hidden flex flex-col"
                         >
                             {item.type === "video" ? (
-                                <video controls className="w-full h-full object-cover flex-1">
+                                <video
+                                    controls
+                                    className="w-full h-full object-cover flex-1 bg-black"
+                                    preload="metadata"
+                                >
                                     <source src={item.url} />
                                 </video>
                             ) : (
                                 <img
                                     src={item.url}
-                                    alt={item.label || project.title}
+                                    alt={`${slug} media ${index + 1}`}
                                     className="w-full h-full object-cover flex-1"
                                 />
-                            )}
-                            {(item.label || item.description) && (
-                                <div className="p-3 border-t">
-                                    <p className="text-sm font-medium">{item.label}</p>
-                                    {item.description && (
-                                        <p className="text-xs text-muted-foreground">{item.description}</p>
-                                    )}
-                                </div>
                             )}
                         </div>
                     ))}
@@ -208,7 +223,11 @@ function ResourceRow({ resource }: { resource: ProjectResource }) {
     );
 }
 
-function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: string } }) {
+function ProjectPdfViewer({
+    pdf,
+}: {
+    pdf: { url: string; label: string; description?: string };
+}) {
     const [numPages, setNumPages] = useState(0);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const pageHeight = usePdfPageHeight();
@@ -227,12 +246,12 @@ function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: str
             <div className="flex items-center gap-2 text-xl font-semibold">
                 <FaFileLines className="w-5 h-5" />
                 <a
-                    href={resource.url}
+                    href={pdf.url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="hover:underline underline-offset-4"
                 >
-                    {resource.label}
+                    {pdf.label}
                 </a>
             </div>
             <div className="w-full h-[50vh] min-h-[320px]">
@@ -242,7 +261,7 @@ function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: str
                         <div className="h-full w-full overflow-hidden">
                             <div className="h-full overflow-x-auto overflow-y-hidden">
                                 <Document
-                                    file={resource.url}
+                                    file={pdf.url}
                                     onLoadSuccess={onDocumentLoadSuccess}
                                     onLoadError={onDocumentError}
                                     loading={<PdfFallback text="Loading PDF…" />}
@@ -264,15 +283,11 @@ function ProjectPdfViewer({ resource }: { resource: ProjectResource & { url: str
                     )}
                 </div>
             </div>
-            {resource.description && (
-                <p className="text-xs text-muted-foreground">{resource.description}</p>
+            {pdf.description && (
+                <p className="text-xs text-muted-foreground">{pdf.description}</p>
             )}
         </div>
     );
-}
-
-function isPdfResource(resource: ProjectResource): resource is ProjectResource & { url: string } {
-    return Boolean(resource.url && resource.url.toLowerCase().endsWith(".pdf"));
 }
 
 function PdfFallback({ text }: { text: string }) {
@@ -289,7 +304,7 @@ function usePdfPageHeight() {
     useEffect(() => {
         const update = () => {
             const next =
-                typeof window !== "undefined" ? Math.max(240, window.innerHeight * 0.45) : 320;
+                typeof window !== "undefined" ? Math.max(260, window.innerHeight * 0.5) : 320;
             setHeight(next);
         };
 

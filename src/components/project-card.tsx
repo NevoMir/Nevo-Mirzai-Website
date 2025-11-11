@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/data/projects";
+import { getProjectCover } from "@/lib/project-assets";
 
 type ProjectPreviewCardProps = {
     project: Project;
@@ -10,7 +11,7 @@ type ProjectPreviewCardProps = {
 };
 
 export function ProjectPreviewCard({ project, className }: ProjectPreviewCardProps) {
-    const cover = project.media?.[0];
+    const cover = getProjectCover(project.slug);
 
     return (
         <Card className={cn("rounded-lg overflow-hidden gap-0 py-0 w-full flex flex-col h-full", className)}>
@@ -18,8 +19,8 @@ export function ProjectPreviewCard({ project, className }: ProjectPreviewCardPro
                 <div className="aspect-3/2 w-full overflow-hidden">
                     {cover ? (
                         <img
-                            src={cover.url}
-                            alt={cover.label || project.title}
+                            src={cover}
+                            alt={project.title}
                             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                             loading="lazy"
                         />

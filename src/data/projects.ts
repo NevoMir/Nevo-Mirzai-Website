@@ -1,13 +1,3 @@
-const handGesturePdf = new URL("./Projects_pdfs/Aerial Swarm Hand Control.pdf", import.meta.url)
-    .href;
-
-export type ProjectMedia = {
-    type: "image" | "video";
-    url: string;
-    label?: string;
-    description?: string;
-};
-
 export type ProjectResource = {
     type: "report" | "demo" | "slides";
     label: string;
@@ -24,13 +14,11 @@ export type Project = {
     description: string;
     highlights: string[];
     tags: string[];
-    media: ProjectMedia[];
     resources?: ProjectResource[];
     featured?: boolean;
+    pdfLabel?: string;
+    pdfDescription?: string;
 };
-
-const placeholder = (text: string) =>
-    `https://placehold.co/800x450?text=${encodeURIComponent(text)}`;
 
 export const ProjectsData: Project[] = [
     {
@@ -47,14 +35,6 @@ export const ProjectsData: Project[] = [
             "Performed error analyses to balance sensitivity with conversational nuance.",
         ],
         tags: ["Deep Learning", "Multimodal", "Responsible AI", "NLP"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Multimodal+Fusion"),
-                label: "Fusion pipeline",
-                description: "Overview of the early-fusion architecture used for inference.",
-            },
-        ],
         resources: [
             {
                 type: "report",
@@ -78,13 +58,6 @@ export const ProjectsData: Project[] = [
             "Crafted terrain-aware reward functions that favored energy-efficient steps.",
         ],
         tags: ["Reinforcement Learning", "Robotics", "Simulation"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Quadruped+RL"),
-                label: "Simulated quadruped",
-            },
-        ],
         resources: [
             {
                 type: "report",
@@ -108,13 +81,6 @@ export const ProjectsData: Project[] = [
             "Outlined research directions for safer covariate shift handling.",
         ],
         tags: ["Research", "Inverse RL", "Reward Modeling"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Inverse+RL"),
-                label: "IRL literature map",
-            },
-        ],
     },
     {
         slug: "chocolate-recognition",
@@ -130,13 +96,6 @@ export const ProjectsData: Project[] = [
             "Deployed the detector as a small Flask app for quick demos.",
         ],
         tags: ["Computer Vision", "Detection", "Automation"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Chocolate+Detector"),
-                label: "Detection results",
-            },
-        ],
         resources: [
             {
                 type: "report",
@@ -159,13 +118,6 @@ export const ProjectsData: Project[] = [
             "Executed waypoint tracking with obstacle-aware path smoothing.",
         ],
         tags: ["Mobile Robotics", "OpenCV", "Navigation"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Robot+Navigation"),
-                label: "Thymio navigation view",
-            },
-        ],
         featured: true,
     },
     {
@@ -182,13 +134,6 @@ export const ProjectsData: Project[] = [
             "Packaged the stack with visualization overlays for instructor demos.",
         ],
         tags: ["MPC", "Autonomous Driving", "Control"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Vehicle+MPC"),
-                label: "MPC trajectory tracking",
-            },
-        ],
         featured: true,
     },
     {
@@ -204,13 +149,6 @@ export const ProjectsData: Project[] = [
             "Optimized PID gains for tight corners and altitude stability.",
         ],
         tags: ["Drones", "Computer Vision", "Autonomy"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Drone+Racing"),
-                label: "Crazyflie sim capture",
-            },
-        ],
         resources: [
             {
                 type: "demo",
@@ -234,13 +172,6 @@ export const ProjectsData: Project[] = [
             "Automated scoreboard overlays driven by detection events.",
         ],
         tags: ["Computer Vision", "Signal Processing", "Sports Analytics"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Billiard+CV"),
-                label: "Trajectory overlay",
-            },
-        ],
     },
     {
         slug: "hand-gesture-drone-swarms",
@@ -255,21 +186,8 @@ export const ProjectsData: Project[] = [
             "Fuses camera perception to validate formation execution.",
         ],
         tags: ["Human-Robot Interaction", "VR", "Swarm Robotics"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("VR+Drone+Swarms"),
-                label: "Gesture interface mockup",
-            },
-        ],
-        resources: [
-            {
-                type: "report",
-                label: "Final report",
-                url: handGesturePdf,
-                description: "Aerial Swarm Hand Control write-up (PDF).",
-            },
-        ],
+        pdfLabel: "Final report",
+        pdfDescription: "Aerial Swarm Hand Control write-up (PDF).",
         featured: true,
     },
     {
@@ -286,13 +204,6 @@ export const ProjectsData: Project[] = [
             "Demonstrated real-time control loops for assisted placement.",
         ],
         tags: ["Robotics", "IK", "Simulation"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Scaffolding+Arm"),
-                label: "IK simulation",
-            },
-        ],
     },
     {
         slug: "quadcopter-design-stabilization",
@@ -307,13 +218,6 @@ export const ProjectsData: Project[] = [
             "Calibrated PID gains using thrust stand measurements.",
         ],
         tags: ["Drones", "Embedded Systems", "Control"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Quadcopter+Design"),
-                label: "Custom quadcopter",
-            },
-        ],
     },
     {
         slug: "clickbait-data-analysis",
@@ -328,13 +232,6 @@ export const ProjectsData: Project[] = [
             "Delivered dashboards that visualize false positive clusters.",
         ],
         tags: ["Data Science", "YouTube", "Classification"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Clickbait+Analysis"),
-                label: "Metadata features",
-            },
-        ],
     },
     {
         slug: "data-augmentation-box",
@@ -349,13 +246,6 @@ export const ProjectsData: Project[] = [
             "Automated training/evaluation cycles for each new SKU.",
         ],
         tags: ["Hardware", "Automation", "Data Engineering"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Data+Augmentation+Box"),
-                label: "Capture rig concept",
-            },
-        ],
         resources: [
             {
                 type: "report",
@@ -378,13 +268,6 @@ export const ProjectsData: Project[] = [
             "Optimized calibration so users can remap gaze in under a minute.",
         ],
         tags: ["Embedded Systems", "Computer Vision", "Human Factors"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("Eye+Tracker+Headlamp"),
-                label: "Prototype render",
-            },
-        ],
         resources: [
             {
                 type: "report",
@@ -406,13 +289,6 @@ export const ProjectsData: Project[] = [
             "Extended routing to support slugged project pages with related-project carousels and responsive layout tweaks.",
         ],
         tags: ["Web", "React", "SimplePlain"],
-        media: [
-            {
-                type: "image",
-                url: placeholder("SimplePlain+Portfolio"),
-                label: "Portfolio UI mock",
-            },
-        ],
         resources: [
             {
                 type: "demo",
