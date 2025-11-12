@@ -1,9 +1,9 @@
 # Hand Gesture Control for Drone Swarms with VR
 _Independent • 2024 (Ongoing)_
 
-![Gesture interface](cover/cover.png)
+<img src="cover/cover.png" alt="Gesture interface" height="50vh" />
 
-<video src="videos/BOUND_HIGH_1_07ms.mp4" controls autoplay muted loop playsinline height="300"></video>
+<video src="videos/BOUND_HIGH_1_07ms.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Goals
 

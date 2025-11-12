@@ -6,7 +6,13 @@ import {
     isValidElement,
     cloneElement,
 } from "react";
-import type { ReactElement, SourceHTMLAttributes } from "react";
+import type {
+    ReactElement,
+    SourceHTMLAttributes,
+    ImgHTMLAttributes,
+    VideoHTMLAttributes,
+    CSSProperties,
+} from "react";
 import { useNavigate, useParams } from "react-router";
 import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
 
@@ -115,21 +121,45 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
         }
     }, [project.slug]);
 
+    const normalizeDimension = (value?: string | number): string | number | undefined => {
+        if (value === undefined) return undefined;
+        if (typeof value === "number") return value;
+        const trimmed = value.trim();
+        if (!trimmed) return undefined;
+        if (/^(?:\d+(?:\.\d+)?)(px|%|vh|vw|rem|em)$/.test(trimmed)) {
+            return trimmed;
+        }
+        const numeric = Number(trimmed);
+        return Number.isFinite(numeric) ? `${numeric}px` : trimmed;
+    };
+
     const markdownComponents = useMemo<Components>(
         () => ({
-            img({ src, alt, ...props }) {
+            img({ src, alt, style, height, width, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
                 const resolved =
                     typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
+                const heightValue = normalizeDimension(height);
+                const widthValue = normalizeDimension(width);
+                const mergedStyle: CSSProperties = {
+                    ...style,
+                    display: "block",
+                    marginInline: style?.marginInline ?? "auto",
+                    maxWidth: "100%",
+                    width: widthValue ?? (heightValue ? "auto" : "100%"),
+                    ...(heightValue ? { height: heightValue } : {}),
+                    objectFit: style?.objectFit ?? (heightValue ? "cover" : undefined),
+                };
                 return (
                     <img
                         {...props}
                         src={resolved}
                         alt={alt}
                         className={cn("rounded-lg border bg-background shadow-sm", props.className)}
+                        style={mergedStyle}
                     />
                 );
             },
-            video({ src, children, ...props }) {
+            video({ src, children, style, height, width, ...props }: VideoHTMLAttributes<HTMLVideoElement>) {
                 const resolved =
                     typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
 
@@ -149,13 +179,26 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     return child;
                 });
 
+                const heightValue = normalizeDimension(height);
+                const widthValue = normalizeDimension(width);
+                const mergedStyle: CSSProperties = {
+                    ...style,
+                    display: "block",
+                    marginInline: style?.marginInline ?? "auto",
+                    maxWidth: "100%",
+                    width: widthValue ?? (heightValue ? "auto" : "100%"),
+                    ...(heightValue ? { height: heightValue } : {}),
+                    objectFit: style?.objectFit ?? (heightValue ? "cover" : undefined),
+                };
+
                 return (
                     <video
                         {...props}
                         src={resolved}
-                        className={cn("w-full rounded-lg border bg-black", props.className)}
+                        className={cn("rounded-lg border bg-black", props.className)}
                         playsInline
                         controls={props.controls ?? true}
+                        style={mergedStyle}
                     >
                         {resolvedChildren}
                     </video>
