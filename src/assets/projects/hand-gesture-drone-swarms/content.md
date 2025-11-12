@@ -1,6 +1,9 @@
 # Hand Gesture Control for Drone Swarms with VR
+_Independent • 2024 (Ongoing)_
 
-This journal-style log captures the weekly progress while prototyping the VR interface that commands the Crazyflie swarm. It mirrors the same storytelling experience used in the “Deep Learning with Keras” article so future projects can follow the exact workflow.
+![Gesture interface](cover/cover.png)
+
+<video src="videos/BOUND_HIGH_1_07ms.mp4" controls autoplay muted loop playsinline height="300"></video>
 
 ## Goals
 
@@ -19,7 +22,7 @@ This journal-style log captures the weekly progress while prototyping the VR int
 <div class="relative w-full max-w-4xl aspect-video mx-auto overflow-hidden rounded-md my-6">
     <iframe
         class="absolute top-0 left-0 w-full h-full"
-        src="https://docs.google.com/presentation/d/e/2PACX-1vS3tKpe7iTEPnwJ6kuCPf7NlfHIfOc3pWKTW4FfISy5jr2mq2bSIlGTWU3X3KHk9T8AgCZhSNOy6juS/embed?start=false&loop=false&delayms=10000"
+        src="https://docs.google.com/presentation/d/1FshBk1suVUCHNCBTP1fp5eQhe4eJct6a/embed?start=false&loop=false&delayms=10000"
         allowfullscreen
         title="Hand Gesture Swarm Deck"
     ></iframe>

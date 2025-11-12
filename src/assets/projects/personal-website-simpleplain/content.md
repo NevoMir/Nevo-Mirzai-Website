@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Personal Website Built on SimplePlain
+_Independent • 2025_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Cloned the SimplePlain template and transformed it into a tailored personal site with data-driven sections, immersive project detail routes, and horizontal media rails for reports, videos, and galleries.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Replaced GitHub auto-fetch with a curated CV-driven dataset for full control over messaging.
+- Implemented inline PDF and media viewers optimized for a 50% viewport height rail.
+- Extended routing to support slugged project pages with related-project carousels and responsive layout tweaks.
+
+## Notes
+- Capture before/after screenshots of the layout to showcase the redesign story.

@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/data/projects";
-import { getProjectCover } from "@/lib/project-assets";
+import { getProjectHero } from "@/lib/project-assets";
 
 type ProjectPreviewCardProps = {
     project: Project;
@@ -11,19 +11,30 @@ type ProjectPreviewCardProps = {
 };
 
 export function ProjectPreviewCard({ project, className }: ProjectPreviewCardProps) {
-    const cover = getProjectCover(project.slug);
+    const hero = getProjectHero(project.slug);
 
     return (
         <Card className={cn("rounded-lg overflow-hidden gap-0 py-0 w-full flex flex-col h-full", className)}>
             <Link to={`/projects/${project.slug}`} className="flex flex-col flex-grow group text-left">
                 <div className="aspect-3/2 w-full overflow-hidden">
-                    {cover ? (
-                        <img
-                            src={cover}
-                            alt={project.title}
-                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            loading="lazy"
-                        />
+                    {hero ? (
+                        hero.type === "video" ? (
+                            <video
+                                src={hero.url}
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                autoPlay
+                                loop
+                                muted
+                                playsInline
+                            />
+                        ) : (
+                            <img
+                                src={hero.url}
+                                alt={project.title}
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                loading="lazy"
+                            />
+                        )
                     ) : (
                         <div className="flex flex-col items-center justify-center p-4 w-full h-full bg-muted text-center">
                             <span className="text-lg font-semibold opacity-80">{project.title}</span>

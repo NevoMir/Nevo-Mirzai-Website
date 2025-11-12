@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Chocolate Recognition with Deep Learning
+_Image Analysis • 2023_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Prepared a dataset of confectionery arrangements, applied aggressive augmentation, and trained a lightweight detector to separate overlapping sweets before counting instances.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Automated labeling with synthetic arrangements to extend limited data.
+- Applied color-constancy and histogram equalization for background invariance.
+- Deployed the detector as a lightweight Flask demo for quick testing.
+
+## Notes
+- Add before/after augmentation collages in the media section when ready.

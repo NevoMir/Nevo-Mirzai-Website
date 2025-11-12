@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Autonomous Drone Racing
+_Independent • 2022_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Simulated laps with synthetic gates, applied computer vision for gate detection, and transferred motion primitives to hardware while accounting for aerodynamic drift.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Used ROS + Gazebo to validate trajectories before flight tests.
+- Incorporated obstacle-avoidance modules for pop-up barriers.
+- Optimized PID gains for tight corners and altitude stability.
+
+## Notes
+- Embed the final race footage once it is exported from the flight logs.

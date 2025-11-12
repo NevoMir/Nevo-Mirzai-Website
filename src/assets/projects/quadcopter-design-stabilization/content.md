@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Quadcopter Design and Stabilization
+_Independent • 2020_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Produced CAD for the airframe, integrated IMU data, and tuned cascaded PID controllers to maintain hover despite lightweight frames.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- 3D-printed structural components and optimized them for weight and stiffness.
+- Developed embedded firmware in C++ for sensor fusion across the 6-axis IMU.
+- Calibrated PID gains using thrust-stand measurements and log replay.
+
+## Notes
+- Capture glamour shots of the printed frame once the wiring cleanup is done.

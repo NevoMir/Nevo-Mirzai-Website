@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Clickbait Data Analysis
+_Independent • 2024 (This semester)_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Used the Youniverse dataset to engineer behavioral features, trained ML classifiers, and evaluated interpretability for content teams.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Built a feature pipeline covering sentiment, timing, and creator history.
+- Compared gradient boosting versus lightweight neural approaches.
+- Delivered dashboards that visualize false-positive clusters for reviewers.
+
+## Notes
+- Add SHAP-style plots once the interpretability notebook is polished.

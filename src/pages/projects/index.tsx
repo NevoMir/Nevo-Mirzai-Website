@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+    useEffect,
+    useMemo,
+    useState,
+    Children,
+    isValidElement,
+    cloneElement,
+} from "react";
+import type { ReactElement, SourceHTMLAttributes } from "react";
 import { useNavigate, useParams } from "react-router";
 import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
 
@@ -121,18 +129,60 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     />
                 );
             },
+            video({ src, children, ...props }) {
+                const resolved =
+                    typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
+
+                type SourceElement = ReactElement<SourceHTMLAttributes<HTMLSourceElement>>;
+
+                const resolvedChildren = Children.map(children, (child) => {
+                    if (!isValidElement(child)) return child;
+                    const childProps = child.props as { src?: unknown };
+                    if (
+                        typeof childProps.src === "string" &&
+                        child.type === "source"
+                    ) {
+                        const mapped =
+                            resolveProjectMedia(project.slug, childProps.src) ?? childProps.src;
+                        return cloneElement(child as SourceElement, { src: mapped });
+                    }
+                    return child;
+                });
+
+                return (
+                    <video
+                        {...props}
+                        src={resolved}
+                        className={cn("w-full rounded-lg border bg-black", props.className)}
+                        playsInline
+                        controls={props.controls ?? true}
+                    >
+                        {resolvedChildren}
+                    </video>
+                );
+            },
+            source({ src, ...props }) {
+                const resolved =
+                    typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
+                return <source {...props} src={resolved} />;
+            },
         }),
         [project.slug]
     );
 
     const fallbackMarkdown = useMemo(() => {
+        const headerLines = [`# ${project.title}`];
         const metaParts = [project.course, project.timeline].filter(Boolean);
-        const metaLine = metaParts.length ? `_${metaParts.join(" • ")}_\n\n` : "";
+        if (metaParts.length) {
+            headerLines.push(`_${metaParts.join(" • ")}_`);
+        }
+        headerLines.push("![Cover](cover/cover.png)");
+        headerLines.push("<!-- <video src=\"cover/cover.mp4\" controls autoplay muted loop playsinline></video> -->");
         const highlights =
             project.highlights.length > 0
                 ? `\n## Highlights\n${project.highlights.map((item) => `- ${item}`).join("\n")}\n`
                 : "";
-        return `# ${project.title}\n\n${metaLine}${project.description}\n${highlights}`;
+        return `${headerLines.join("\n\n")}\n\n${project.description}\n${highlights}`;
     }, [project]);
 
     return (

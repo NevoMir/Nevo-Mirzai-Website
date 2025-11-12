@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Inverse RL Research
+_Reinforcement Learning • 2024 (This semester)_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Surveyed MaxEnt IRL, adversarial approaches, and offline variants to propose practical heuristics that reduce demonstration requirements. Focused on reproducibility and lightweight evaluation harnesses.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Benchmarked state-of-the-art IRL libraries on shared control tasks.
+- Documented common failure modes tied to reward misspecification.
+- Outlined research directions for safer covariate-shift handling.
+
+## Notes
+- Embed comparative plots of the IRL baselines when the experiments finish.

@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Computer Vision Navigation for a Robot
+_Mobile Robotics • 2023_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Combined OpenCV perception with particle filtering and A* planning to follow colored waypoints. Tuned closed-loop behavior for reliable on-table navigation.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Designed the vision pipeline with color segmentation plus morphological cleanup.
+- Estimated robot pose via EKF and fused wheel odometry with visual beacons.
+- Executed waypoint tracking with obstacle-aware path smoothing.
+
+## Notes
+- Record a short clip of the Thymio completing a course and embed it here later.

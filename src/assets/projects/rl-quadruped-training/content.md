@@ -1,10 +1,16 @@
-# Project Notebook Placeholder
+# Reinforcement Learning for a Quadruped Robot
+_Legged Robots • 2023_
 
-Replace this file with the full notebook-style story for the project. You can use Markdown plus raw HTML just like the articles.
+<!-- ![Cover](cover/cover.png) -->
+<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
-## Embedding assets
-- Reference images stored in this project folder with Markdown: `![Rig](images/example.png)`.
-- Embed videos via HTML: `<video src="videos/demo.mp4" controls></video>`.
-- Add slide embeds from Google Slides using the same iframe snippet as the articles.
+## Overview
+Focused on locomotion control inside OpenAI Gym, contrasting CPG-inspired controllers with policy gradients. Reward shaping and curriculum learning were iterated to achieve smooth gaits and fast convergence.
 
-Once the real write-up is ready, delete this placeholder section.
+## Highlights
+- Implemented baseline CPG and Cartesian PID controllers for reference trajectories.
+- Experimented with PPO and SAC, selecting hyperparameters for stability versus speed.
+- Crafted terrain-aware reward functions that favored energy-efficient steps.
+
+## Notes
+- Add screenshots of the simulation arena and reward plots when available.
