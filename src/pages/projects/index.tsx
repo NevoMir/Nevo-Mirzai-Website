@@ -30,6 +30,9 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -245,7 +248,8 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
 
                 <div className="prose dark:prose-invert max-w-none bg-muted/40 rounded-lg p-6 border">
                     <ReactMarkdown
-                        rehypePlugins={[rehypeRaw]}
+                        remarkPlugins={[remarkMath]}
+                        rehypePlugins={[rehypeRaw, rehypeKatex]}
                         skipHtml={false}
                         components={markdownComponents}
                     >

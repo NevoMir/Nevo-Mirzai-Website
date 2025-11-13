@@ -191,6 +191,37 @@ export const ProjectsData: Project[] = [
         featured: true,
     },
     {
+        slug: "carrots-peeler",
+        title: "Mechanical Carrot Peeler — BA2 Project",
+        course: "ME-102/107 Mechanical Construction",
+        timeline: "2022",
+        summary:
+            "Designed and machined a fully manual carrot-peeling machine that synchronizes blade travel and carrot rotation with a single crank.",
+        description:
+            "As a BA2 team project we engineered a compact peeling machine that satisfies weight, safety, and manufacturability constraints. The mechanism uses twin fork supports, a chain-driven carriage, and a torsion-spring blade that adapts to irregular vegetables.",
+        highlights: [
+            "One crank simultaneously translates the blade and indexes the carrot 30° per turn.",
+            "Torsion-spring blade mount maintains constant contact force without jamming.",
+            "Complete machining package (drawings, CAM, BOM) delivered for 3-axis milling.",
+        ],
+        tags: ["Mechanical Design", "Product", "Manufacturing"],
+    },
+    {
+        slug: "aerial-am",
+        title: "Aerial Additive Manufacturing Prototype",
+        timeline: "2024",
+        summary:
+            "Exploring drone-based additive manufacturing workflows that deposit material in flight for large-scale structures.",
+        description:
+            "Built an experimental setup where a multirotor carries a lightweight extrusion head and synchronized resin feed. The work focused on toolpath planning, material curing timing, and the control logic that keeps the nozzle aligned while the platform moves.",
+        highlights: [
+            "Implemented a dual-loop controller that couples flight dynamics with deposition rate.",
+            "Validated toolpaths on curved mandrels and vertical surfaces without scaffolding.",
+            "Packaged the workflow in ROS2 so future teams can iterate on materials and nozzle designs.",
+        ],
+        tags: ["Aerial Robotics", "Additive Manufacturing", "Research"],
+    },
+    {
         slug: "robotic-arm-scaffolding",
         title: "Robotic Arm Simulation for Scaffolding Applications",
         course: "Introduction to Robotics",
