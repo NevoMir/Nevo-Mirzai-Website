@@ -1,164 +1,286 @@
-# Mechanical Carrot Peeler — BA2 Project  
-2022 • *A fully manual, safe, and precise carrot-peeling machine designed from scratch.*
+# Physics-Based Simulator for Aerial Additive Manufacturing  
+2024 • *Simulating expanding, curing foams for drone-based 3D printing.*
+
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ---
 
 ## Overview
 
-This project was carried out as part of the **Mechanical Construction (ME-102/107)** course at EPFL.  
-The objective was to design and build a **domestic carrot-peeler** that:
+This project builds a **physics-based simulator** for **Aerial Additive Manufacturing (Aerial AM)**: 3D printing using drones that deposit a **viscoelastic, expanding foam**.
 
-- peels carrots along their full length,  
-- adapts to diameters between **20–45 mm**,  
-- runs **fully manually** (one hand on a crank),  
-- stays **under 8 kg**,  
-- and remains **safe, reliable, and easy to clean**.
+The goal is to:
 
-Our final design uses:
+- Model how the material **flows, expands, and cures** after it leaves the nozzle.  
+- Use a fluid model that stays **stable** even with large deformations.  
+- Run everything on a **GPU** so we can reach high frame rates and later use it for **reinforcement learning** or digital twins.
 
-- **Two rotating fork supports** that hold and rotate the carrot,  
-- A **chain-driven blade module** sliding along the carrot,  
-- A **manual crank** driving both the blade movement and the carrot rotation,  
-- A **torsion-spring blade support** to adapt to carrot irregularities,  
-- A mechanical layout fully machinable on a **3-axis mill**.
+The simulator is implemented in **Genesis**, a GPU-native physics engine that supports several fluid models.  
+We mainly use the **Material Point Method (MPM)**, which is well suited for simulating:
 
-In short:  
+- Thick, sticky fluids  
+- Volumetric expansion (foam-like behavior)  
+- Transition from liquid to solid (curing)  
 
-> One crank turn makes the blade move along the carrot **and** rotates the carrot slightly. After 12 turns, the carrot is fully peeled.
+In simple words:  
+
+> A drone flies in a circle and sprays a special foam. In the simulator, this foam first behaves like a thick liquid, then expands, then solidifies into a load-bearing structure — all computed from the physics.
 
 ---
 
-## Pictures / Media
+## Demo videos
 
-### Complete machine  
-<img src="images/carrot-machine-full.jpg" height="50vh" />
+I will add the real videos later.  
+Here are the placeholders and order I will use:
 
-### Basic idea (stylized sketch)  
-<img src="images/carrot-machine-idea.jpg" height="50vh" />
+### 1. Transition to curing (same material, no expansion)
 
-### Example of 2D machining drawing  
-<img src="images/carrot-drawing-2d.jpg" height="50vh" />
+<video src="videos/curing-transition.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
-### Mounting / assembly detail  
-<img src="images/carrot-mounting-example.jpg" height="50vh" />
+### 2. Expansion only (no curing)
 
----
+<video src="videos/expansion-only.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
-## How the mechanism works
+### 3. Expansion + curing + drone (cover)
 
-### 1. Clamping and rotating the carrot
-
-The carrot is held between **two stainless-steel fork supports**:
-
-- One fork sits on a sliding shaft and can move forward/backward to match carrot length.  
-- A **tightening lever** squeezes the sliding shaft inside a conical hole to lock the carrot securely.  
-- A ball bearing between fork and shaft allows **free rotation**.  
-- The second fork is fixed in rotation but not in translation.
-
-Once clamped, the carrot has **one desired motion**: rotation around its main axis.
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ---
 
-## 2. The manual crank drives everything
+## Evaluation images
 
-Turning the crank performs two synchronized actions:
+### Qualitative evaluation (single images)
 
-**(1) Blade movement (translation)**  
-The crank turns a conical gear → pulley → belt → sprocket → chain.  
-This chain pulls the blade along the full length of the carrot.
+<img src="images/Table.png" width="100vh" />
+<img src="images/4_images.png" width="100vh" />
 
-**(2) Carrot rotation**  
-The same crank also turns a conical gear with a **1-to-12 reduction ratio**, so:
-- **1 full crank rotation → carrot rotates 30°**  
-- **12 crank turns → full 360° rotation**
+### Side-by-side comparison
 
-This number comes from experimentation:  
-We measured that the carrot requires **~12 cuts** to remove the whole external layer.
-
-So the machine ensures:
-- For every pass of the blade, the carrot rotates just enough so the next slice is adjacent to the previous one.
-
-This makes the peeling **repeatable** and guarantees no part of the carrot is missed.
+<div style="display:flex; gap:1rem; flex-wrap:wrap;">
+  <img src="images/eval1.png" width="55vh" />
+  <img src="images/eval2.png" width="55vh" />
+</div>
 
 ---
 
-## 3. The chain-mounted blade and its flexible support
+## What we simulate
 
-The blade needs to:
+We focus on a simple but representative printing task:
 
-- stay in contact with irregular carrot surfaces,  
-- apply a roughly constant cutting force,  
-- avoid jamming,  
-- and allow easy cleaning.
+- A drone follows a **circular toolpath** at a fixed height.  
+- At each lap it deposits **one ring** of material.  
+- Stacked rings form a **cylindrical tower**.  
 
-To achieve this, the blade is mounted on the chain using a **torsion-spring assembly**:
+The drone’s motion is **kinematic** in this project:
 
-- Two torsion springs allow the blade to rotate very slightly around its support axis.  
-- This gives a **self-adjusting** motion: the blade pushes into the carrot with the correct force while absorbing bumps.  
-- A small ramp in the support improves initial contact so the blade doesn’t “dig in” abruptly.
+- We do not simulate flight control yet.  
+- The drone is there to show where the nozzle is and to interact with the fluid as a rigid body in some scenes.
 
-This system was chosen after testing other options (compression springs, multi-chain supports) which either jammed or required excessive force.
+The printed material is modeled as:
 
----
+- A **viscoelastic fluid** when fresh (it can flow and merge with neighbors).  
+- A **stiffer, solid-like material** after curing (it can carry weight).  
+- Optionally **expanding**, like a foam that increases its volume over time.
 
-## 4. The key calculations that guided the design
+We assume:
 
-We experimentally measured:
-
-- **Force needed to peel the carrot**: about **8–12 N**  
-- **Number of cuts needed**: **12**
-
-This gave us:
-
-### Required blade power  
-With a blade speed of about **0.4 m/s**:
-
-$$P_\text{blade} = F \cdot v = 11.5 \text{ N} \cdot 0.4 \text{ m/s} \approx 4.6 \text{ W}$$
-
-Then we accounted for losses in each transmission stage:
-
-| Component | Efficiency |
-|----------|------------|
-| Chain | 0.97 |
-| Sprockets | 0.98 |
-| Pulleys | 0.98 |
-| Belt | 0.95 |
-| Conical gears | 0.98 |
-
-Multiplying these together gives the overall efficiency **η ≈ 0.87**, so:
-
-$$P_\text{input} = \frac{P_\text{blade}}{\eta} \approx 5.38 \text{ W}$$
-
-This is the power the **user** must supply through the crank.
-
-### Required manual force  
-With crank radius **r = 0.1 m** and angular speed **ω = 2π rad/s** (one turn per second):
-
-$$F = \frac{P}{r \cdot \omega} \approx \frac{5.38}{0.1 \cdot 2\pi} \approx 8.56 \text{ N}$$
-
-This corresponds to pushing with less than **1 kg**, which fits the specification for a single-hand user-powered system.
-
-### Blade pressure via torsion spring  
-We needed a **normal force ≥ 8 N** on the carrot for consistent peeling.  
-Using supplier data for the torsion spring:
-
-$$F = \frac{M_{\max}}{\ell_r} \cdot \frac{\alpha}{\alpha_{\max}}$$
-
-Solving gave a required preload angle of **≈ 43°**, which we integrated in the design.
-
-All material choices (POM-C, aluminium, stainless steel) were verified using stress and torsion formulas with safety factors ≥ 2.
+- Uniform gravity.  
+- A rigid ground plane.  
+- A finite simulation box that contains the whole process.  
+- Particles that leave the box bounce off its walls.
 
 ---
 
-## Final result
+## Why MPM and not SPH or PBD?
 
-The final carrot-peeling machine:
+Genesis supports three main fluid approaches we considered:
 
-- Weighs **≈ 6.5 kg** (under the 8 kg limit)  
-- Peels carrots smoothly with only a **light manual effort**  
-- Adapts automatically to irregular shapes  
-- Can be disassembled and cleaned easily  
-- Uses only parts machinable with **3-axis milling**  
-- Is safe, stable, and robust
+- **MPM (Material Point Method)** — hybrid **particle + grid** method.  
+- **SPH (Smoothed Particle Hydrodynamics)** — pure **particle** method.  
+- **PBD (Position-Based Dynamics)** — **constraint-based** particle method.
 
-A simple hand-crank operates a surprisingly elegant mechanical system where **geometry, forces, and motion were all carefully balanced** to achieve an efficient and reliable peeling process.
+We need a model that can:
+
+- Represent **thick, sticky** material.  
+- Handle **large deformations** and **layer stacking**.  
+- Support a **liquid → solid** transition (curing).  
+- Work with **expansion** without blowing up numerically.
+
+**MPM** is the best fit for this:
+
+- Particles carry mass and material state (position, velocity, deformation, etc.).  
+- A background grid is used to compute forces and update the continuum mechanics.  
+- It naturally supports **viscoelastic** and **elasto-plastic** behavior.
+
+The main trade-off: MPM is **heavier** than PBD in terms of computation and memory, but the extra cost buys us much better physical realism.
+
+---
+
+## Stability constraints in MPM (time step and grid)
+
+In MPM, stability depends on:
+
+- Grid cell size $\Delta x$  
+- Material parameters (density $\rho$, Young’s modulus $E$, Poisson’s ratio $\nu$, viscosity $\eta$)  
+- The simulation time step $\Delta t$
+
+Two main constraints limit $\Delta t$:
+
+1. **Elastic wave constraint** (information cannot travel too far in one step):
+
+   $$
+   \Delta t \le \alpha_\text{el} \frac{\Delta x}{c} \quad\text{with}\quad
+   c = \sqrt{\frac{K + \tfrac{4}{3}G}{\rho}}
+   $$
+
+   where $K$ = bulk modulus and $G$ = shear modulus, given by
+
+   $$
+   K = \frac{E}{3(1 - 2\nu)}, \qquad
+   G = \frac{E}{2(1 + \nu)}.
+   $$
+
+2. **Viscous constraint** (diffusion must remain stable):
+
+   $$
+   \Delta t \le \alpha_\text{visc} \frac{\rho\,\Delta x^2}{\eta}.
+   $$
+
+We choose:
+
+$$
+\Delta t \le \min\left(
+\alpha_\text{el} \frac{\Delta x}{c},
+\;
+\alpha_\text{visc} \frac{\rho\,\Delta x^2}{\eta}
+\right),
+$$
+
+with safety factors $0 < \alpha_\text{el}, \alpha_\text{visc} < 1$.  
+If needed, we also use **sub-stepping** inside each time step to keep the simulation stable during strong events (like sudden expansion or curing).
+
+For the experiments in the paper, we fixed:
+
+- Particle size: about $7 \times 10^{-3}\,\text{m}$  
+- Grid density: $64$ cells per meter  
+- Time step: $\Delta t = 10^{-3}\,\text{s}$  
+- Substeps: $10$ per frame  
+
+These values were chosen to be safe for the **most demanding** scenario (expansion + curing + drone). All other cases reuse the same settings so we can compare them fairly.
+
+---
+
+## How curing and expansion are modeled
+
+A key idea in this simulator is to treat **curing** and **expansion** as **time-scheduled transitions** on a per-particle basis.
+
+Each particle stores:
+
+- Its **birth time** $t_\text{birth}$  
+- Its **material state** (viscosity, stiffness, etc.)
+
+At each step, we compute its **age**:
+
+$$
+\text{age} = t - t_\text{birth}.
+$$
+
+When the age crosses a threshold, we **promote** the particle to a new material state.
+
+### Curing
+
+Curing is implemented as a **one-to-one** promotion:
+
+- Fresh particles live in a “liquid” pool.  
+- After a delay $T_\text{cure}$ (plus a small random jitter to avoid everything curing at the same instant), a particle is copied into a “cured” pool.  
+- Its position, velocity, and deformation history are preserved.  
+- Only the **material parameters** change (higher stiffness, higher viscosity, possibly a yield stress).
+
+We can also do curing in **multiple stages**, gradually increasing stiffness instead of jumping directly from liquid to fully solid.
+
+### Expansion
+
+Expansion is modeled as a **one-to-many** transition:
+
+- After a delay $T_\text{expand}$, a particle is replaced by several “offspring” particles to represent increased volume.  
+- New particles are sampled randomly inside a small sphere around the parent.  
+- They inherit the parent’s velocity plus a small **outward impulse** and some noise, so the foam does not just grow perfectly spherical.  
+- To **conserve mass**, the density of expanded particles is scaled by the inverse of the expansion ratio.
+
+In simple terms:
+
+> A particle waits, then “bursts” into a small cloud of children that represent the expanding foam.
+
+All transitions use **pre-allocated particle pools** on the GPU.  
+We never allocate new memory during runtime — we just **activate** or **deactivate** slots. This keeps the simulator fast and stable even when the number of particles grows a lot.
+
+---
+
+## Experimental setup and scenarios
+
+All runs are 3D simulations using MPM in Genesis, executed on a **single GPU** (RTX-class).
+
+We test several scenarios:
+
+1. **Base deposition only** – viscous material, no curing, no expansion.  
+2. **Base + curing** – layers stiffen over time.  
+3. **Base + expansion** – material grows in volume (foam).  
+4. **Base + expansion + curing** – expanding foam that later solidifies.  
+5. **Base + expansion + curing + drone geometry** – full scene with the drone body included as a rigid collider.
+
+For each run we log:
+
+- **Physical metrics**  
+  - Ring radius and drift  
+  - Layer height and tower height  
+  - Bead width  
+  - Total mass (to check conservation)  
+  - Whether the structure **stays stable** after deposition  
+
+- **Performance metrics**  
+  - Number of particles  
+  - Frame rate (FPS)  
+  - Simulation-to-real time ratio (seconds of simulation per second of wall time)  
+  - Performance with and without rendering
+
+---
+
+## Main results and takeaways
+
+Some key observations:
+
+- **Particle count** strongly affects performance when rendering is enabled.  
+  - More particles → lower FPS, higher Sim/Real ratio.  
+- **Headless runs (no rendering)** are much more stable and scalable.  
+  - FPS stays high even with many particles.  
+  - This is ideal for large-scale data generation and reinforcement learning.  
+- **Curing** adds only a small computational overhead.  
+- **Expansion** is more expensive because it increases the number of particles.  
+- **Expansion + curing + drone** is the most demanding case, but still runs at usable speeds with fixed settings.
+
+Visually and physically, the simulator reproduces:
+
+- Layer-by-layer build-up of the tower.  
+- Foam that **settles**, **expands**, then **stiffens**.  
+- A final structure that can carry load and stay upright.
+
+The main simplification is how expansion is implemented: the foam grows by **spawning particles around existing ones**, not by directly pushing air out of the way. This makes the math and the implementation much simpler, while still giving believable foam-like behavior.
+
+---
+
+## What this simulator enables
+
+This framework is a **first step toward a digital twin** for Aerial AM:
+
+- We can test different **toolpaths**, **material schedules**, and **parameters** without flying a real drone.  
+- We can evaluate **layer stability** and **shape accuracy** before going to the field.  
+- Thanks to GPU acceleration, we can later run **many simulations in parallel** to train control policies or optimize process settings.
+
+Future work will:
+
+- Add full **drone dynamics and control**.  
+- Calibrate material parameters with **real experiments**.  
+- Scale to **multi-drone** scenarios and larger structures.  
+- Use the simulator as a backbone for **reinforcement learning** and **online monitoring**.
+
+In short, the project shows that it is possible to simulate **expanding, curing foams for drone-based 3D printing** in a way that is both **physically meaningful** and **computationally efficient**.

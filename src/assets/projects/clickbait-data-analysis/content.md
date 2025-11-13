@@ -1,7 +1,7 @@
-# Clickbait Data Analysis
-_Independent • 2024 (This semester)_
+# Clickbait Data Analysis Project
+_2025 (Ongoing) • d_
 
-<!-- ![Cover](cover/cover.png) -->
+<img src="cover/cover.png" width="80vh" />
 <!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
 
 ## Overview
