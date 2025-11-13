@@ -16,7 +16,7 @@ export function ProjectPreviewCard({ project, className }: ProjectPreviewCardPro
     return (
         <Card className={cn("rounded-lg overflow-hidden gap-0 py-0 w-full flex flex-col h-full", className)}>
             <Link to={`/projects/${project.slug}`} className="flex flex-col flex-grow group text-left">
-                <div className="aspect-3/2 w-full overflow-hidden">
+                <div className="aspect-video w-full overflow-hidden bg-black">
                     {hero ? (
                         hero.type === "video" ? (
                             <video

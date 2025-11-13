@@ -283,7 +283,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                         <FaWrench />
                         Explore other projects
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {otherProjects.map((item) => (
                             <ProjectPreviewCard key={item.slug} project={item} />
                         ))}

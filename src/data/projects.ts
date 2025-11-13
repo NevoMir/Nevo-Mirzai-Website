@@ -192,7 +192,7 @@ export const ProjectsData: Project[] = [
     },
     {
         slug: "carrots-peeler",
-        title: "Mechanical Carrot Peeler — BA2 Project",
+        title: "Mechanical Carrot Peeler",
         course: "ME-102/107 Mechanical Construction",
         timeline: "2022",
         summary:

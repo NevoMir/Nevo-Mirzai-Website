@@ -1,6 +1,8 @@
 # Mechanical Carrot Peeler  
 2022 • *A fully manual, safe, and precise carrot-peeling machine designed from scratch.*
 
+<img src="cover/cover.PNG" height="50vh" />
+
 ---
 
 ## Overview
