@@ -12,6 +12,7 @@ import type {
     ImgHTMLAttributes,
     VideoHTMLAttributes,
     CSSProperties,
+    KeyboardEvent,
 } from "react";
 import { useNavigate, useParams } from "react-router";
 import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
@@ -340,6 +341,23 @@ function ProjectPdfViewer({
         setErrorMessage(error.message || "Unable to load PDF.");
     };
 
+    const openPdf = () => {
+        window.open(pdf.url, "_blank", "noopener,noreferrer");
+    };
+
+    const viewerAccessibilityProps = {
+        role: "button" as const,
+        tabIndex: 0,
+        onClick: openPdf,
+        onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openPdf();
+            }
+        },
+        "aria-label": `Open ${pdf.label}`,
+    };
+
     return (
         <div className="space-y-2">
             <div className="flex items-center gap-2 text-xl font-semibold">
@@ -353,7 +371,7 @@ function ProjectPdfViewer({
                     {pdf.label}
                 </a>
             </div>
-            <div className="w-full h-[50vh] min-h-[320px]">
+            <div className="w-full h-[50vh] min-h-[320px] cursor-pointer" {...viewerAccessibilityProps}>
                 <div className="h-full rounded-md border bg-muted/30 overflow-hidden flex items-center justify-center">
                     {errorMessage && <PdfFallback text={errorMessage} />}
                     {!errorMessage && (

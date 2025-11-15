@@ -151,7 +151,7 @@ For example, in [src/data/profile.ts](src/data/profile.ts), you can update the p
 
 ```ts
 export const UserInfo = {
-    name: "Pin-Yen Huang",
+    name: "Nevò Mirzai Hamadani",
     profile_url: "https://avatars.githubusercontent.com/u/33774054?v=4",
     headline: "CLLab • National Taiwan University",
     // ...other fields
