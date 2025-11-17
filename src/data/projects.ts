@@ -221,21 +221,21 @@ export const ProjectsData: Project[] = [
         ],
         tags: ["Aerial Robotics", "Additive Manufacturing", "Research"],
     },
-    {
-        slug: "robotic-arm-scaffolding",
-        title: "Robotic Arm Simulation for Scaffolding Applications",
-        course: "Introduction to Robotics",
-        timeline: "2022",
-        summary: "Simulated inverse kinematics for a robotic arm that assists with scaffolding assembly.",
-        description:
-            "Modeled the construction environment in MATLAB, designed IK solvers, and validated real-time feasibility for Hong Kong building codes.",
-        highlights: [
-            "Built a kinematic chain model with joint limit enforcement.",
-            "Integrated collision checking against scaffold elements.",
-            "Demonstrated real-time control loops for assisted placement.",
-        ],
-        tags: ["Robotics", "IK", "Simulation"],
-    },
+    // {
+    //     slug: "robotic-arm-scaffolding",
+    //     title: "Robotic Arm Simulation for Scaffolding Applications",
+    //     course: "Introduction to Robotics",
+    //     timeline: "2022",
+    //     summary: "Simulated inverse kinematics for a robotic arm that assists with scaffolding assembly.",
+    //     description:
+    //         "Modeled the construction environment in MATLAB, designed IK solvers, and validated real-time feasibility for Hong Kong building codes.",
+    //     highlights: [
+    //         "Built a kinematic chain model with joint limit enforcement.",
+    //         "Integrated collision checking against scaffold elements.",
+    //         "Demonstrated real-time control loops for assisted placement.",
+    //     ],
+    //     tags: ["Robotics", "IK", "Simulation"],
+    // },
     {
         slug: "quadcopter-design-stabilization",
         title: "Quadcopter Design and Stabilization",
@@ -328,6 +328,22 @@ export const ProjectsData: Project[] = [
                 description: "Base template used as the starting point for this website.",
             },
         ],
+    },
+    {
+        slug: "virtual-drone-racing",
+        title: "Virtual Drone Racing",
+        course: "Crazyflie Practical",
+        timeline: "2025",
+        summary:
+            "Programmed a Crazyflie to detect gates in Webots, race multiple laps, then port the stack to real hardware.",
+        description:
+            "Individual simulation tasks required computer-vision gate mapping during lap one, followed by aggressive time-trial laps. Teams then ported the pipeline to the real Crazyflie, tuning PID loops and validating on a smaller arena.",
+        highlights: [
+            "Gate detection pipeline using OpenCV during the discovery lap.",
+            "Lap-aware planner and controller that handles randomized gate placements.",
+            "Sim-to-real workflow in ROS2 with best-of-three trials deciding hardware grades.",
+        ],
+        tags: ["Drones", "Computer Vision", "Control"],
     },
 ];
 
