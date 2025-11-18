@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { FaWrench, FaArrowRight } from "react-icons/fa6";
 
 import { Button } from "@/components/ui/button";
