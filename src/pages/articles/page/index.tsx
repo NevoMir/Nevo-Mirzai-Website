@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useLocation, Link } from "react-router";
+import { useParams, useLocation, Link } from "react-router-dom";
 import fm from "front-matter";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";

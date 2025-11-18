@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link } from "react-router-dom";
 import { FaArrowRight } from "react-icons/fa6";
 import { HiUsers, HiDocumentText } from "react-icons/hi2";
 import { IoLibrary } from "react-icons/io5";

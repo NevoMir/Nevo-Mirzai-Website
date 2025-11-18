@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FaNewspaper } from "react-icons/fa6";
-import { useSearchParams, useNavigate, Link } from "react-router";
+import { useSearchParams, useNavigate, Link } from "react-router-dom";
 
 import {
     Select,

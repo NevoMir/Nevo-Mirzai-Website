@@ -16,7 +16,7 @@ import type {
     CSSProperties,
     KeyboardEvent,
 } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams } from "react-router-dom";
 import { FaArrowLeft, FaFileLines, FaLink, FaVideo, FaWrench } from "react-icons/fa6";
 
 import { Button } from "@/components/ui/button";

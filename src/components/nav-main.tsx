@@ -1,4 +1,4 @@
-import { useLocation, Link } from "react-router";
+import { useLocation, Link } from "react-router-dom";
 import { ChevronLeft, type LucideIcon } from "lucide-react";
 
 import {
