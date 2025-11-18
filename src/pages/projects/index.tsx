@@ -2,6 +2,7 @@ import {
     useEffect,
     useMemo,
     useState,
+    useRef,
     Children,
     isValidElement,
     cloneElement,
@@ -11,6 +12,7 @@ import type {
     SourceHTMLAttributes,
     ImgHTMLAttributes,
     VideoHTMLAttributes,
+    ObjectHTMLAttributes,
     CSSProperties,
     KeyboardEvent,
 } from "react";
@@ -33,7 +35,11 @@ import type { Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import type { Plugin, Pluggable } from "unified";
+import type { Root, Content } from "mdast";
 import "katex/dist/katex.min.css";
+
+type MarkdownImageComponent = NonNullable<Components["img"]>;
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -42,6 +48,18 @@ const projectMarkdownFiles = import.meta.glob("/src/assets/projects/*/content.md
     import: "default",
     eager: false,
 });
+
+function normalizeDimension(value?: string | number): string | number | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value === "number") return value;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (/^(?:\d+(?:\.\d+)?)(px|%|vh|vw|rem|em)$/.test(trimmed)) {
+        return trimmed;
+    }
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? `${numeric}px` : trimmed;
+}
 
 export default function Projects() {
     const { slug } = useParams<{ slug?: string }>();
@@ -97,6 +115,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
               description: project.pdfDescription,
           }
         : null;
+    const posterAsset = assets.poster;
 
     const [markdownContent, setMarkdownContent] = useState<string | null>(null);
     const [markdownLoading, setMarkdownLoading] = useState(false);
@@ -125,20 +144,28 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
         }
     }, [project.slug]);
 
-    const normalizeDimension = (value?: string | number): string | number | undefined => {
-        if (value === undefined) return undefined;
-        if (typeof value === "number") return value;
-        const trimmed = value.trim();
-        if (!trimmed) return undefined;
-        if (/^(?:\d+(?:\.\d+)?)(px|%|vh|vw|rem|em)$/.test(trimmed)) {
-            return trimmed;
-        }
-        const numeric = Number(trimmed);
-        return Number.isFinite(numeric) ? `${numeric}px` : trimmed;
-    };
+    const posterRemarkPlugin = useMemo<Plugin<[], Root> | null>(
+        () => (posterAsset ? createPosterInjectionPlugin({ src: posterAsset }) : null),
+        [posterAsset]
+    );
 
-    const markdownComponents = useMemo<Components>(
-        () => ({
+    const remarkPlugins = useMemo<Pluggable[]>(() => {
+        const plugins: Pluggable[] = [remarkMath];
+        if (posterRemarkPlugin) {
+            plugins.push(posterRemarkPlugin);
+        }
+        return plugins;
+    }, [posterRemarkPlugin]);
+
+    const markdownComponents = useMemo<Components>(() => {
+        const PosterRenderer: MarkdownImageComponent = ({ src, width }) => {
+            const resolved =
+                typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
+            const widthValue = normalizeDimension(width ?? "60%") ?? "60%";
+            return <PosterViewer src={resolved} width={widthValue} />;
+        };
+
+        const baseComponents: Components = {
             img({ src, alt, style, height, width, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
                 const resolved =
                     typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
@@ -213,9 +240,18 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     typeof src === "string" ? resolveProjectMedia(project.slug, src) ?? src : src;
                 return <source {...props} src={resolved} />;
             },
-        }),
-        [project.slug]
-    );
+            object({ data, type, ...props }: ObjectHTMLAttributes<HTMLObjectElement>) {
+                const resolved =
+                    typeof data === "string" ? resolveProjectMedia(project.slug, data) ?? data : data;
+                return <object {...props} data={resolved} type={type} />;
+            },
+        };
+        return {
+            ...baseComponents,
+            poster: PosterRenderer,
+            Poster: PosterRenderer,
+        } as Components;
+    }, [project.slug]);
 
     const fallbackMarkdown = useMemo(() => {
         const headerLines = [`# ${project.title}`];
@@ -249,7 +285,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
 
                 <div className="prose dark:prose-invert max-w-none bg-muted/40 rounded-lg p-6 border">
                     <ReactMarkdown
-                        remarkPlugins={[remarkMath]}
+                        remarkPlugins={remarkPlugins}
                         rehypePlugins={[rehypeRaw, rehypeKatex]}
                         skipHtml={false}
                         components={markdownComponents}
@@ -323,6 +359,62 @@ function ResourceRow({ resource }: { resource: ProjectResource }) {
     );
 }
 
+function PosterViewer({ src, width }: { src?: string; width: string | number }) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [pageWidth, setPageWidth] = useState<number | undefined>();
+
+    useEffect(() => {
+        const update = () => {
+            if (containerRef.current) {
+                setPageWidth(containerRef.current.clientWidth);
+            }
+        };
+
+        update();
+        window.addEventListener("resize", update);
+        return () => window.removeEventListener("resize", update);
+    }, []);
+
+    const openPoster = () => {
+        if (src) {
+            window.open(src, "_blank", "noopener,noreferrer");
+        }
+    };
+
+    return (
+        <div
+            ref={containerRef}
+            className="mx-auto rounded-xl border bg-background shadow-sm cursor-pointer overflow-hidden"
+            style={{ width, maxWidth: "100%" }}
+            role="button"
+            tabIndex={0}
+            onClick={openPoster}
+            onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openPoster();
+                }
+            }}
+        >
+            {pageWidth && src ? (
+                <Document file={src} className="flex">
+                    <Page
+                        pageNumber={1}
+                        width={pageWidth}
+                        renderAnnotationLayer={false}
+                        renderTextLayer={false}
+                        className="mx-auto"
+                    />
+                </Document>
+            ) : (
+                <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                    Loading poster…
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ProjectPdfViewer({
     pdf,
 }: {
@@ -372,7 +464,7 @@ function ProjectPdfViewer({
                 </a>
             </div>
             <div className="w-full h-[50vh] min-h-[320px] cursor-pointer" {...viewerAccessibilityProps}>
-                <div className="h-full rounded-md border bg-muted/30 overflow-hidden flex items-center justify-center">
+                <div className="h-full rounded-xl border bg-muted/30 overflow-hidden flex items-center justify-center">
                     {errorMessage && <PdfFallback text={errorMessage} />}
                     {!errorMessage && (
                         <div className="h-full w-full overflow-hidden">
@@ -391,7 +483,7 @@ function ProjectPdfViewer({
                                             height={pageHeight}
                                             renderAnnotationLayer={false}
                                             renderTextLayer={false}
-                                            className="flex-shrink-0 rounded-md border bg-background shadow"
+                                            className="flex-shrink-0 rounded-lg border bg-background shadow overflow-hidden"
                                         />
                                     ))}
                                 </Document>
@@ -431,4 +523,56 @@ function usePdfPageHeight() {
     }, []);
 
     return height;
+}
+
+function createPosterInjectionPlugin({ src, width }: { src: string; width?: string | number }): Plugin<[], Root> {
+    const widthAttr = normalizeDimension(width ?? "60%") ?? "60%";
+
+    return () => (tree) => {
+        const hasPoster = tree.children.some(
+            (node) =>
+                node.type === "html" &&
+                typeof (node as Content & { value?: unknown }).value === "string" &&
+                /<\s*poster\b/i.test(((node as Content & { value?: string }).value ?? ""))
+        );
+
+        if (hasPoster) {
+            return;
+        }
+
+        const posterNode: Content = {
+            type: "html",
+            value: `<poster src="${src}" width="${widthAttr}"></poster>`,
+        };
+
+        const children = tree.children;
+        let headingSeen = false;
+        let insertIndex = children.length;
+
+        for (let i = 0; i < children.length; i++) {
+            const node = children[i];
+            if (!headingSeen) {
+                if (node.type === "heading") {
+                    headingSeen = true;
+                }
+                continue;
+            }
+
+            if (node.type === "paragraph") {
+                insertIndex = i + 1;
+                break;
+            }
+
+            if (node.type !== "html" && node.type !== "thematicBreak") {
+                insertIndex = i;
+                break;
+            }
+        }
+
+        if (!headingSeen) {
+            insertIndex = 0;
+        }
+
+        children.splice(insertIndex, 0, posterNode);
+    };
 }

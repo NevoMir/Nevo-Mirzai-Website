@@ -1,6 +1,8 @@
 # Anticipating Hate Speech from Partial Input  
 2024 • *Predicting how likely a sentence is to become hate speech while it is being written.*
 
+<img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" />
+
 ---
 
 ## Overview
@@ -157,7 +159,7 @@ So GPT-2 is better when the task is **binary classification of fragments**, whic
 
 <img src="images/Training_Validation.png" alt="Validation curves" width="90%" />
 
-<img src="images/Accuracy_F1_Validation.jpg" alt="Accuracy and F1" width="90%" />
+<img src="images/Accuracy_F1_Validation.png" alt="Accuracy and F1" width="90%" />
 
 ### Phase 2 – Probability fine-tuning
 
@@ -184,6 +186,8 @@ The MSE is still quite high, which shows:
 ---
 
 ## Example trajectories
+
+<img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" />
 
 Even with these limitations, the models show reasonable behavior.
 
