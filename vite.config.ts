@@ -5,7 +5,7 @@ import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
-    base: "/simpleplain/",
+    base: "/Nevo-Mirzai-Website/",
     plugins: [react(), tailwindcss()],
     assetsInclude: ["**/*.pptx", "**/*.ppt"],
     resolve: {
