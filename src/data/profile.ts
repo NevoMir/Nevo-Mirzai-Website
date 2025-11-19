@@ -1,4 +1,5 @@
 import { FaLinkedin, FaRegIdBadge, FaGithub } from "react-icons/fa6";
+import { RESUME_URL } from "@/data/config";
 
 
 export const UserInfo = {
@@ -19,7 +20,7 @@ export const UserInfo = {
         // },
         {
             name: "Résumé",
-            url: "https://pm25.github.io/static/media/cv_v3.1ac3c71f.pdf",
+            url: RESUME_URL,
             icon: FaRegIdBadge,
         },
         {

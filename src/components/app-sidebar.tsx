@@ -1,5 +1,5 @@
 import * as React from "react";
-import { User, Wrench, Newspaper } from "lucide-react";
+import { User, Wrench } from "lucide-react";
 
 import { DarkModeToggleButton } from "@/components/mode-toggle";
 import { NavMain } from "@/components/nav-main";
@@ -25,11 +25,6 @@ const navMain = [
         title: "Projects",
         url: "/projects",
         icon: Wrench,
-    },
-    {
-        title: "Articles",
-        url: "/articles",
-        icon: Newspaper,
     },
 ];
 

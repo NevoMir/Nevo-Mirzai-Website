@@ -10,8 +10,6 @@ const Movies = loadLazy(() => import("@/pages/movies"));
 const Music = loadLazy(() => import("@/pages/music"));
 const Projects = loadLazy(() => import("@/pages/projects"));
 const Publications = loadLazy(() => import("@/pages/publications"));
-const Articles = loadLazy(() => import("@/pages/articles"));
-const ArticlePage = loadLazy(() => import("@/pages/articles/page"));
 const NotFound = loadLazy(() => import("@/pages/notfound"));
 
 export default function App() {
@@ -27,8 +25,6 @@ export default function App() {
                         <Route path="projects" element={<Projects />} />
                         <Route path="projects/:slug" element={<Projects />} />
                         <Route path="publications" element={<Publications />} />
-                        <Route path="articles" element={<Articles />} />
-                        <Route path="/articles/:slug" element={<ArticlePage />} />
                         <Route path="*" element={<NotFound />} />
                     </Route>
                 </Routes>
