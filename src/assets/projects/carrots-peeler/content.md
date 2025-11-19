@@ -29,7 +29,7 @@ In short:
 > One crank turn makes the blade move along the carrot **and** rotates the carrot slightly. After 12 turns, the carrot is fully peeled.
 
 ---
-
+<!-- 
 ## Pictures / Media
 
 ### Complete machine  
@@ -43,7 +43,7 @@ In short:
 
 ### Mounting / assembly detail  
 <img src="images/carrot-mounting-example.jpg" height="50vh" />
-
+-->
 ---
 
 ## How the mechanism works

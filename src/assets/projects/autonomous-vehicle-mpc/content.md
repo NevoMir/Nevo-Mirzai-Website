@@ -1,7 +1,7 @@
 # MPC-Based Autonomous Car Control  
 2024 • *Model Predictive Control for cruising, lane keeping, and overtaking.*
 
-<img src="Figures/Del_6_2/overtake3.pdf" alt="Nonlinear MPC overtaking maneuver" height="55vh" />
+<!-- <img src="Figures/Del_6_2/overtake3.pdf" alt="Nonlinear MPC overtaking maneuver" height="55vh" /> -->
 
 ---
 
@@ -173,8 +173,8 @@ The **terminal set** $\mathcal{X}_f = \{x \mid F_f x \le f_f\}$ is chosen so tha
 
 This guarantees **recursive feasibility** and closed-loop stability.
 
-<img src="Figures/Del_3_1/Terminal_Set_Lat31.eps" alt="Terminal invariant set for lateral subsystem" width="60%" />
-
+<!-- <img src="Figures/Del_3_1/Terminal_Set_Lat31.eps" alt="Terminal invariant set for lateral subsystem" width="60%" />
+-->
 ### Tuning and results
 
 - Longitudinal MPC:
@@ -190,9 +190,9 @@ With these weights:
 - a full **lane change in about 1.5 s**,  
 - all input and state constraints are respected.
 
-<img src="Figures/Del_3_1/Velocity.pdf" alt="Longitudinal MPC velocity tracking" width="48%" />
+<!-- <img src="Figures/Del_3_1/Velocity.pdf" alt="Longitudinal MPC velocity tracking" width="48%" />
 <img src="Figures/Del_3_1/Y_pos_Heading.pdf" alt="Lateral MPC lane change and heading" width="48%" />
-
+-->
 ---
 
 ## Offset-free tracking with a disturbance observer
@@ -216,9 +216,10 @@ Even with a good model, unmodeled effects (drag errors, slopes, etc.) can create
 
 Then I feed the estimated disturbance back into the MPC, so the controller compensates it automatically. This produces **offset-free tracking**: the final speed error is on the order of a few $10^{-3}$ km/h or less.
 
+<!-- 
 <img src="Figures/Del_4_1/Velocity.pdf" alt="Offset-free MPC velocity tracking" width="48%" />
 <img src="Figures/Del_4_1/Disturbance.pdf" alt="Estimated disturbance over time" width="48%" />
-
+-->
 ---
 
 ## Robust tube MPC for Adaptive Cruise Control (ACC)
@@ -253,11 +254,12 @@ This defines a **disturbance set** $\mathcal W$ propagated through the input mat
    $$
 4. Solve MPC on the **nominal system** using the tightened sets. The real trajectories stay within a “tube” of radius $\mathcal E$ around the nominal trajectory.
 
+<!-- 
 <img src="Figures/Del_5_1/ego_following_lead_illustration.pdf" alt="Ego car following lead car" width="70%" />
 
 <img src="Figures/Del_5_1/MinInvSet_Epsilon_5_1.eps" alt="Minimal robust invariant set E" width="48%" />
 <img src="Figures/Del_5_1/TermSet_Xf_5_1.eps" alt="Terminal set Xf under tightened constraints" width="48%" />
-
+-->
 The main safety constraint is:
 
 $$
@@ -275,10 +277,10 @@ For both constant and varying lead-car throttle:
 - throttle can be somewhat aggressive (trade-off between comfort and tight following).
 
 Examples:
-
+<!-- 
 <img src="Figures/Del_5_1/Velocity_varyingLead.pdf" alt="ACC ego speed with varying lead" width="48%" />
 <img src="Figures/Del_5_1/RelativeDistance_varyingLead.pdf" alt="ACC relative distance to lead car" width="48%" />
-
+-->
 ---
 
 ## Nonlinear MPC for lane change and overtaking
@@ -336,9 +338,10 @@ $$
 
 This keeps steering transitions smooth and removes sharp corners in the $y$-trajectory.
 
+<!-- 
 <img src="Figures/Del_6_1/Velocity.pdf" alt="NMPC velocity tracking with Ut_ref" width="48%" />
 <img src="Figures/Del_6_1/Steering.pdf" alt="NMPC steering with rate constraint" width="48%" />
-
+-->
 ---
 
 ## Nonlinear MPC for safe overtaking
@@ -387,25 +390,25 @@ For this task I use:
 This keeps the motion **smooth** but allows enough steering to complete the overtake.
 
 Comparison of steering with/without the steering-rate constraint:
-
+<!-- 
 <img src="Figures/Del_6_2/Steering_overtake_without_addition.pdf" alt="Steering during overtaking without rate constraint" width="48%" />
 <img src="Figures/Del_6_2/Steering_overtake.pdf" alt="Steering during overtaking with rate constraint" width="48%" />
-
+-->
 ### Overtaking behavior
 
 Snapshots of the maneuver:
-
+<!-- 
 <img src="Figures/Del_6_2/overtake1.pdf" alt="Overtake step 1" width="40%" />
 <img src="Figures/Del_6_2/overtake3.pdf" alt="Overtake step 3" width="40%" />
-
+-->
 Final trajectories:
-
+<!-- 
 <img src="Figures/Del_6_2/Velocity_overtake.pdf" alt="Velocity during overtaking" width="48%" />
 <img src="Figures/Del_6_2/Y_pos_overtake.pdf" alt="Lateral position during overtaking" width="48%" />
 
 <img src="Figures/Del_6_2/Throttle_overtake.pdf" alt="Throttle during overtaking" width="48%" />
 <img src="Figures/Del_6_2/Relative_distance_overtake.pdf" alt="Relative distance to lead car during overtaking" width="48%" />
-
+-->
 The ego car:
 
 - accelerates smoothly to pass the lead car,
