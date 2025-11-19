@@ -35,8 +35,8 @@ export const UserInfo = {
     ],
     // you can use HTML syntax here (e.g. <br/>, <a>, <strong>, ...)
     biography: `
-        Hi! I'm Nevò, and I'm passionate about (physical) AI, computer vision, and robotics. I'm currently in the second year of my Robotics Master at EPFL, where I work on all kind of interesting projects. With a bachelor in Mechanical Engineering, I've developed a strong interest in robotics systems, and have worked on projects like <i>[example project]</i> and <i>[another example]</i>, all centered around [what ties them together or your broader goal].
+        Hi! I’m Nevò, and I’m passionate about robotics, AI, and computer vision. I’m currently in the second year of my Master’s in Robotics at EPFL, where I’m also completing a minor in Data Science. I work on all kinds of interesting projects, from controlling swarms of drones with hand gestures to designing headlamps that follow your eyes. With a Bachelor’s degree in Mechanical Engineering, I developed a strong interest in how things move, and then discovered how powerful programming is for bringing them to life.
         <div class="my-2"></div>
-        Outside of work, I enjoy Judo and running, which keep me grounded and spark new ideas. Thanks for visiting! Feel free to <a href="nevo.mirzai@gmail.com" target="_blank" rel="noopener noreferrer">get in touch</a> if you'd like to connect.
+        Outside of engineering, I enjoy judo, calisthenics, and running, which keep me energetic and inspired. Thanks for visiting! Feel free to <a href="mailto:nevo.mirzai@gmail.com" target="_blank" rel="noopener noreferrer">get in touch</a> if you'd like to connect.
     `
 }
