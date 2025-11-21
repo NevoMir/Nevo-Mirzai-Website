@@ -136,9 +136,7 @@ function ProjectsGallery() {
                     Projects
                 </div>
 
-                <p className="text-center text-muted-foreground max-w-3xl mx-auto px-4">
-                    Browse the full collection of robotics, AI, and embedded systems projects. Tap any card to deep dive into the build log, gallery, and references.
-                </p>
+            
 
                 <div className="flex flex-col gap-3 px-2 sm:px-0">
                     <div className="flex flex-wrap items-center gap-2">
