@@ -25,7 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { ProjectPreviewCard } from "@/components/project-card";
 import { usePageTitle } from "@/hooks/use-pagetitle";
 import { ProjectsData } from "@/data/projects";
-import type { Project, ProjectResource } from "@/data/projects";
+import type { Project, ProjectResource, ProjectTag } from "@/data/projects";
 import { getProjectAssets, resolveProjectMedia } from "@/lib/project-assets";
 import { cn } from "@/lib/utils";
 import { Document, Page, pdfjs } from "react-pdf";
@@ -61,6 +61,21 @@ function normalizeDimension(value?: string | number): string | number | undefine
     return Number.isFinite(numeric) ? `${numeric}px` : trimmed;
 }
 
+const allProjectTags: ProjectTag[] = Array.from(
+    new Set(ProjectsData.flatMap((project) => project.tags))
+).sort();
+
+function parseTimelineToTimestamp(timeline?: string): number | null {
+    if (!timeline) return null;
+    const match = timeline.match(/(?:(\d{1,2})\.)?(\d{4})/);
+    if (!match) return null;
+    const month = match[1] ? Number(match[1]) : 1;
+    const year = Number(match[2]);
+    if (!Number.isFinite(year) || year < 0) return null;
+    const monthIndex = Number.isFinite(month) && month >= 1 && month <= 12 ? month - 1 : 0;
+    return new Date(year, monthIndex, 1).getTime();
+}
+
 export default function Projects() {
     const { slug } = useParams<{ slug?: string }>();
     const navigate = useNavigate();
@@ -82,6 +97,37 @@ export default function Projects() {
 }
 
 function ProjectsGallery() {
+    const [selectedTags, setSelectedTags] = useState<ProjectTag[]>([]);
+
+    const projectsWithTimestamps = useMemo(
+        () =>
+            ProjectsData.map((project) => ({
+                project,
+                timestamp: parseTimelineToTimestamp(project.timeline),
+            })),
+        []
+    );
+
+    const filteredProjects = useMemo(() => {
+        return projectsWithTimestamps
+            .filter(({ project, timestamp }) => {
+                if (selectedTags.length > 0 && !selectedTags.every((tag) => project.tags.includes(tag))) {
+                    return false;
+                }
+                return true;
+            })
+            .sort((a, b) => {
+                const aTime = a.timestamp ?? -Infinity;
+                const bTime = b.timestamp ?? -Infinity;
+                return bTime - aTime; // newest first
+            })
+            .map(({ project }) => project);
+    }, [projectsWithTimestamps, selectedTags]);
+
+    const toggleTag = (tag: ProjectTag) => {
+        setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+    };
+
     return (
         <div className="flex flex-1 flex-col items-center gap-10">
             <div className="w-full max-w-6xl space-y-6">
@@ -94,11 +140,49 @@ function ProjectsGallery() {
                     Browse the full collection of robotics, AI, and embedded systems projects. Tap any card to deep dive into the build log, gallery, and references.
                 </p>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 px-2 sm:px-0">
-                    {ProjectsData.map((project) => (
-                        <ProjectPreviewCard key={project.slug} project={project} />
-                    ))}
+                <div className="flex flex-col gap-3 px-2 sm:px-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold">Tags</span>
+                        {allProjectTags.map((tag) => {
+                            const active = selectedTags.includes(tag);
+                            return (
+                                <Button
+                                    key={tag}
+                                    type="button"
+                                    size="sm"
+                                    variant={active ? "secondary" : "outline"}
+                                    onClick={() => toggleTag(tag)}
+                                    className="h-9"
+                                >
+                                    {tag}
+                                </Button>
+                            );
+                        })}
+                        {selectedTags.length > 0 && (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setSelectedTags([])}
+                                className="h-9 text-muted-foreground"
+                            >
+                                Clear tags
+                            </Button>
+                        )}
+                    </div>
                 </div>
+
+                {filteredProjects.length === 0 ? (
+                    <div className="rounded-md border px-4 py-8 text-center text-muted-foreground">
+                        No projects match the current filters.
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 px-2 sm:px-0">
+                        {filteredProjects.map((project) => (
+                            <ProjectPreviewCard key={project.slug} project={project} />
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
     );
