@@ -1,26 +1,26 @@
 export const SkillsData = [
     {
-        category: "Robotics & Autonomy",
+        category: "Robotics",
         description:
-            "Perception, planning, and control workflows for intelligent robotic systems.",
-        skills: ["ROS 2", "Gazebo", "MoveIt", "SLAM", "Model Predictive Control"],
+            "Perception, planning, and control for intelligent robotic systems.",
+        skills: ["ROS2", "IsaacSim", "IsaacLab", "Genesis", "MPC", "SLAM", "Kalman Filters", "IK", "Swarm Robotics"],
     },
     {
-        category: "Computer Vision & Machine Learning",
+        category: "Computer Vision & Programming",
         description:
-            "Deploying deep learning models for vision tasks and real-world sensing pipelines.",
-        skills: ["PyTorch", "TensorFlow", "OpenCV", "scikit-learn", "ONNX Runtime"],
+            "Deploying computer vision algorithms and more for real-world applications.",
+        skills: ["OpenCV", "Python", "C++", "C", "MATLAB", "Git", "Docker"],
     },
     {
-        category: "Software Engineering",
+        category: "AI & Data Science",
         description:
-            "Building reliable tools and automation for research-grade and product-ready codebases.",
-        skills: ["TypeScript", "Python", "C++", "GitHub Actions", "Docker"],
+            "Developing Models and algorithms for data-driven applications.",
+        skills: ["Reinforcement Learning", "Deep Learning", "PyTorch", "scikit-learn"],
     },
     {
         category: "Hardware & Prototyping",
         description:
             "Designing, assembling, and validating mechatronic platforms and test rigs.",
-        skills: ["Rapid Prototyping", "CAD (SolidWorks)", "Embedded C", "Sensor Integration", "Lab Instrumentation"],
+        skills: ["CAD", "3D Printing", "Laser Cutting", "Sensor Integration", "Lab Instrumentation"],
     },
 ];
