@@ -110,7 +110,7 @@ function ProjectsGallery() {
 
     const filteredProjects = useMemo(() => {
         return projectsWithTimestamps
-            .filter(({ project, timestamp }) => {
+            .filter(({ project }) => {
                 if (selectedTags.length > 0 && !selectedTags.every((tag) => project.tags.includes(tag))) {
                     return false;
                 }
