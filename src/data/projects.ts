@@ -135,7 +135,7 @@ export const ProjectsData: Project[] = [
             "Benchmarked tracking error vs. compute budget for multiple solvers.",
             "Packaged the stack with visualization overlays for instructor demos.",
         ],
-        tags: ["Control", "Robotics"],
+        tags: ["Control"],
         featured: true,
     },
     {
@@ -221,7 +221,7 @@ export const ProjectsData: Project[] = [
             "Validated toolpaths on curved mandrels and vertical surfaces without scaffolding.",
             "Packaged the workflow in ROS2 so future teams can iterate on materials and nozzle designs.",
         ],
-        tags: ["Robotics", "Control", "Mechanical Design"],
+        tags: ["Robotics", "Control"],
     },
     // {
     //     slug: "robotic-arm-scaffolding",
