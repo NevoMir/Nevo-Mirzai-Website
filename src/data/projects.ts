@@ -86,10 +86,10 @@ export const ProjectsData: Project[] = [
     },
     {
         slug: "chocolate-recognition",
-        title: "Chocolate Recognition with Deep Learning",
+        title: "Chocolate Recognition",
         course: "Image Analysis",
         timeline: "06.2025",
-        summary: "Built a convolutional pipeline to count chocolates under diverse backgrounds.",
+        summary: "Used computer vision to count multiple types of chocolates under diverse backgrounds.",
         description:
             "Prepared a dataset of confectionery arrangements, applied aggressive augmentation, and trained a lightweight detector to separate overlapping sweets before counting instances.",
         highlights: [
@@ -97,7 +97,7 @@ export const ProjectsData: Project[] = [
             "Applied color constancy and histogram equalization for background invariance.",
             "Deployed the detector as a small Flask app for quick demos.",
         ],
-        tags: ["Computer Vision", "AI"],
+        tags: ["Computer Vision"],
         resources: [
             {
                 type: "report",
