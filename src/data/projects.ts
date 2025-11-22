@@ -173,7 +173,7 @@ export const ProjectsData: Project[] = [
             "Implemented collision detection and bounce classification.",
             "Automated scoreboard overlays driven by detection events.",
         ],
-        tags: ["Computer Vision", "AI"],
+        tags: ["Computer Vision"],
     },
     {
         slug: "hand-gesture-drone-swarms",
