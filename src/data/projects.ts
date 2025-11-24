@@ -25,10 +25,10 @@ export type Project = {
 export const ProjectsData: Project[] = [
     {
         slug: "ai-text-audio-hate-speech",
-        title: "AI Text-Audio Model Training for Hate Speech Prediction",
+        title: "AI Model Training for Hate Speech Prediction",
         course: "Deep Learning",
         timeline: "02.2025",
-        summary: "Fine-tuned a multimodal model that anticipates hate speech by fusing text and audio inputs.",
+        summary: "Fine-tuned a GPT-2 and BERT to anticipate hate speech in partial transcripts.",
         description:
             "This project explored early detection of hate speech by combining acoustic cues with textual transcripts. We benchmarked different fusion strategies, optimized a custom training loop, and focused on minimizing false positives in sensitive conversations.",
         highlights: [
@@ -179,7 +179,7 @@ export const ProjectsData: Project[] = [
         slug: "hand-gesture-drone-swarms",
         title: "Hand Gesture Control for Drone Swarms with VR",
         timeline: "10.2025 (Ongoing)",
-        summary: "Designing VR-based hand gesture interfaces that command coordinated drone swarms.",
+        summary: "Designed VR-based hand gesture control that commands the shape and velocity of a drone swarm.",
         description:
             "Uses Meta Quest 3 controllers and dimensionality reduction to convert gestures into swarm formations. Integrates vision feedback and ML classifiers for intent recognition.",
         highlights: [
@@ -213,7 +213,7 @@ export const ProjectsData: Project[] = [
         title: "Aerial Additive Manufacturing Prototype",
         timeline: "07.2025",
         summary:
-            "Exploring drone-based additive manufacturing workflows that deposit material in flight for large-scale structures.",
+            "Designed a drone-based additive manufacturing simulation in Genesis that deposits material in flight for large-scale structures.",
         description:
             "Built an experimental setup where a multirotor carries a lightweight extrusion head and synchronized resin feed. The work focused on toolpath planning, material curing timing, and the control logic that keeps the nozzle aligned while the platform moves.",
         highlights: [
