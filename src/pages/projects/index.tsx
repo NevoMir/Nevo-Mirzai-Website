@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ProjectPreviewCard } from "@/components/project-card";
+import { AssetPreloader } from "@/components/asset-preloader";
 import { usePageTitle } from "@/hooks/use-pagetitle";
 import { ProjectsData } from "@/data/projects";
 import type { Project, ProjectResource, ProjectTag } from "@/data/projects";
@@ -182,6 +183,7 @@ function ProjectsGallery() {
                     </div>
                 )}
             </div>
+            <AssetPreloader />
         </div>
     );
 }
