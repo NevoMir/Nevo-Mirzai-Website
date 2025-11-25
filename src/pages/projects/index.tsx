@@ -136,7 +136,7 @@ function ProjectsGallery() {
                     Projects
                 </div>
 
-            
+
 
                 <div className="flex flex-col gap-3 px-2 sm:px-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -192,10 +192,10 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
     const resources = project.resources ?? [];
     const pdfMeta = assets.pdf
         ? {
-              url: assets.pdf,
-              label: project.pdfLabel ?? "Project PDF",
-              description: project.pdfDescription,
-          }
+            url: assets.pdf,
+            label: project.pdfLabel ?? "Project PDF",
+            description: project.pdfDescription,
+        }
         : null;
     const posterAsset = assets.poster;
 
@@ -432,7 +432,7 @@ function ResourceRow({ resource }: { resource: ProjectResource }) {
                     Open
                 </a>
             ) : (
-                <span className="text-xs italic text-muted-foreground">Add a link when ready</span>
+                <span className="text-xs italic text-muted-foreground">The document is not yet finalized</span>
             )}
             {resource.description && (
                 <span className="text-xs text-muted-foreground">{resource.description}</span>

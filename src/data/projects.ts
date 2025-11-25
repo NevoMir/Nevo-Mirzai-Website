@@ -41,7 +41,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "report",
                 label: "Final report (add PDF link)",
-                description: "Attach the published report once available.",
+                description: "",
             },
         ],
         featured: true,
@@ -64,7 +64,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "report",
                 label: "Training logbook",
-                description: "Link the legged robot coursework notes.",
+                description: "",
             },
         ],
         featured: true,
@@ -102,7 +102,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "report",
                 label: "Lab report placeholder",
-                description: "Drop the PDF once exported.",
+                description: "",
             },
         ],
     },
@@ -155,7 +155,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "demo",
                 label: "Flight demo slot",
-                description: "Embed the final race video here.",
+                description: "",
             },
         ],
         featured: true,
@@ -200,7 +200,7 @@ export const ProjectsData: Project[] = [
         summary:
             "Designed and machined a fully manual carrot-peeling machine that synchronizes blade travel and carrot rotation with a single crank.",
         description:
-            "As a BA2 team project we engineered a compact peeling machine that satisfies weight, safety, and manufacturability constraints. The mechanism uses twin fork supports, a chain-driven carriage, and a torsion-spring blade that adapts to irregular vegetables.",
+            "Engineered a compact peeling machine that satisfies weight, safety, and manufacturability constraints. The mechanism uses twin fork supports, a chain-driven carriage, and a torsion-spring blade that adapts to irregular vegetables.",
         highlights: [
             "One crank simultaneously translates the blade and indexes the carrot 30° per turn.",
             "Torsion-spring blade mount maintains constant contact force without jamming.",
@@ -283,7 +283,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "report",
                 label: "Assembly notes",
-                description: "Attach BOM + wiring diagram when ready.",
+                description: "",
             },
         ],
         featured: true,
@@ -305,7 +305,7 @@ export const ProjectsData: Project[] = [
             {
                 type: "report",
                 label: "System design doc",
-                description: "Link the full design specification once finalized.",
+                description: "",
             },
         ],
     },

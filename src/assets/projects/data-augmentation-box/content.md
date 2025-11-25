@@ -1,5 +1,5 @@
 # Data Augmentation Box
-_Independent • 2024 (This semester)_
+_Independent • 2025 (This semester)_
 
 <!-- ![Cover](cover/cover.png) -->
 <!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
