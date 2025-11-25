@@ -1,6 +1,20 @@
 import { useEffect } from "react";
 import { ProjectsData } from "@/data/projects";
+import { UserInfo } from "@/data/profile";
+import { EduData } from "@/data/education";
+import { WorkData } from "@/data/work";
 import { getProjectAssets, getProjectHero } from "@/lib/project-assets";
+import { parseTimelineToTimestamp } from "@/lib/utils";
+
+// Slugs of projects featured on the About Me page
+const ABOUT_ME_PROJECT_SLUGS = [
+    "rl-quadruped-training",
+    "hand-gesture-drone-swarms",
+    "aerial-am",
+    "eye-tracker-headlamp",
+    "data-augmentation-box",
+    "autonomous-drone-racing",
+];
 
 export function AssetPreloader() {
     useEffect(() => {
@@ -10,49 +24,76 @@ export function AssetPreloader() {
         };
 
         const preloadQueue: string[] = [];
+        const addedAssets = new Set<string>();
 
-        // 1. Collect all assets to preload
-        ProjectsData.forEach((project) => {
-            // Hero assets (highest priority for list view)
-            const hero = getProjectHero(project.slug);
-            if (hero) {
-                preloadQueue.push(hero.url);
+        const addToQueue = (src?: string) => {
+            if (src && !addedAssets.has(src)) {
+                preloadQueue.push(src);
+                addedAssets.add(src);
             }
+        };
 
-            // Detail page assets
-            const assets = getProjectAssets(project.slug);
+        // --- Priority 1: About Me Page Assets ---
 
-            // Images
-            if (assets.images) {
-                assets.images.forEach((img) => preloadQueue.push(img));
-            }
+        // 1.1 Profile Image
+        addToQueue(UserInfo.profile_url);
 
-            // Video posters (we don't preload full videos, just posters if available or inferred)
-            // Note: The current getProjectAssets doesn't explicitly give us posters for every video unless they are in the poster folder.
-            // If we want to preload video content, we should be careful. 
-            // For now, let's stick to explicit posters and images.
-            if (assets.poster) {
-                preloadQueue.push(assets.poster);
-            }
+        // 1.2 Education & Work Logos
+        EduData.forEach((edu) => addToQueue(edu.logo));
+        WorkData.forEach((work) => addToQueue(work.logo));
+
+        // 1.3 Featured Projects on About Me Page
+        // We want to preload the Hero asset AND the detail assets for these specific projects first.
+        ABOUT_ME_PROJECT_SLUGS.forEach((slug) => {
+            // Hero
+            const hero = getProjectHero(slug);
+            if (hero) addToQueue(hero.url);
+
+            // Details
+            const assets = getProjectAssets(slug);
+            if (assets.images) assets.images.forEach(addToQueue);
+            if (assets.poster) addToQueue(assets.poster);
         });
 
-        // 2. Deduplicate
-        const uniqueQueue = Array.from(new Set(preloadQueue));
+        // --- Priority 2: Remaining Projects (Sorted by Recency) ---
 
-        // 3. Process queue with low priority
+        // Sort projects by timeline (newest first)
+        const sortedProjects = [...ProjectsData].sort((a, b) => {
+            const aTime = parseTimelineToTimestamp(a.timeline) ?? -Infinity;
+            const bTime = parseTimelineToTimestamp(b.timeline) ?? -Infinity;
+            return bTime - aTime;
+        });
+
+        sortedProjects.forEach((project) => {
+            // Skip if it was already processed in the About Me section (though Set handles dedupe, we can skip logic)
+            // But we need to be careful because we might have only added hero or something. 
+            // The Set ensures we don't double-load, so we can just iterate everything.
+
+            // Hero
+            const hero = getProjectHero(project.slug);
+            if (hero) addToQueue(hero.url);
+
+            // Details
+            const assets = getProjectAssets(project.slug);
+            if (assets.images) assets.images.forEach(addToQueue);
+            if (assets.poster) addToQueue(assets.poster);
+        });
+
+        // --- Queue Processing ---
+
         const processQueue = () => {
-            if (uniqueQueue.length === 0) return;
+            if (preloadQueue.length === 0) return;
 
             // Process a batch
             const batchSize = 3;
-            const batch = uniqueQueue.splice(0, batchSize);
+            const batch = preloadQueue.splice(0, batchSize);
 
             batch.forEach((src) => {
                 preloadImage(src);
             });
 
             // Schedule next batch
-            if (uniqueQueue.length > 0) {
+            if (preloadQueue.length > 0) {
                 if ("requestIdleCallback" in window) {
                     window.requestIdleCallback(() => processQueue(), { timeout: 1000 });
                 } else {
@@ -73,5 +114,5 @@ export function AssetPreloader() {
         return () => clearTimeout(timeoutId);
     }, []);
 
-    return null; // This component renders nothing
+    return null;
 }
