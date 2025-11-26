@@ -24,6 +24,29 @@ export type Project = {
 
 export const ProjectsData: Project[] = [
     {
+        slug: "soft-arm-sim-to-real",
+        title: "Soft Robotic Arm: Sim-to-Real Digital Twin & RL",
+        course: "Robotics Research",
+        timeline: "12.2025",
+        summary: "Created a Digital Twin of a soft robotic arm in Isaac Sim to train and deploy RL policies.",
+        description:
+            "Bridged the sim-to-real gap for a tendon-driven soft arm by modeling flexible joints in Isaac Sim. Implemented a Constant Curvature controller for unified control and trained RL policies for autonomous manipulation.",
+        highlights: [
+            "Modeled soft arm physics in Isaac Sim using approximated revolute joints and tuned damping.",
+            "Developed a Constant Curvature controller to map simulation commands to real tendon actuation.",
+            "Established a Sim-to-Real pipeline for deploying RL policies trained in NVIDIA Isaac Sim.",
+        ],
+        tags: ["Robotics", "AI", "Control"],
+        resources: [
+            {
+                type: "demo",
+                label: "Sim-to-Real Demo",
+                description: "Video comparison of simulation and real robot.",
+            },
+        ],
+        featured: true,
+    },
+    {
         slug: "ai-text-audio-hate-speech",
         title: "AI Model Training for Hate Speech Prediction",
         course: "Deep Learning",
@@ -211,7 +234,7 @@ export const ProjectsData: Project[] = [
     {
         slug: "aerial-am",
         title: "Aerial Additive Manufacturing Prototype",
-        timeline: "07.2025",
+        timeline: "09.2025",
         summary:
             "Designed a drone-based additive manufacturing simulation in Genesis that deposits material in flight for large-scale structures.",
         description:
@@ -255,7 +278,7 @@ export const ProjectsData: Project[] = [
     {
         slug: "clickbait-data-analysis",
         title: "Clickbait Data Analysis",
-        timeline: "09.2025 (This semester)",
+        timeline: "07.2025 (This semester)",
         summary: "Investigated whether clickbait intent can be inferred from YouTube metadata.",
         description:
             "Used the Youniverse dataset to engineer behavioral features, trained ML classifiers, and evaluated interpretability for content teams.",
@@ -291,7 +314,7 @@ export const ProjectsData: Project[] = [
     {
         slug: "eye-tracker-headlamp",
         title: "Eye Tracker Headlamp",
-        timeline: "12.2025 (This semester)",
+        timeline: "08.2025",
         summary: "Built a gaze-aware headlamp that aligns light direction with the wearer’s line of sight.",
         description:
             "Combined an optical camera, IR camera, and dual servos driven by a Raspberry Pi 5 to keep the headlamp beam parallel to the detected gaze vector.",

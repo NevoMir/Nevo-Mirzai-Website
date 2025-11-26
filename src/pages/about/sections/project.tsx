@@ -9,9 +9,9 @@ export default function Project() {
     const orderedSlugs = [
         "rl-quadruped-training",
         "hand-gesture-drone-swarms",
+        "soft-arm-sim-to-real",
         "aerial-am",
         "eye-tracker-headlamp",
-        "data-augmentation-box",
         "autonomous-drone-racing",
     ];
 

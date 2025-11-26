@@ -10,9 +10,9 @@ import { parseTimelineToTimestamp } from "@/lib/utils";
 const ABOUT_ME_PROJECT_SLUGS = [
     "rl-quadruped-training",
     "hand-gesture-drone-swarms",
+    "soft-arm-sim-to-real",
     "aerial-am",
     "eye-tracker-headlamp",
-    "data-augmentation-box",
     "autonomous-drone-racing",
 ];
 
