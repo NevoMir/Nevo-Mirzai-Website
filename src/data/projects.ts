@@ -5,7 +5,7 @@ export type ProjectResource = {
     description?: string;
 };
 
-export type ProjectTag = "AI" | "Robotics" | "Computer Vision" | "Control" | "Mechanical Design";
+export type ProjectTag = "AI" | "Robotics" | "Computer Vision" | "Control" | "Mechanical Design" | "Simulation";
 
 export type Project = {
     slug: string;
@@ -36,7 +36,7 @@ export const ProjectsData: Project[] = [
             "Developed a Constant Curvature controller to map simulation commands to real tendon actuation.",
             "Established a Sim-to-Real pipeline for deploying RL policies trained in NVIDIA Isaac Sim.",
         ],
-        tags: ["Robotics", "AI", "Control"],
+        tags: ["Simulation", "Robotics", "AI", "Control"],
         resources: [
             {
                 type: "demo",
@@ -82,7 +82,7 @@ export const ProjectsData: Project[] = [
             "Experimented with PPO and SAC, selecting hyperparameters for stability vs. speed.",
             "Crafted terrain-aware reward functions that favored energy-efficient steps.",
         ],
-        tags: ["AI", "Robotics", "Control"],
+        tags: ["Simulation", "AI", "Robotics", "Control"],
         resources: [
             {
                 type: "report",
@@ -158,7 +158,7 @@ export const ProjectsData: Project[] = [
             "Benchmarked tracking error vs. compute budget for multiple solvers.",
             "Packaged the stack with visualization overlays for instructor demos.",
         ],
-        tags: ["Control"],
+        tags: ["Control", "Simulation"],
         featured: true,
     },
     {
@@ -173,7 +173,7 @@ export const ProjectsData: Project[] = [
             "Incorporated obstacle avoidance modules for pop-up barriers.",
             "Optimized PID gains for tight corners and altitude stability.",
         ],
-        tags: ["Robotics", "Computer Vision", "Control"],
+        tags: ["Robotics", "Computer Vision", "Control", "Simulation"],
         resources: [
             {
                 type: "demo",
@@ -210,7 +210,7 @@ export const ProjectsData: Project[] = [
             "Explores PCA/U-MAP embeddings for low-latency gesture encoding.",
             "Fuses camera perception to validate formation execution.",
         ],
-        tags: ["Robotics", "Computer Vision"],
+        tags: ["Robotics", "Computer Vision", "Simulation"],
         pdfLabel: "Final report",
         pdfDescription: "Aerial Swarm Hand Control write-up (PDF).",
         featured: true,
@@ -244,7 +244,7 @@ export const ProjectsData: Project[] = [
             "Validated toolpaths on curved mandrels and vertical surfaces without scaffolding.",
             "Packaged the workflow in ROS2 so future teams can iterate on materials and nozzle designs.",
         ],
-        tags: ["Robotics", "Control"],
+        tags: ["Robotics", "Control", "Simulation"],
     },
     // {
     //     slug: "robotic-arm-scaffolding",
@@ -368,7 +368,7 @@ export const ProjectsData: Project[] = [
             "Lap-aware planner and controller that handles randomized gate placements.",
             "Sim-to-real workflow in ROS2 with best-of-three trials deciding hardware grades.",
         ],
-        tags: ["Robotics", "Computer Vision", "Control"],
+        tags: ["Robotics", "Computer Vision", "Control", "Simulation"],
     },
 ];
 

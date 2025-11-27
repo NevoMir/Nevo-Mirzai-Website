@@ -18,6 +18,7 @@ const TAG_COLORS: Record<ProjectTag, string> = {
     Control: "bg-slate-50 dark:bg-slate-900 text-green-800 dark:text-green-200 border-green-400 dark:border-green-500",
     "Mechanical Design":
         "bg-slate-50 dark:bg-slate-900 text-orange-800 dark:text-orange-200 border-orange-400 dark:border-orange-500",
+    Simulation: "bg-slate-50 dark:bg-slate-900 text-purple-800 dark:text-purple-200 border-purple-400 dark:border-purple-500",
 };
 
 function formatTimelineLabel(timeline?: string | null): string | null {
@@ -81,7 +82,7 @@ export function ProjectPreviewCard({ project, className }: ProjectPreviewCardPro
 
                     {project.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-auto">
-                            {project.tags.slice(0, 3).map((tag) => (
+                            {project.tags.map((tag) => (
                                 <span
                                     key={tag}
                                     className={cn(
