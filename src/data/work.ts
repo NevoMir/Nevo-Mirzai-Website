@@ -6,7 +6,7 @@ export const WorkData = [
   {
     title: "Mechanical Engineer",
     company: "EPFL Rocket Team",
-    years: "2022 - 2023",
+    years: "2021 - 2024",
     // Use dark mode logo by default; light mode logo can be handled in the component
     logo: rocketTeamLightLogo,
     // alternative
@@ -21,7 +21,7 @@ export const WorkData = [
   {
     title: "Teaching Assistant",
     company: "École polytechnique fédérale de Lausanne",
-    years: "2022 - 2025",
+    years: "2022 - 2024",
     logo: epflLogo,
   },
 ];
