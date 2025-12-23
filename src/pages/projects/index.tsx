@@ -12,6 +12,7 @@ import type {
     SourceHTMLAttributes,
     ImgHTMLAttributes,
     VideoHTMLAttributes,
+    IframeHTMLAttributes,
     ObjectHTMLAttributes,
     CSSProperties,
     KeyboardEvent,
@@ -24,10 +25,12 @@ import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ProjectPreviewCard } from "@/components/project-card";
 import { AssetPreloader } from "@/components/asset-preloader";
+import { AutoReloadIframe } from "@/components/auto-reload-iframe";
+import { VideoEmbed } from "@/components/video-embed";
 import { usePageTitle } from "@/hooks/use-pagetitle";
 import { ProjectsData } from "@/data/projects";
 import type { Project, ProjectResource, ProjectTag } from "@/data/projects";
-import { getProjectAssets, resolveProjectMedia } from "@/lib/project-assets";
+import { getEmbedPoster, getProjectAssets, resolveProjectMedia } from "@/lib/project-assets";
 import { cn } from "@/lib/utils";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -60,6 +63,24 @@ function normalizeDimension(value?: string | number): string | number | undefine
     }
     const numeric = Number(trimmed);
     return Number.isFinite(numeric) ? `${numeric}px` : trimmed;
+}
+
+function normalizeInlineStyle(style?: CSSProperties | string): CSSProperties | undefined {
+    if (!style) return undefined;
+    if (typeof style !== "string") return style;
+
+    const output: CSSProperties = {};
+    style.split(";").forEach((rule) => {
+        const [rawKey, ...rawValueParts] = rule.split(":");
+        if (!rawKey || rawValueParts.length === 0) return;
+        const key = rawKey.trim();
+        const value = rawValueParts.join(":").trim();
+        if (!key || !value) return;
+        const camelKey = key.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
+        output[camelKey as keyof CSSProperties] = value;
+    });
+
+    return output;
 }
 
 const allProjectTags: ProjectTag[] = Array.from(
@@ -249,6 +270,51 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
             return <PosterViewer src={resolved} width={widthValue} />;
         };
 
+        const IframeRenderer = ({ src, style, className, ...props }: IframeHTMLAttributes<HTMLIFrameElement>) => {
+            const normalizedStyle = normalizeInlineStyle(style);
+            const mergedStyle: CSSProperties = {
+                display: "block",
+                marginInline: normalizedStyle?.marginInline ?? "auto",
+                border: normalizedStyle?.border ?? "0",
+                ...normalizedStyle,
+            };
+            const dataPoster = (props as Record<string, unknown>)["data-poster"];
+            const resolvedDataPoster =
+                typeof dataPoster === "string"
+                    ? resolveProjectMedia(project.slug, dataPoster) ?? dataPoster
+                    : undefined;
+            const poster =
+                resolvedDataPoster ?? (typeof src === "string" ? getEmbedPoster(src) : undefined);
+
+            if (poster && typeof src === "string") {
+                return (
+                    <VideoEmbed
+                        {...props}
+                        src={src}
+                        poster={poster}
+                        wrapperStyle={mergedStyle}
+                        wrapperClassName={cn("rounded-lg", className)}
+                        mediaClassName="pointer-events-none"
+                        tabIndex={-1}
+                        allow={props.allow ?? "autoplay; fullscreen; picture-in-picture"}
+                        referrerPolicy={props.referrerPolicy ?? "strict-origin-when-cross-origin"}
+                    />
+                );
+            }
+
+            return (
+                <AutoReloadIframe
+                    {...props}
+                    src={src}
+                    className={cn("w-full rounded-lg bg-black", className)}
+                    style={mergedStyle}
+                    tabIndex={props.tabIndex}
+                    allow={props.allow ?? "autoplay; fullscreen; picture-in-picture"}
+                    referrerPolicy={props.referrerPolicy ?? "strict-origin-when-cross-origin"}
+                />
+            );
+        };
+
         const baseComponents: Components = {
             img({ src, alt, style, height, width, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
                 const resolved =
@@ -329,6 +395,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                     typeof data === "string" ? resolveProjectMedia(project.slug, data) ?? data : data;
                 return <object {...props} data={resolved} type={type} />;
             },
+            iframe: IframeRenderer,
         };
         return {
             ...baseComponents,

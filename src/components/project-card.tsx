@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import { Card } from "@/components/ui/card";
+import { VideoEmbed } from "@/components/video-embed";
 import { cn } from "@/lib/utils";
 import type { Project, ProjectTag } from "@/data/projects";
 import { getProjectHero } from "@/lib/project-assets";
@@ -44,6 +45,15 @@ export function ProjectPreviewCard({ project, className }: ProjectPreviewCardPro
                                 loop
                                 muted
                                 playsInline
+                            />
+                        ) : hero.type === "youtube" || hero.type === "vimeo" ? (
+                            <VideoEmbed
+                                src={hero.embedUrl ?? hero.url}
+                                poster={hero.thumbnailUrl}
+                                title={`${project.title} preview`}
+                                mediaClassName="pointer-events-none transition-transform duration-300 group-hover:scale-105"
+                                allow="autoplay; encrypted-media; picture-in-picture"
+                                tabIndex={-1}
                             />
                         ) : (
                             <img

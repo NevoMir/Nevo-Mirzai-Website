@@ -1,3 +1,6 @@
+import { ProjectsData } from "@/data/projects";
+import type { ProjectHero } from "@/data/projects";
+
 type AssetModule = { default: string };
 
 const imageModules = import.meta.glob<AssetModule>("@/assets/projects/*/images/*", {
@@ -31,12 +34,159 @@ const imageLookupBySlug: Record<string, Record<string, string>> = {};
 const videoLookupBySlug: Record<string, Record<string, string>> = {};
 const coverLookupBySlug: Record<string, Record<string, string>> = {};
 const posterLookupBySlug: Record<string, Record<string, string>> = {};
-const heroBySlug: Record<string, { url: string; type: "image" | "video" }> = {};
+const heroBySlug: Record<string, ProjectHero> = {};
 
 function inferAssetType(path: string): "image" | "video" {
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
     return videoExtensions.includes(ext) ? "video" : "image";
 }
+
+function getYouTubeId(input: string): string | null {
+    if (!input) return null;
+    if (/^[a-zA-Z0-9_-]{11}$/.test(input)) {
+        return input;
+    }
+
+    try {
+        const url = new URL(input);
+        if (url.hostname === "youtu.be") {
+            return url.pathname.split("/").filter(Boolean)[0] ?? null;
+        }
+        if (url.hostname.endsWith("youtube.com")) {
+            if (url.pathname.startsWith("/watch")) {
+                return url.searchParams.get("v");
+            }
+            if (url.pathname.startsWith("/embed/") || url.pathname.startsWith("/shorts/")) {
+                return url.pathname.split("/").filter(Boolean)[1] ?? null;
+            }
+        }
+    } catch {
+        // Fall through to regex parsing.
+    }
+
+    const match = input.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})(?:\b|&|$)/);
+    return match ? match[1] : null;
+}
+
+function buildYouTubeEmbedUrl(videoId: string) {
+    const params = new URLSearchParams({
+        autoplay: "1",
+        mute: "1",
+        loop: "1",
+        playlist: videoId,
+        controls: "0",
+        modestbranding: "1",
+        rel: "0",
+        playsinline: "1",
+        vq: "hd1080",
+        showinfo: "0",
+        iv_load_policy: "3",
+        fs: "0",
+        disablekb: "1",
+    });
+    return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+}
+
+function buildYouTubeThumbnailUrl(videoId: string) {
+    return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+}
+
+function getVimeoId(input: string): string | null {
+    if (!input) return null;
+    if (/^\d+$/.test(input)) {
+        return input;
+    }
+
+    try {
+        const url = new URL(input);
+        if (url.hostname.endsWith("vimeo.com")) {
+            const match = url.pathname.match(/(?:video\/)?(\d+)/);
+            if (match?.[1]) {
+                return match[1];
+            }
+        }
+    } catch {
+        // Fall through to regex parsing.
+    }
+
+    const match = input.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    return match ? match[1] : null;
+}
+
+function buildVimeoEmbedUrl(videoId: string) {
+    const params = new URLSearchParams({
+        autoplay: "1",
+        muted: "1",
+        loop: "1",
+        autopause: "0",
+        background: "1",
+        controls: "0",
+        title: "0",
+        byline: "0",
+        portrait: "0",
+        badge: "0",
+        dnt: "1",
+        playsinline: "1",
+        api: "1",
+    });
+    return `https://player.vimeo.com/video/${videoId}?${params.toString()}`;
+}
+
+export function getEmbedPoster(src: string): string | undefined {
+    const youtubeId = getYouTubeId(src);
+    if (youtubeId) {
+        return buildYouTubeThumbnailUrl(youtubeId);
+    }
+
+    return undefined;
+}
+
+export function getEmbedProvider(src: string): "youtube" | "vimeo" | null {
+    if (getYouTubeId(src)) {
+        return "youtube";
+    }
+    if (getVimeoId(src)) {
+        return "vimeo";
+    }
+    return null;
+}
+
+function resolveHeroOverride(hero: ProjectHero): ProjectHero {
+    if (hero.type !== "youtube" && hero.type !== "vimeo") {
+        return hero;
+    }
+
+    if (hero.type === "youtube") {
+        const videoId = getYouTubeId(hero.url);
+        if (!videoId) {
+            return hero;
+        }
+
+        return {
+            ...hero,
+            embedUrl: hero.embedUrl ?? buildYouTubeEmbedUrl(videoId),
+            thumbnailUrl: hero.thumbnailUrl ?? buildYouTubeThumbnailUrl(videoId),
+        };
+    }
+
+    const videoId = getVimeoId(hero.url);
+    if (!videoId) {
+        return hero;
+    }
+
+    return {
+        ...hero,
+        embedUrl: hero.embedUrl ?? buildVimeoEmbedUrl(videoId),
+    };
+}
+
+const heroOverrides: Record<string, ProjectHero> = {};
+
+ProjectsData.forEach((project) => {
+    if (project.hero) {
+        heroOverrides[project.slug] = resolveHeroOverride(project.hero);
+    }
+});
 
 for (const [path, module] of Object.entries(imageModules)) {
     const match = path.match(/projects\/([^/]+)\/images\//);
@@ -120,6 +270,9 @@ export function getProjectAssets(slug: string) {
 }
 
 export function getProjectHero(slug: string) {
+    if (heroOverrides[slug]) {
+        return heroOverrides[slug];
+    }
     if (heroBySlug[slug]) {
         return heroBySlug[slug];
     }

@@ -47,7 +47,13 @@ export function AssetPreloader() {
         ABOUT_ME_PROJECT_SLUGS.forEach((slug) => {
             // Hero
             const hero = getProjectHero(slug);
-            if (hero) addToQueue(hero.url);
+            if (hero) {
+                if (hero.type === "youtube" || hero.type === "vimeo") {
+                    addToQueue(hero.thumbnailUrl);
+                } else {
+                    addToQueue(hero.url);
+                }
+            }
 
             // Details
             const assets = getProjectAssets(slug);
@@ -71,7 +77,13 @@ export function AssetPreloader() {
 
             // Hero
             const hero = getProjectHero(project.slug);
-            if (hero) addToQueue(hero.url);
+            if (hero) {
+                if (hero.type === "youtube" || hero.type === "vimeo") {
+                    addToQueue(hero.thumbnailUrl);
+                } else {
+                    addToQueue(hero.url);
+                }
+            }
 
             // Details
             const assets = getProjectAssets(project.slug);
