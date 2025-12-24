@@ -120,6 +120,7 @@ export function VideoEmbed({
                 onLoad={handleLoad}
                 onReload={() => setLoaded(!poster)}
                 ref={iframeRef}
+                loading={props.loading ?? "eager"}
                 className={cn(
                     "absolute inset-0 h-full w-full border-0 transition-opacity duration-500",
                     mediaClassName,

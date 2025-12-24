@@ -269,7 +269,7 @@ export function getProjectAssets(slug: string) {
     };
 }
 
-export function getProjectHero(slug: string) {
+export function getProjectHero(slug: string): ProjectHero | undefined {
     if (heroOverrides[slug]) {
         return heroOverrides[slug];
     }

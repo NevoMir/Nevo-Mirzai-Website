@@ -5,7 +5,6 @@
 <iframe
     src="https://player.vimeo.com/video/1148904156?autoplay=1&muted=1&loop=1&autopause=0&background=1&controls=0&title=0&byline=0&portrait=0&badge=0&dnt=1&playsinline=1"
     title="Dog Robot Cover"
-    loading="lazy"
     tabindex="-1"
     allow="autoplay; fullscreen; picture-in-picture"
     referrerpolicy="strict-origin-when-cross-origin"

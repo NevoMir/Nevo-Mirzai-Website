@@ -69,7 +69,7 @@ function normalizeInlineStyle(style?: CSSProperties | string): CSSProperties | u
     if (!style) return undefined;
     if (typeof style !== "string") return style;
 
-    const output: CSSProperties = {};
+    const output: Record<string, string> = {};
     style.split(";").forEach((rule) => {
         const [rawKey, ...rawValueParts] = rule.split(":");
         if (!rawKey || rawValueParts.length === 0) return;
@@ -77,10 +77,10 @@ function normalizeInlineStyle(style?: CSSProperties | string): CSSProperties | u
         const value = rawValueParts.join(":").trim();
         if (!key || !value) return;
         const camelKey = key.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
-        output[camelKey as keyof CSSProperties] = value;
+        output[camelKey] = value;
     });
 
-    return output;
+    return output as CSSProperties;
 }
 
 const allProjectTags: ProjectTag[] = Array.from(
