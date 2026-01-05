@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { ProjectsData } from "@/data/projects";
 import { UserInfo } from "@/data/profile";
 import { EduData } from "@/data/education";
@@ -16,7 +16,32 @@ const ABOUT_ME_PROJECT_SLUGS = [
     "autonomous-drone-racing",
 ];
 
+const VIMEO_WARMUP_LIMIT = 3;
+
 export function AssetPreloader() {
+    const sortedProjects = useMemo(() => {
+        return [...ProjectsData].sort((a, b) => {
+            const aTime = parseTimelineToTimestamp(a.timeline) ?? -Infinity;
+            const bTime = parseTimelineToTimestamp(b.timeline) ?? -Infinity;
+            return bTime - aTime;
+        });
+    }, []);
+
+    const vimeoWarmupUrls = useMemo(() => {
+        const urls: string[] = [];
+        const addHero = (slug: string) => {
+            const hero = getProjectHero(slug);
+            if (hero?.type === "vimeo" && hero.embedUrl) {
+                urls.push(hero.embedUrl);
+            }
+        };
+
+        ABOUT_ME_PROJECT_SLUGS.forEach(addHero);
+        sortedProjects.forEach((project) => addHero(project.slug));
+
+        return Array.from(new Set(urls)).slice(0, VIMEO_WARMUP_LIMIT);
+    }, [sortedProjects]);
+
     useEffect(() => {
         const preloadImage = (src: string) => {
             const img = new Image();
@@ -62,13 +87,6 @@ export function AssetPreloader() {
         });
 
         // --- Priority 2: Remaining Projects (Sorted by Recency) ---
-
-        // Sort projects by timeline (newest first)
-        const sortedProjects = [...ProjectsData].sort((a, b) => {
-            const aTime = parseTimelineToTimestamp(a.timeline) ?? -Infinity;
-            const bTime = parseTimelineToTimestamp(b.timeline) ?? -Infinity;
-            return bTime - aTime;
-        });
 
         sortedProjects.forEach((project) => {
             // Skip if it was already processed in the About Me section (though Set handles dedupe, we can skip logic)
@@ -124,7 +142,38 @@ export function AssetPreloader() {
         }, 2000);
 
         return () => clearTimeout(timeoutId);
-    }, []);
+    }, [sortedProjects]);
 
-    return null;
+    if (vimeoWarmupUrls.length === 0) {
+        return null;
+    }
+
+    return (
+        <div
+            aria-hidden="true"
+            className="pointer-events-none"
+            style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
+        >
+            {vimeoWarmupUrls.map((url) => (
+                <iframe
+                    key={url}
+                    src={url}
+                    title="Vimeo warmup"
+                    loading="eager"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    style={{
+                        width: 1,
+                        height: 1,
+                        border: 0,
+                        opacity: 0,
+                        position: "absolute",
+                        inset: 0,
+                    }}
+                />
+            ))}
+        </div>
+    );
 }

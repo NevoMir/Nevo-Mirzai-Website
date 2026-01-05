@@ -11,6 +11,118 @@
     <link rel="dns-prefetch" href="//player.vimeo.com" />
     <link rel="dns-prefetch" href="//i.vimeocdn.com" />
     <link rel="dns-prefetch" href="//f.vimeocdn.com" />
+    <style>
+      .app-loader {
+        --loader-bg: #0b1117;
+        --loader-ink: #e8f0ff;
+        --loader-muted: #9aa7b8;
+        --loader-accent: #35d4c6;
+        --loader-accent-2: #f2c14e;
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        opacity: 0;
+        background:
+          radial-gradient(900px circle at 20% 20%, rgba(53, 212, 198, 0.15), transparent 60%),
+          radial-gradient(700px circle at 80% 10%, rgba(242, 193, 78, 0.12), transparent 55%),
+          #0b1117;
+        animation: app-loader-fade-in 0.35s ease 0.2s forwards;
+      }
+
+      .app-loader__panel {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        padding: 28px 32px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(10, 15, 22, 0.88);
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+      }
+
+      .app-loader__title {
+        font-family: "Roboto Condensed", "Arial Narrow", sans-serif;
+        font-size: clamp(16px, 2.3vw, 20px);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--loader-ink);
+      }
+
+      .app-loader__bar {
+        position: relative;
+        width: min(70vw, 360px);
+        height: 16px;
+        border-radius: 999px;
+        background: #0f1722;
+        border: 1px solid rgba(53, 212, 198, 0.35);
+        overflow: hidden;
+      }
+
+      .app-loader__bar::before {
+        content: "";
+        position: absolute;
+        inset: -2px;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(53, 212, 198, 0.75) 35%,
+          rgba(242, 193, 78, 0.9) 55%,
+          transparent 85%
+        );
+        transform: translateX(-100%);
+        animation: app-loader-sweep 1.6s ease-in-out infinite;
+      }
+
+      .app-loader__bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0.18) 0 10px,
+          rgba(255, 255, 255, 0.04) 10px 20px
+        );
+        opacity: 0.35;
+        mix-blend-mode: screen;
+      }
+
+      .app-loader.is-hidden {
+        opacity: 0;
+        pointer-events: none;
+        animation: none;
+        transition: opacity 0.35s ease;
+      }
+
+      @keyframes app-loader-fade-in {
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes app-loader-sweep {
+        0% {
+          transform: translateX(-120%);
+        }
+        55% {
+          transform: translateX(20%);
+        }
+        100% {
+          transform: translateX(140%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-loader,
+        .app-loader__bar::before {
+          animation: none;
+          opacity: 1;
+        }
+      }
+    </style>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-K4L29KFR9M"></script>
     <script>
@@ -22,6 +134,12 @@
     </script>
   </head>
   <body>
+    <div id="app-loader" class="app-loader" role="status" aria-live="polite" aria-busy="true">
+      <div class="app-loader__panel">
+        <div class="app-loader__title">Loading Autonomous Machines...</div>
+        <div class="app-loader__bar" aria-hidden="true"></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
