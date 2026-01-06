@@ -20,6 +20,7 @@ const TAG_COLORS: Record<ProjectTag, string> = {
     "Mechanical Design":
         "bg-slate-50 dark:bg-slate-900 text-orange-800 dark:text-orange-200 border-orange-400 dark:border-orange-500",
     Simulation: "bg-slate-50 dark:bg-slate-900 text-purple-800 dark:text-purple-200 border-purple-400 dark:border-purple-500",
+    Embedded: "bg-slate-50 dark:bg-slate-900 text-yellow-800 dark:text-yellow-200 border-yellow-400 dark:border-yellow-500",
 };
 
 function formatTimelineLabel(timeline?: string | null): string | null {

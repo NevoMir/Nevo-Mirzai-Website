@@ -35,7 +35,7 @@ export const ProjectsData: Project[] = [
         slug: "lerobot",
         title: "Imitation Learning with Robotic Arm",
         timeline: "12.2025",
-        summary: "The project involves mechanical assembly, servo control, embedded programming, and software integration, with an emphasis on understanding how hardware and software interact in practical robotics systems.",
+        summary: "Assembled the robotic arm, implemented servo control, embedded programming, and developed and trained an imitation learning pipeline.",
         description:
             "This is a real-time teleoperation setup using a leader–follower robotic arm system. The leader arm captures joint motions, which are mapped and mirrored live onto the follower arm through a custom control stack on Ubuntu. This setup allows intuitive, low-latency human control and forms the foundation for learning from demonstration, where the robot can later learn to perform tasks autonomously based on these human-guided trajectories.\\n\\nAfter a large number of episodes are recorded (consisting of time-synchronised camera frames and robot actions), the data is consolidated into a single dataset. Every episode is stored as an ordered sequence of observations, including image frames, actuator commands, and relevant state information. This structured collection captures both successful executions and natural variation, providing a reliable foundation for training robotic control models.",
         highlights: [
@@ -319,7 +319,7 @@ export const ProjectsData: Project[] = [
     },
     {
         slug: "data-augmentation-box",
-        title: "Data Augmentation Box",
+        title: "Data Creation Box",
         timeline: "09.2025 (This semester)",
         summary: "Automated the photo capture process for object-recognition datasets using a custom rig.",
         description:
@@ -329,7 +329,7 @@ export const ProjectsData: Project[] = [
             "Implemented scripts that capture multi-angle sequences per object.",
             "Automated training/evaluation cycles for each new SKU.",
         ],
-        tags: ["Mechanical Design", "Computer Vision", "AI"],
+        tags: ["Mechanical Design", "Computer Vision", "AI", "Embedded"],
         resources: [
             {
                 type: "report",
