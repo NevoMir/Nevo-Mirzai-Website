@@ -460,7 +460,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
 
                 {!pdfMeta && resources.length === 0 && (
                     <Card className="p-4 text-sm text-muted-foreground">
-                        Add videos, demos, or PDF reports when they are ready.
+
                     </Card>
                 )}
 

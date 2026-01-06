@@ -7,9 +7,9 @@ import { ProjectPreviewCard } from "@/components/project-card";
 
 export default function Project() {
     const orderedSlugs = [
+        "lerobot",
         "rl-quadruped-training",
         "hand-gesture-drone-swarms",
-        "soft-arm-sim-to-real",
         "aerial-am",
         "eye-tracker-headlamp",
         "autonomous-drone-racing",

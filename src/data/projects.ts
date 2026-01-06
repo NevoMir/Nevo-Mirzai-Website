@@ -5,7 +5,7 @@ export type ProjectResource = {
     description?: string;
 };
 
-export type ProjectTag = "AI" | "Robotics" | "Computer Vision" | "Control" | "Mechanical Design" | "Simulation";
+export type ProjectTag = "AI" | "Robotics" | "Computer Vision" | "Control" | "Mechanical Design" | "Simulation" | "Embedded";
 
 export type ProjectHero = {
     type: "image" | "video" | "youtube" | "vimeo";
@@ -32,28 +32,44 @@ export type Project = {
 
 export const ProjectsData: Project[] = [
     {
-        slug: "soft-arm-sim-to-real",
-        title: "Soft Robotic Arm: Sim-to-Real Digital Twin & RL",
-        course: "Robotics Research",
+        slug: "lerobot",
+        title: "Imitation Learning with Robotic Arm",
         timeline: "12.2025",
-        summary: "Created a Digital Twin of a soft robotic arm in Isaac Sim to train and deploy RL policies.",
+        summary: "The project involves mechanical assembly, servo control, embedded programming, and software integration, with an emphasis on understanding how hardware and software interact in practical robotics systems.",
         description:
-            "Bridged the sim-to-real gap for a tendon-driven soft arm by modeling flexible joints in Isaac Sim. Implemented a Constant Curvature controller for unified control and trained RL policies for autonomous manipulation.",
+            "This is a real-time teleoperation setup using a leader–follower robotic arm system. The leader arm captures joint motions, which are mapped and mirrored live onto the follower arm through a custom control stack on Ubuntu. This setup allows intuitive, low-latency human control and forms the foundation for learning from demonstration, where the robot can later learn to perform tasks autonomously based on these human-guided trajectories.\\n\\nAfter a large number of episodes are recorded (consisting of time-synchronised camera frames and robot actions), the data is consolidated into a single dataset. Every episode is stored as an ordered sequence of observations, including image frames, actuator commands, and relevant state information. This structured collection captures both successful executions and natural variation, providing a reliable foundation for training robotic control models.",
         highlights: [
-            "Modeled soft arm physics in Isaac Sim using approximated revolute joints and tuned damping.",
-            "Developed a Constant Curvature controller to map simulation commands to real tendon actuation.",
-            "Established a Sim-to-Real pipeline for deploying RL policies trained in NVIDIA Isaac Sim.",
+            "Real-time teleoperation setup using a leader–follower robotic arm system.",
+            "Leader arm captures joint motions mirrored onto follower arm via Ubuntu control stack.",
+            "Consolidated dataset from time-synchronized camera frames and robot actions.",
+            "Foundation for learning from demonstration and autonomous task performance.",
         ],
-        tags: ["Simulation", "Robotics", "AI", "Control"],
-        resources: [
-            {
-                type: "demo",
-                label: "Sim-to-Real Demo",
-                description: "Video comparison of simulation and real robot.",
-            },
-        ],
+        tags: ["Robotics", "Control", "Embedded", "AI"],
         featured: true,
     },
+    // {
+    //     slug: "soft-arm-sim-to-real",
+    //     title: "Soft Robotic Arm: Sim-to-Real Digital Twin & RL",
+    //     course: "Robotics Research",
+    //     timeline: "12.2025",
+    //     summary: "Created a Digital Twin of a soft robotic arm in Isaac Sim to train and deploy RL policies.",
+    //     description:
+    //         "Bridged the sim-to-real gap for a tendon-driven soft arm by modeling flexible joints in Isaac Sim. Implemented a Constant Curvature controller for unified control and trained RL policies for autonomous manipulation.",
+    //     highlights: [
+    //         "Modeled soft arm physics in Isaac Sim using approximated revolute joints and tuned damping.",
+    //         "Developed a Constant Curvature controller to map simulation commands to real tendon actuation.",
+    //         "Established a Sim-to-Real pipeline for deploying RL policies trained in NVIDIA Isaac Sim.",
+    //     ],
+    //     tags: ["Simulation", "Robotics", "AI", "Control"],
+    //     resources: [
+    //         {
+    //             type: "demo",
+    //             label: "Sim-to-Real Demo",
+    //             description: "Video comparison of simulation and real robot.",
+    //         },
+    //     ],
+    //     featured: true,
+    // },
     {
         slug: "ai-text-audio-hate-speech",
         title: "AI Model Training for Hate Speech Prediction",
