@@ -2,7 +2,7 @@
 _Independent • 2025 (This semester)_
 
 <!-- ![Cover](cover/cover.png) -->
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 Constructed a rotating platform with controllable lighting and backgrounds, scripted camera capture, and paired it with YOLOv12 fine-tuning routines.

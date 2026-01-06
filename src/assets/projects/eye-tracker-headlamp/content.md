@@ -1,7 +1,7 @@
 # Eye Tracking Headlamp (ETHL)
 2024 • *A motorized headlamp that tracks your eyes to provide hands-free, targeted illumination exactly where you look.*
 
-<!--<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>-->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ---
 

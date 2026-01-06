@@ -1,6 +1,8 @@
 # MPC-Based Autonomous Car Control  
 2024 • *Model Predictive Control for cruising, lane keeping, and overtaking.*
 
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
+
 <!-- <img src="Figures/Del_6_2/overtake3.pdf" alt="Nonlinear MPC overtaking maneuver" height="55vh" /> -->
 
 ---

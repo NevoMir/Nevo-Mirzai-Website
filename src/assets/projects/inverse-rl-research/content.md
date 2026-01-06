@@ -2,6 +2,10 @@
 
 2025 — Brief project summary: understanding when we can reliably recover an agent’s goals from how it behaves.
 
+<img src="cover/cover.png" width="100%" />
+
+---
+
 
 
 Inverse Reinforcement Learning (IRL) is about guessing what an agent “wants” (its reward function) by watching how it behaves in an environment. Instead of telling the agent what to optimize, we observe an expert (for example, a human driver or a skilled robot) and try to infer the hidden objective that makes their behavior look optimal.

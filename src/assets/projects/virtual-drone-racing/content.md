@@ -2,7 +2,7 @@
 _EPFL Crazyflie Practical • 2025_
 
 <!-- ![Cover](cover/cover.png) -->
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 This course project teaches students how to program a Crazyflie to race through randomly placed gates as fast as possible. The work is split into an individual **simulation task** (Webots) and a group **hardware transfer** task on the real drones.

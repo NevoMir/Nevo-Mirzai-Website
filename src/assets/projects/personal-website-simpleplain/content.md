@@ -2,7 +2,7 @@
 _Independent • 2025_
 
 <!-- ![Cover](cover/cover.png) -->
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 Cloned the SimplePlain template and transformed it into a tailored personal site with data-driven sections, immersive project detail routes, and horizontal media rails for reports, videos, and galleries.

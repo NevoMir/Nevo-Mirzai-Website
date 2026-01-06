@@ -1,6 +1,8 @@
 # Self-stabilising Quadcopter  
 Nevò Mirzai Hamadani  
 
+<img src="cover/cover.png" width="100%" />
+
 ---
 
 ## 1. Project goal

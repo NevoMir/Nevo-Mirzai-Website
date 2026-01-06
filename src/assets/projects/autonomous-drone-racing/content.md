@@ -2,7 +2,7 @@
 _Independent • 2022_
 
 <!-- ![Cover](cover/cover.png) -->
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 Simulated laps with synthetic gates, applied computer vision for gate detection, and transferred motion primitives to hardware while accounting for aerodynamic drift.

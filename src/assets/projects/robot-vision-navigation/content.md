@@ -2,7 +2,7 @@
 _Mobile Robotics • 2023_
 
 <!-- ![Cover](cover/cover.png) -->
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 Combined OpenCV perception with particle filtering and A* planning to follow colored waypoints. Tuned closed-loop behavior for reliable on-table navigation.

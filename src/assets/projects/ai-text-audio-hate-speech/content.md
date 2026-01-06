@@ -1,7 +1,9 @@
 # Anticipating Hate Speech from Partial Input  
 2024 • *Predicting how likely a sentence is to become hate speech while it is being written.*
 
-<img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" />
+<img src="cover/cover.png" width="100%" />
+
+<!-- <img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" /> -->
 
 ---
 

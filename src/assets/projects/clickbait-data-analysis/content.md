@@ -1,8 +1,8 @@
 # Clickbait Data Analysis Project
 _2025 (Ongoing) • d_
 
-<img src="cover/cover.png" width="80vh" />
-<!-- <video src="cover/cover.mp4" controls autoplay muted loop playsinline></video> -->
+<!-- <img src="cover/cover.png" width="80vh" /> -->
+<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
 Used the Youniverse dataset to engineer behavioral features, trained ML classifiers, and evaluated interpretability for content teams.
