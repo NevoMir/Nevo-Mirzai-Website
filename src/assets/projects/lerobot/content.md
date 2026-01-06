@@ -1,6 +1,6 @@
 # LeRobot
 
-2025 • *The project involves mechanical assembly, servo control, embedded programming, and software integration, with an emphasis on understanding how hardware and software interact in practical robotics systems.*
+2025 • *I assembled a robotic arm and built a teleoperation system to teach it tasks through imitation learning.*
 
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
@@ -8,23 +8,39 @@
 
 ## Overview
 
-**LeRobot** is a real-time teleoperation setup using a leader–follower robotic arm system.
-The leader arm captures joint motions, which are mapped and mirrored live onto the follower arm through a custom control stack on Ubuntu.
+## What I Built
 
-This setup allows **intuitive, low-latency human control** and forms the foundation for **learning from demonstration**, where the robot can later learn to perform tasks autonomously based on these human-guided trajectories.
+I wanted to teach a robot to perform tasks just by showing it how.
+To do this, I set up a **teleoperation system** with two robotic arms: a "leader" that I move by hand, and a "follower" that mirrors every movement in real-time.
+
+I wrote a custom control stack on Ubuntu that maps the joint angles from the first arm to the second one with very low latency. This makes controlling the robot feel natural—almost like an extension of my own arm.
+
+A lot of the complexity lived in the low-level details: **power sequencing, serial communication, USB permissions, and precise calibration**. Mastering these elements was crucial to ensuring reliable, real-time control.
 
 ---
 
-## Automation & Dataset Creation
+## From Teleoperation to Autonomy
 
-After a large number of episodes are recorded (consisting of time-synchronised camera frames and robot actions), the data is consolidated into a single dataset.
-Every episode is stored as an ordered sequence of observations, including:
+The goal of this setup is **Imitation Learning**.
+By recording the camera feed and the motor commands while I perform a task (like picking up an object), I create a dataset of "expert demonstrations."
 
-- Image frames
-- Actuator commands
-- Relevant state information
+Each recording captures:
+- What the robot sees (video frames)
+- How it moves (motor commands)
+- Its internal state
 
-This structured collection captures both successful executions and natural variation, providing a reliable foundation for training robotic control models.
+I can then use this data to train a neural network.
+
+### Technical Approach: ACT Policy
+
+To solve this, I utilized an **Action Chunking with Transformers (ACT)** policy. This architecture is effective because it mitigates the compounding errors typical in simple behavior cloning by predicting *sequences* of actions rather than single time-steps.
+
+**The Pipeline:**
+
+1.  **Vision Encoder:** A **ResNet-18** backbone extracts features from the **wrist-mounted camera**, which provides an egocentric view crucial for precision manipulation.
+2.  **State Encoding:** These visual features are concatenated with the robot's current proprioception (joint angles).
+3.  **Policy Network:** A **Transformer (CVAE-based)** processes this multimodal input to predict a "chunk" of future actions ($k$ steps). Because it uses a Variational Autoencoder, it learns a latent space of valid behaviors, allowing it to handle variability in human demonstrations.
+4.  **Temporal Ensembling:** During inference, overlapping action chunks are weighted and averaged. This yields extremely smooth trajectory generation, avoiding the jitter common in frame-by-frame policies.
 
 ---
 ## Videos
