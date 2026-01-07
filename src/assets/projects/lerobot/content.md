@@ -1,4 +1,4 @@
-# LeRobot
+# LeRobot Imitation Learning
 
 2025 • *I assembled a robotic arm and built a teleoperation system to teach it tasks through imitation learning.*
 
