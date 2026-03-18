@@ -5,7 +5,7 @@ import { RESUME_URL } from "@/data/config";
 export const UserInfo = {
     name: "Nevò Mirzai Hamadani",
     profile_url: "https://github.com/NevoMir.png",
-    headline: "Student @ EPFL",
+    headline: "Intern @ EAI\u00A0\u00A0|\u00A0\u00A0Student @ EPFL",
     email: "nevo.mirzai@gmail.com",
     links: [
         {
@@ -36,8 +36,8 @@ export const UserInfo = {
     ],
     // you can use HTML syntax here (e.g. <br/>, <a>, <strong>, ...)
     biography: `
-        Hi! I’m Nevò, and I’m passionate about Robotics, Simulation, Computer Vision and Neural Networks. I’m currently in the second year of my Master’s in Robotics at EPFL, where I’m also completing a minor in Data Science. I work on all kinds of interesting projects, from controlling swarms of drones with hand gestures to designing headlamps that follow your eyes. With a Bachelor’s degree in Mechanical Engineering, I developed a strong interest in how things move, and then discovered how powerful programming is for bringing them to life.
+        Hi! I’m Nevò, and I’m passionate about Robotics, Simulation, Neural Networks and Computer Vision. Currently I'm interning at Embodied AI, a startup focused on the development of humanoid robots, where my work centers on the teleoperation stack. I am pursuing a Master's in Robotics at EPFL with a minor in Data Science, where I have served as Teaching Assistant across multiple courses and led the simulation team in the EPFL Rocket Team, focusing on vertical landing simulation. I worked on all kinds of interesting projects, from controlling swarms of drones with hand gestures to designing headlamps that track your eyes. With a BSc in Mechanical Engineering, I developed a strong interest in how things move, and then discovered how powerful programming is for bringing them to life.
         <div class="my-2"></div>
-        Outside of engineering, I enjoy judo, calisthenics, and running, which keep me energetic and inspired. Thanks for visiting! Feel free to <a href="mailto:nevo.mirzai@gmail.com" target="_blank" rel="noopener noreferrer">get in touch</a> if you'd like to connect.
+        Outside of engineering, I enjoy judo, calisthenics, and running, which keep me energetic and ready to tackle new problems. Thanks for visiting! Feel free to <a href="mailto:nevo.mirzai@gmail.com" target="_blank" rel="noopener noreferrer">get in touch</a> if you'd like to connect.
     `
 }
