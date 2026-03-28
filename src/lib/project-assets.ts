@@ -1,13 +1,10 @@
 import { ProjectsData } from "@/data/projects";
 import type { ProjectHero } from "@/data/projects";
+import { buildR2Lookups } from "@/config/r2-videos";
 
 type AssetModule = { default: string };
 
 const imageModules = import.meta.glob<AssetModule>("@/assets/projects/*/images/*", {
-    eager: true,
-});
-
-const videoModules = import.meta.glob<AssetModule>("@/assets/projects/*/videos/*", {
     eager: true,
 });
 
@@ -19,22 +16,35 @@ const posterModules = import.meta.glob<AssetModule>("@/assets/projects/*/poster/
     eager: true,
 });
 
-const coverModules = import.meta.glob<AssetModule>("@/assets/projects/*/cover/*", {
+// Videos and covers are now served from Cloudflare R2.
+// Local fallbacks via Vite glob are kept for dev convenience —
+// if a video exists locally it will be used when R2_PUBLIC_URL is not set.
+const localVideoModules = import.meta.glob<AssetModule>("@/assets/projects/*/videos/*", {
+    eager: true,
+});
+
+const localCoverModules = import.meta.glob<AssetModule>("@/assets/projects/*/cover/*", {
     eager: true,
 });
 
 const videoExtensions = ["mp4", "webm", "ogg", "mov", "m4v"];
 
 const imagesBySlug: Record<string, string[]> = {};
-const videosBySlug: Record<string, string[]> = {};
 const pdfBySlug: Record<string, string> = {};
 const posterBySlug: Record<string, string> = {};
 const pdfLookupBySlug: Record<string, Record<string, string>> = {};
 const imageLookupBySlug: Record<string, Record<string, string>> = {};
-const videoLookupBySlug: Record<string, Record<string, string>> = {};
-const coverLookupBySlug: Record<string, Record<string, string>> = {};
 const posterLookupBySlug: Record<string, Record<string, string>> = {};
 const heroBySlug: Record<string, ProjectHero> = {};
+
+// --- R2 lookups (external video hosting) ---
+const r2 = buildR2Lookups();
+
+// --- Local video/cover fallback lookups ---
+const localVideosBySlug: Record<string, string[]> = {};
+const localVideoLookupBySlug: Record<string, Record<string, string>> = {};
+const localCoverLookupBySlug: Record<string, Record<string, string>> = {};
+const localCoverBySlug: Record<string, string> = {};
 
 function inferAssetType(path: string): "image" | "video" {
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -188,6 +198,8 @@ ProjectsData.forEach((project) => {
     }
 });
 
+// --- Populate image lookups (unchanged — still Vite-bundled) ---
+
 for (const [path, module] of Object.entries(imageModules)) {
     const match = path.match(/projects\/([^/]+)\/images\//);
     if (!match) continue;
@@ -201,18 +213,67 @@ for (const [path, module] of Object.entries(imageModules)) {
     }
 }
 
-for (const [path, module] of Object.entries(videoModules)) {
+// --- Populate local video fallback lookups ---
+
+for (const [path, module] of Object.entries(localVideoModules)) {
     const match = path.match(/projects\/([^/]+)\/videos\//);
     if (!match) continue;
     const slug = match[1];
     const fileName = path.split("/").pop() ?? "";
-    videosBySlug[slug] ??= [];
-    videoLookupBySlug[slug] ??= {};
-    videosBySlug[slug].push(module.default);
+    localVideosBySlug[slug] ??= [];
+    localVideoLookupBySlug[slug] ??= {};
+    localVideosBySlug[slug].push(module.default);
     if (fileName) {
-        videoLookupBySlug[slug][fileName] = module.default;
+        localVideoLookupBySlug[slug][fileName] = module.default;
     }
 }
+
+// --- Populate local cover fallback lookups ---
+
+for (const [path, module] of Object.entries(localCoverModules)) {
+    const match = path.match(/projects\/([^/]+)\/cover\//);
+    if (!match) continue;
+    const slug = match[1];
+    const fileName = path.split("/").pop() ?? "";
+    localCoverLookupBySlug[slug] ??= {};
+    if (fileName) {
+        localCoverLookupBySlug[slug][fileName] = module.default;
+    }
+    if (!localCoverBySlug[slug]) {
+        localCoverBySlug[slug] = module.default;
+    }
+}
+
+// --- Populate merged hero lookup (R2 takes priority, local fallback) ---
+
+// For local covers, we need to track their original paths so we can infer the type.
+const localCoverPathBySlug: Record<string, string> = {};
+
+for (const [path] of Object.entries(localCoverModules)) {
+    const match = path.match(/projects\/([^/]+)\/cover\//);
+    if (!match) continue;
+    const slug = match[1];
+    if (!localCoverPathBySlug[slug]) {
+        localCoverPathBySlug[slug] = path;
+    }
+}
+
+const allSlugs = new Set([
+    ...Object.keys(r2.coverBySlug),
+    ...Object.keys(localCoverBySlug),
+]);
+
+for (const slug of allSlugs) {
+    if (r2.coverBySlug[slug]) {
+        // R2 covers are always video (we only upload videos to R2)
+        heroBySlug[slug] = { url: r2.coverBySlug[slug], type: "video" };
+    } else if (localCoverBySlug[slug]) {
+        const coverPath = localCoverPathBySlug[slug] ?? "";
+        heroBySlug[slug] = { url: localCoverBySlug[slug], type: inferAssetType(coverPath) };
+    }
+}
+
+// --- PDF lookups ---
 
 for (const [path, module] of Object.entries(pdfModules)) {
     const match = path.match(/projects\/([^/]+)\/pdf\//);
@@ -223,11 +284,12 @@ for (const [path, module] of Object.entries(pdfModules)) {
     if (fileName) {
         pdfLookupBySlug[slug][fileName] = module.default;
     }
-    // If multiple PDFs exist, keep the first one discovered alphabetically.
     if (!pdfBySlug[slug]) {
         pdfBySlug[slug] = module.default;
     }
 }
+
+// --- Poster lookups ---
 
 for (const [path, module] of Object.entries(posterModules)) {
     const match = path.match(/projects\/([^/]+)\/poster\//);
@@ -243,27 +305,26 @@ for (const [path, module] of Object.entries(posterModules)) {
     }
 }
 
-for (const [path, module] of Object.entries(coverModules)) {
-    const match = path.match(/projects\/([^/]+)\/cover\//);
-    if (!match) continue;
-    const slug = match[1];
-    coverLookupBySlug[slug] ??= {};
-    const fileName = path.split("/").pop() ?? "";
-    if (fileName) {
-        coverLookupBySlug[slug][fileName] = module.default;
-    }
-    if (!heroBySlug[slug]) {
-        heroBySlug[slug] = { url: module.default, type: inferAssetType(path) };
-    }
+Object.values(imagesBySlug).forEach((images) => images.sort());
+
+// --- Merged accessors (R2 first, local fallback) ---
+
+function getVideosBySlug(slug: string): string[] {
+    return r2.videosBySlug[slug] ?? localVideosBySlug[slug] ?? [];
 }
 
-Object.values(imagesBySlug).forEach((images) => images.sort());
-Object.values(videosBySlug).forEach((videos) => videos.sort());
+function getVideoLookup(slug: string): Record<string, string> {
+    return { ...localVideoLookupBySlug[slug], ...r2.videoLookupBySlug[slug] };
+}
+
+function getCoverLookup(slug: string): Record<string, string> {
+    return { ...localCoverLookupBySlug[slug], ...r2.coverLookupBySlug[slug] };
+}
 
 export function getProjectAssets(slug: string) {
     return {
         images: imagesBySlug[slug] ?? [],
-        videos: videosBySlug[slug] ?? [],
+        videos: getVideosBySlug(slug),
         pdf: pdfBySlug[slug],
         poster: posterBySlug[slug],
     };
@@ -276,8 +337,9 @@ export function getProjectHero(slug: string): ProjectHero | undefined {
     if (heroBySlug[slug]) {
         return heroBySlug[slug];
     }
-    if ((videosBySlug[slug] ?? []).length > 0) {
-        return { url: videosBySlug[slug][0], type: "video" };
+    const videos = getVideosBySlug(slug);
+    if (videos.length > 0) {
+        return { url: videos[0], type: "video" };
     }
     if ((imagesBySlug[slug] ?? []).length > 0) {
         return { url: imagesBySlug[slug][0], type: "image" };
@@ -296,12 +358,12 @@ export function resolveProjectMedia(slug: string, relativePath?: string) {
 
     if (normalized.startsWith("videos/")) {
         const key = normalized.slice("videos/".length);
-        return videoLookupBySlug[slug]?.[key];
+        return getVideoLookup(slug)[key];
     }
 
     if (normalized.startsWith("cover/")) {
         const key = normalized.slice("cover/".length);
-        return coverLookupBySlug[slug]?.[key];
+        return getCoverLookup(slug)[key];
     }
 
     if (normalized.startsWith("pdf/")) {

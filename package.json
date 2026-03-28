@@ -9,8 +9,7 @@
     "prebuild": "npm-run-all --parallel generate:articles fetch:repos extract:publications",
     "lint": "eslint .",
     "preview": "vite preview",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist",
+    "deploy:preview": "npx wrangler pages dev dist",
     "fetch:repos": "node scripts/fetchRepos.js",
     "generate:articles": "node scripts/generateArticlesJson.js",
     "extract:publications": "node scripts/extractFeaturedPublications"
