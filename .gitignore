@@ -7,9 +7,14 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-#video
-.mov
-.mp4
+# Video files — hosted on Cloudflare R2, not in the repo
+# To keep videos locally for dev, they are loaded as fallback when VITE_R2_PUBLIC_URL is not set.
+# Run `git rm -r --cached` after adding these patterns to remove already-tracked videos.
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.ogg
 
 node_modules
 dist
