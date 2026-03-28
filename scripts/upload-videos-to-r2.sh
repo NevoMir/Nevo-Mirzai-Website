@@ -23,7 +23,11 @@ set -euo pipefail
 BUCKET="${1:?Usage: $0 <r2-bucket-name>}"
 ASSETS_DIR="src/assets/projects"
 
-if ! command -v wrangler &> /dev/null; then
+if command -v wrangler &> /dev/null; then
+    WRANGLER="wrangler"
+elif npx wrangler --version &> /dev/null; then
+    WRANGLER="npx wrangler"
+else
     echo "Error: wrangler CLI not found. Install it with: npm install -g wrangler"
     exit 1
 fi
@@ -40,7 +44,7 @@ find "$ASSETS_DIR" -type f -regextype posix-extended -regex ".*\\.($VIDEO_EXTENS
     relative="${file#$ASSETS_DIR/}"
 
     echo "Uploading: $relative"
-    wrangler r2 object put "$BUCKET/$relative" --file "$file" --content-type "video/mp4"
+    $WRANGLER r2 object put "$BUCKET/$relative" --file "$file" --content-type "video/mp4"
     count=$((count + 1))
 done
 
