@@ -39,7 +39,7 @@ echo "---"
 
 count=0
 
-find "$ASSETS_DIR" -type f -regextype posix-extended -regex ".*\\.($VIDEO_EXTENSIONS)$" | sort | while read -r file; do
+find "$ASSETS_DIR" -type f \( -name "*.mp4" -o -name "*.webm" -o -name "*.mov" -o -name "*.m4v" -o -name "*.ogg" \) | sort | while read -r file; do
     # Extract path relative to assets dir: e.g. "aerial-am/cover/cover.mp4"
     relative="${file#$ASSETS_DIR/}"
 
