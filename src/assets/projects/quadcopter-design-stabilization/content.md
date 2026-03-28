@@ -1,7 +1,7 @@
 # Self-stabilising Quadcopter  
 Nevò Mirzai Hamadani  
 
-<img src="cover/cover.png" width="100%" />
+<img src="cover/cover.webp" width="100%" />
 
 ---
 
@@ -25,7 +25,7 @@ To reduce risk, the work is split into two stages:
 
 ### 2.1 Single-axis prototype
 <!-- 
-![Prototype, front view](Foto/Prototipo_dal_lato.jpeg)
+![Prototype, front view](Foto/Prototipo_dal_lato.webp)
 -->
 - Wooden beam pivoted at the centre on two supports.
 - One brushless motor at each end of the beam, attached with double-sided tape and string.
@@ -37,7 +37,7 @@ This setup lets you test self-stabilisation around one axis only, in a safe and 
 
 ### 2.2 Final quadcopter (F450)
 <!-- 
-![Final quadcopter, fully assembled](Foto/Definitivo_completo.jpeg)
+![Final quadcopter, fully assembled](Foto/Definitivo_completo.webp)
 -->
 - Flame Wheel **F450** frame with:
   - 4 arms with brushless motors and propellers;
@@ -54,7 +54,7 @@ This setup lets you test self-stabilisation around one axis only, in a safe and 
 
 ### 3.1 Classical schematic
 <!-- 
-![Classical electrical schematic](Foto/Schema_elettrico_visivo_finale_tipo_2_buono.jpg)
+![Classical electrical schematic](Foto/Schema_elettrico_visivo_finale_tipo_2_buono.webp)
 -->
 Main connections:
 
@@ -65,7 +65,7 @@ Main connections:
 
 ### 3.2 Visual schematic
 <!-- 
-![Visual electrical schematic](Foto/Schema_elettrico_visivo_finale_bb22.jpg)
+![Visual electrical schematic](Foto/Schema_elettrico_visivo_finale_bb22.webp)
 -->
 This “visual” version shows how Arduino, breadboard, ESCs, sensor and battery are actually wired, making practical assembly easier.
 
@@ -75,7 +75,7 @@ This “visual” version shows how Arduino, breadboard, ESCs, sensor and batter
 
 ### 4.1 Capacitive accelerometer principle
 <!-- 
-![Capacitive accelerometer principle](Foto/accelerometro_capacitivo1.jpg)
+![Capacitive accelerometer principle](Foto/accelerometro_capacitivo1.webp)
 -->
 - A tiny “comb-shaped” mass is suspended and moves slightly when accelerated.
 - It forms variable **capacitors** with fixed combs on the chip.
@@ -86,7 +86,7 @@ This capacitive MEMS technology is widely used in phones, cars, drones, etc.
 
 ### 4.2 MPU-6050 IMU
 <!-- 
-![MPU-6050](Foto/MPU_6050.jpg)
+![MPU-6050](Foto/MPU_6050.webp)
 -->
 The **MPU-6050** combines:
 
@@ -115,7 +115,7 @@ u(t) = K_P e(t) + K_I \int e(t)\,dt + K_D \frac{de(t)}{dt}
 
 Overall PID structure:
 <!-- 
-![General PID flow](Foto/PID_flusso.png)
+![General PID flow](Foto/PID_flusso.webp)
 -->
 In code:
 

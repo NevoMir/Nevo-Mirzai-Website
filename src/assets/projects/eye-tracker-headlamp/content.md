@@ -60,7 +60,7 @@ Standard headlamps are static. If you move your eyes without moving your head, y
 
 [cite_start]If a mechanic looks just **20° off-center**, they lose **half** their illumination[cite: 15]. [cite_start]The ETHL solves this by mechanically steering the 100% intensity region to the user's gaze vector[cite: 16].
 <!-- 
-<img src="images/light-intensity-graph.jpg" alt="Light intensity distribution graph" height="50vh" />
+<img src="images/light-intensity-graph.webp" alt="Light intensity distribution graph" height="50vh" />
 -->
 ---
 

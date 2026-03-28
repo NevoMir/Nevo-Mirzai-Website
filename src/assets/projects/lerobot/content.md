@@ -52,10 +52,10 @@ To solve this, I utilized an **Action Chunking with Transformers (ACT)** policy.
 ## Gallery
 
 <div style="display: flex; flex-wrap: wrap; gap: 1rem; justify-content: center;">
-  <img src="images/lerobot_2.jpg" alt="LeRobot 2" width="45%" />
-  <img src="images/lerobot_3.jpg" alt="LeRobot 3" width="45%" />
-  <img src="images/lerobot_4.jpg" alt="LeRobot 4" width="45%" />
-  <img src="images/lerobot_5.jpg" alt="LeRobot 5" width="45%" />
+  <img src="images/lerobot_2.webp" alt="LeRobot 2" width="45%" />
+  <img src="images/lerobot_3.webp" alt="LeRobot 3" width="45%" />
+  <img src="images/lerobot_4.webp" alt="LeRobot 4" width="45%" />
+  <img src="images/lerobot_5.webp" alt="LeRobot 5" width="45%" />
 </div>
 
 

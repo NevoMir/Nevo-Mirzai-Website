@@ -1,7 +1,7 @@
 # Virtual Drone Racing
 _EPFL Crazyflie Practical • 2025_
 
-<!-- ![Cover](cover/cover.png) -->
+<!-- ![Cover](cover/cover.webp) -->
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
@@ -32,4 +32,4 @@ This course project teaches students how to program a Crazyflie to race through 
 ## Media (to add)
 - Simulation demo (`sim_2025.gif`)
 - Real drone run footage
-- System diagrams (`arc_simulation.png`, `sim2real.png`)
+- System diagrams (`arc_simulation.webp`, `sim2real.webp`)
