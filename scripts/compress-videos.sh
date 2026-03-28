@@ -44,14 +44,14 @@ compress_video() {
 
     echo "Compressing: $relative (${original_mb}MB)"
 
-    ffmpeg -i "$input" \
+    ffmpeg -nostdin -i "$input" \
         -c:v libx264 \
         -crf 28 \
         -preset slow \
         -vf "scale=-2:'min($max_height,ih)'" \
         -maxrate "$max_bitrate" \
         -bufsize "$((${max_bitrate%k} * 2))k" \
-        -c:a aac -b:a 128k \
+        -an \
         -movflags +faststart \
         -y -loglevel warning \
         "$output"
@@ -62,6 +62,7 @@ compress_video() {
 
     # Only replace if compressed is smaller
     if [ "$new_size" -lt "$original_size" ]; then
+        mkdir -p "$(dirname "$BACKUP_DIR/$relative")"
         cp "$input" "$BACKUP_DIR/$relative"
         mv "$output" "$input"
         echo "  -> ${original_mb}MB -> ${new_mb}MB (saved $((original_mb - new_mb))MB)"
