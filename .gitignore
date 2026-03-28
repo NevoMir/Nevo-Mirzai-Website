@@ -9,12 +9,16 @@ lerna-debug.log*
 
 # Video files — hosted on Cloudflare R2, not in the repo
 # To keep videos locally for dev, they are loaded as fallback when VITE_R2_PUBLIC_URL is not set.
-# Run `git rm -r --cached` after adding these patterns to remove already-tracked videos.
 *.mp4
 *.webm
 *.mov
 *.m4v
 *.ogg
+
+# Original images — converted to WebP, keep originals locally only
+src/assets/projects/**/*.png
+src/assets/projects/**/*.jpg
+src/assets/projects/**/*.jpeg
 
 node_modules
 dist

@@ -51,14 +51,14 @@ Here are the placeholders and order I will use:
 
 ### Qualitative evaluation (single images)
 
-<img src="images/Table.png" width="100vh" />
-<img src="images/4_images.png" width="100vh" />
+<img src="images/Table.webp" width="100vh" />
+<img src="images/4_images.webp" width="100vh" />
 
 ### Side-by-side comparison
 
 <div style="display:flex; gap:1rem; flex-wrap:wrap;">
-  <img src="images/eval1.png" width="55vh" />
-  <img src="images/eval2.png" width="55vh" />
+  <img src="images/eval1.webp" width="55vh" />
+  <img src="images/eval2.webp" width="55vh" />
 </div>
 
 ---

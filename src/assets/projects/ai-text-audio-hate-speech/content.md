@@ -1,9 +1,9 @@
 # Anticipating Hate Speech from Partial Input  
 2024 • *Predicting how likely a sentence is to become hate speech while it is being written.*
 
-<img src="cover/cover.png" width="100%" />
+<img src="cover/cover.webp" width="100%" />
 
-<!-- <img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" /> -->
+<!-- <img src="images/two_sentences.webp" alt="Accuracy and F1" width="60%" /> -->
 
 ---
 
@@ -37,7 +37,7 @@ Sometimes we add a **biLSTM layer** on top of them, and we design **custom loss 
 
 ## Model architecture
 
-<img src="images/FlowChart.png" alt="Model architecture" width="80%" />
+<img src="images/FlowChart.webp" alt="Model architecture" width="80%" />
 
 The pipeline is:
 
@@ -136,7 +136,7 @@ $$
 w = 0.8 \, w_\text{label} + 0.2 \, w_\text{len}
 $$
 
-<img src="images/Label_Distribution.png" alt="Label distribution" width="50%" />
+<img src="images/Label_Distribution.webp" alt="Label distribution" width="50%" />
 
 ---
 
@@ -159,9 +159,9 @@ Results:
 
 So GPT-2 is better when the task is **binary classification of fragments**, which matches its “next-token prediction” nature.
 
-<img src="images/Training_Validation.png" alt="Validation curves" width="90%" />
+<img src="images/Training_Validation.webp" alt="Validation curves" width="90%" />
 
-<img src="images/Accuracy_F1_Validation.png" alt="Accuracy and F1" width="90%" />
+<img src="images/Accuracy_F1_Validation.webp" alt="Accuracy and F1" width="90%" />
 
 ### Phase 2 – Probability fine-tuning
 
@@ -177,7 +177,7 @@ Here the ranking changes:
 - Adding a biLSTM on top of BERT **hurts performance**, probably because it over-focuses on the last tokens.  
 - GPT-2 models perform worse than BERT for this regression task.
 
-<img src="images/mse.png" alt="Testing MSE" width="60%" />
+<img src="images/mse.webp" alt="Testing MSE" width="60%" />
 
 The MSE is still quite high, which shows:
 
@@ -189,7 +189,7 @@ The MSE is still quite high, which shows:
 
 ## Example trajectories
 
-<img src="images/two_sentences.jpeg" alt="Accuracy and F1" width="60%" />
+<img src="images/two_sentences.webp" alt="Accuracy and F1" width="60%" />
 
 Even with these limitations, the models show reasonable behavior.
 

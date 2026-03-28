@@ -1,7 +1,7 @@
 # Hand Gesture Control for Drone Swarms with VR  
 2024 • *Move your hands in VR and watch a drone swarm change its shape and fly in a 3D formation.*
 
-<!-- <img src="cover/cover.png" alt="Gesture interface" height="50vh" /> -->
+<!-- <img src="cover/cover.webp" alt="Gesture interface" height="50vh" /> -->
 
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
@@ -63,7 +63,7 @@ The VR headset gives me 3D positions of the **left** and **right** hands (palms 
 - The **thickness** (the other two axes) depends on how much the fingers and hands are opened or closed.  
 - The **orientation** of the ellipsoid depends on how you rotate your hands in space.
 
-<img src="images/Ellipsoid_definition.jpg" alt="3D ellipsoid definition" height="50vh" />
+<img src="images/Ellipsoid_definition.webp" alt="3D ellipsoid definition" height="50vh" />
 
 So:
 

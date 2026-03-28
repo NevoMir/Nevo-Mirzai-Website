@@ -33,16 +33,16 @@ In short:
 ## Pictures / Media
 
 ### Complete machine  
-<img src="images/carrot-machine-full.jpg" height="50vh" />
+<img src="images/carrot-machine-full.webp" height="50vh" />
 
 ### Basic idea (stylized sketch)  
-<img src="images/carrot-machine-idea.jpg" height="50vh" />
+<img src="images/carrot-machine-idea.webp" height="50vh" />
 
 ### Example of 2D machining drawing  
-<img src="images/carrot-drawing-2d.jpg" height="50vh" />
+<img src="images/carrot-drawing-2d.webp" height="50vh" />
 
 ### Mounting / assembly detail  
-<img src="images/carrot-mounting-example.jpg" height="50vh" />
+<img src="images/carrot-mounting-example.webp" height="50vh" />
 -->
 ---
 

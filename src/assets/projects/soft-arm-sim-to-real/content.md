@@ -1,13 +1,13 @@
 # Soft Robotic Arm: Sim-to-Real Digital Twin & RL
 2026 • *Bridging the gap between a real soft robotic arm and Isaac Sim for Reinforcement Learning.*
 
-<!-- <img src="cover/cover.png" alt="Soft Arm Simulation" height="50vh" /> -->
+<!-- <img src="cover/cover.webp" alt="Soft Arm Simulation" height="50vh" /> -->
 
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ---
 
-<img src="images/image_cylinders.jpeg" height="50vh" />
+<img src="images/image_cylinders.webp" height="50vh" />
 
 ## Overview
 
@@ -77,4 +77,4 @@ With the Digital Twin established, the environment was ready for AI training.
 
 
 
-<!-- <img src="images/arm-setup.jpg" alt="Real Arm Setup" height="50vh" /> -->
+<!-- <img src="images/arm-setup.webp" alt="Real Arm Setup" height="50vh" /> -->

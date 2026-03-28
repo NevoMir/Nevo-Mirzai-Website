@@ -2,7 +2,7 @@
 
 2025 — Brief project summary: understanding when we can reliably recover an agent’s goals from how it behaves.
 
-<img src="cover/cover.png" width="100%" />
+<img src="cover/cover.webp" width="100%" />
 
 ---
 

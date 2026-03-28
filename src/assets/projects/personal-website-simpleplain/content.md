@@ -1,7 +1,7 @@
 # Personal Website Built on SimplePlain
 _Independent • 2025_
 
-<!-- ![Cover](cover/cover.png) -->
+<!-- ![Cover](cover/cover.webp) -->
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview

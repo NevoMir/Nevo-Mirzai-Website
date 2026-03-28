@@ -7,31 +7,31 @@
 ---
 
 <!--
-<img src="Images_CPG/opti plot/Cpg prmt opti speed.png"
+<img src="Images_CPG/opti plot/Cpg prmt opti speed.webp"
      alt="CPG parameters for TROT gait at medium speed"
      height="60vh">
 -->
 
 <!--
-<img src="Images_CPG/Cpg prm/MAX_WALK_CPG_parameters.png"
+<img src="Images_CPG/Cpg prm/MAX_WALK_CPG_parameters.webp"
      alt="CPG parameters for WALK gait at maximum speed"
      height="60vh">
 -->
 
 <!--
-<img src="Images_CPG/plots with PD +CPD/cpg prmt max speed trot.png"
+<img src="Images_CPG/plots with PD +CPD/cpg prmt max speed trot.webp"
      alt="TROT CPG parameters at max speed, used to derive duty cycle"
      height="60vh">
 -->
 
 <!--
-<img src="Images_RL/reward_comparison_exemple.png"
+<img src="Images_RL/reward_comparison_exemple.webp"
      alt="Comparison of individual reward terms during training"
      height="60vh">
 -->
 
 <!--
-<img src="Images_RL/reward_comparison_hight_stairs.jpg"
+<img src="Images_RL/reward_comparison_hight_stairs.webp"
      alt="Reward evolution while climbing a tall staircase"
      height="60vh">
 -->

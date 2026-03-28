@@ -1,7 +1,7 @@
 # Chocolate Recognition with Deep Learning
 _Image Analysis • 2023_
 
-<!-- ![Cover](cover/cover.png) -->
+<!-- ![Cover](cover/cover.webp) -->
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ## Overview
