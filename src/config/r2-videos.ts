@@ -57,7 +57,7 @@ export const r2VideoManifest: R2VideoManifest = {
         { path: "videos/lerobot_video_2.mp4" },
     ],
     "rl-quadruped-training": [
-        { path: "cover/cover.mp4" },
+        { path: "videos/Dog Robot Cover 1080p.mp4" },
     ],
     "robot-vision-navigation": [
         { path: "cover/cover.mp4" },

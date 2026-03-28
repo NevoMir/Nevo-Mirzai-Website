@@ -107,10 +107,6 @@ export const ProjectsData: Project[] = [
             "Crafted terrain-aware reward functions that favored energy-efficient steps.",
         ],
         tags: ["Simulation", "AI", "Robotics", "Control"],
-        hero: {
-            type: "vimeo",
-            url: "https://vimeo.com/1148904156",
-        },
         resources: [
             {
                 type: "report",
