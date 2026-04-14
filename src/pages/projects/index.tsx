@@ -378,6 +378,7 @@ function ProjectDetailPage({ project, onBack }: { project: Project; onBack: () =
                         src={resolved}
                         className={cn("rounded-lg border bg-black", props.className)}
                         playsInline
+                        preload={props.preload ?? "metadata"}
                         controls={props.controls ?? true}
                         style={mergedStyle}
                     >

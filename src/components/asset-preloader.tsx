@@ -69,13 +69,15 @@ export function AssetPreloader() {
 
         // 1.3 Featured Projects on About Me Page
         // We want to preload the Hero asset AND the detail assets for these specific projects first.
+        // Skip video-type heroes — <video> elements handle their own loading.
+        // Preloading mp4 URLs via Image() creates wasted/competing HTTP requests.
         ABOUT_ME_PROJECT_SLUGS.forEach((slug) => {
-            // Hero
+            // Hero (images & thumbnails only)
             const hero = getProjectHero(slug);
             if (hero) {
                 if (hero.type === "youtube" || hero.type === "vimeo") {
                     addToQueue(hero.thumbnailUrl);
-                } else {
+                } else if (hero.type === "image") {
                     addToQueue(hero.url);
                 }
             }
@@ -89,16 +91,12 @@ export function AssetPreloader() {
         // --- Priority 2: Remaining Projects (Sorted by Recency) ---
 
         sortedProjects.forEach((project) => {
-            // Skip if it was already processed in the About Me section (though Set handles dedupe, we can skip logic)
-            // But we need to be careful because we might have only added hero or something. 
-            // The Set ensures we don't double-load, so we can just iterate everything.
-
-            // Hero
+            // Hero (images & thumbnails only — skip video heroes)
             const hero = getProjectHero(project.slug);
             if (hero) {
                 if (hero.type === "youtube" || hero.type === "vimeo") {
                     addToQueue(hero.thumbnailUrl);
-                } else {
+                } else if (hero.type === "image") {
                     addToQueue(hero.url);
                 }
             }

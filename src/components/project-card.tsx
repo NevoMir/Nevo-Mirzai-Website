@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Card } from "@/components/ui/card";
@@ -29,6 +30,45 @@ function formatTimelineLabel(timeline?: string | null): string | null {
     return match ? match[1] : timeline;
 }
 
+function LazyVideo({ url, className }: { url: string; className?: string }) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const [isVisible, setIsVisible] = useState(false);
+
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting) {
+                    setIsVisible(true);
+                } else if (videoRef.current) {
+                    videoRef.current.pause();
+                }
+            },
+            { rootMargin: "200px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, []);
+
+    return (
+        <div ref={containerRef} className={className}>
+            <video
+                ref={videoRef}
+                src={isVisible ? url : undefined}
+                className="w-full h-full object-cover"
+                preload="auto"
+                autoPlay
+                loop
+                muted
+                playsInline
+            />
+        </div>
+    );
+}
+
 export function ProjectPreviewCard({ project, className }: ProjectPreviewCardProps) {
     const hero = getProjectHero(project.slug);
     const timelineLabel = formatTimelineLabel(project.timeline ?? null);
@@ -39,13 +79,9 @@ export function ProjectPreviewCard({ project, className }: ProjectPreviewCardPro
                 <div className="aspect-video w-full overflow-hidden bg-black">
                     {hero ? (
                         hero.type === "video" ? (
-                            <video
-                                src={hero.url}
+                            <LazyVideo
+                                url={hero.url}
                                 className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                autoPlay
-                                loop
-                                muted
-                                playsInline
                             />
                         ) : hero.type === "youtube" || hero.type === "vimeo" ? (
                             <VideoEmbed

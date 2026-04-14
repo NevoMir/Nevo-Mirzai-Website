@@ -20,6 +20,9 @@ src/assets/projects/**/*.png
 src/assets/projects/**/*.jpg
 src/assets/projects/**/*.jpeg
 
+# Auto-generated data (rebuilt by prebuild scripts)
+src/data/repos.json
+
 node_modules
 dist
 dist-ssr
@@ -37,3 +40,5 @@ dist-ssr
 *.sw?
 
 .env
+
+*.wrangler/*
