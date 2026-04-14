@@ -6,6 +6,7 @@ import { VideoEmbed } from "@/components/video-embed";
 import { cn } from "@/lib/utils";
 import type { Project, ProjectTag } from "@/data/projects";
 import { getProjectHero } from "@/lib/project-assets";
+import { getCachedUrl, cacheVideoInBackground } from "@/lib/video-cache";
 
 type ProjectPreviewCardProps = {
     project: Project;
@@ -33,9 +34,13 @@ function formatTimelineLabel(timeline?: string | null): string | null {
 function LazyVideo({ url, className }: { url: string; className?: string }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
-    const [isVisible, setIsVisible] = useState(false);
 
+    const cachedSrc = getCachedUrl(url);
+    const [isVisible, setIsVisible] = useState(cachedSrc !== null);
+
+    // IntersectionObserver — skip entirely for cached videos.
     useEffect(() => {
+        if (cachedSrc) return;
         const el = containerRef.current;
         if (!el) return;
 
@@ -51,19 +56,29 @@ function LazyVideo({ url, className }: { url: string; className?: string }) {
         );
         observer.observe(el);
         return () => observer.disconnect();
-    }, []);
+    }, [cachedSrc]);
+
+    // After the video begins playing, cache it in the background for next time.
+    const handleCanPlay = () => {
+        if (!cachedSrc) {
+            cacheVideoInBackground(url);
+        }
+    };
+
+    const activeSrc = cachedSrc ?? (isVisible ? url : undefined);
 
     return (
         <div ref={containerRef} className={className}>
             <video
                 ref={videoRef}
-                src={isVisible ? url : undefined}
+                src={activeSrc}
                 className="w-full h-full object-cover"
                 preload="auto"
                 autoPlay
                 loop
                 muted
                 playsInline
+                onCanPlay={handleCanPlay}
             />
         </div>
     );
