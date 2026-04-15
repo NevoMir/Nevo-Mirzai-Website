@@ -43,6 +43,10 @@ function LazyVideo({ url, className }: { url: string; className?: string }) {
             ([entry]) => {
                 if (entry.isIntersecting) {
                     setIsVisible(true);
+                    // Resume playback when scrolling back into view.
+                    // autoPlay only fires on the initial src set, so we
+                    // need an explicit play() for subsequent intersections.
+                    videoRef.current?.play().catch(() => {});
                 } else if (videoRef.current) {
                     videoRef.current.pause();
                 }
