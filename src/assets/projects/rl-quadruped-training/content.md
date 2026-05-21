@@ -2,7 +2,7 @@
 
 **2024 – Improving quadruped quadruped locomotion on stairs using CPGs and deep reinforcement learning**
 
-<video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
+<video src="videos/Dog Robot Cover 1080p.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
 ---
 
