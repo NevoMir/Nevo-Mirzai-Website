@@ -5,7 +5,7 @@ import eaiLogo from "./images/logoEAI.png"
 
 export const WorkData = [
   {
-    title: "Robotics Intern, Humanoids",
+    title: "Robotics Intern, Humanoid Learning",
     company: "Embodied AI",
     years: "Feb-Aug 2026",
     logo: eaiLogo,
