@@ -40,6 +40,10 @@ export const r2VideoManifest: R2VideoManifest = {
     "autonomous-vehicle-mpc": [
         { path: "cover/cover.mp4" },
     ],
+    "eye-tracker-headlamp": [
+        { path: "cover/cover.mp4" },
+        { path: "videos/full-system-demo.mp4" },
+    ],
     "billiard-vision-analysis": [
         { path: "cover/cover.mp4" },
     ],

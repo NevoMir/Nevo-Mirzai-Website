@@ -20,10 +20,10 @@
 
 ### 1. Full System Demonstration
 The complete prototype running on the helmet, showing the lamp following gaze in real-time.
-<!-- 
-<video src="videos/full-system-demo.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
+<video src="videos/full-system-demo.mp4" controls playsinline height="50vh"></video>
 
+<!--
 ### 2. Eye Tracking Feed
 The raw input from the Infrared (IR) camera processing pupil movement.
 
