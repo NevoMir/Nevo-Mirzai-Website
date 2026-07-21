@@ -302,16 +302,25 @@ export const ProjectsData: Project[] = [
     {
         slug: "clickbait-data-analysis",
         title: "Clickbait Data Analysis",
-        timeline: "07.2025 (This semester)",
-        summary: "Investigated whether clickbait intent can be inferred from YouTube metadata.",
+        course: "Applied Data Analysis",
+        timeline: "12.2025",
+        summary: "Analyzed 72.9M YouTube videos to measure when, and for whom, clickbait actually works.",
         description:
-            "Used the Youniverse dataset to engineer behavioral features, trained ML classifiers, and evaluated interpretability for content teams.",
+            "Team project for EPFL's Applied Data Analysis course, published as the interactive data story \"You Won't Believe What We Found\". We built a clickbait detector for video titles and combined it with the YouNiverse dataset (136k channels, 72.9M videos) to quantify how widespread clickbait is, how much it boosts views and engagement, and how the payoff differs across content categories and channel sizes.",
         highlights: [
-            "Built a feature pipeline covering sentiment, timing, and creator history.",
-            "Compared gradient boosting vs. lightweight neural approaches.",
-            "Delivered dashboards that visualize false positive clusters.",
+            "Trained a hybrid clickbait classifier on news headlines and Mistral-7B-labeled YouTube titles, using n-grams and \"scream factors\" (caps, punctuation) to reach 76% F1.",
+            "Tracked clickbait's rise from ~11% of uploads in 2005 to ~33% in 2019, with 97.8% of channels using it at least once.",
+            "Quantified its payoff with Mann-Whitney tests and OLS regressions: up to +81% views in top categories, with small channels benefiting most.",
         ],
         tags: ["AI"],
+        resources: [
+            {
+                type: "demo",
+                label: "Data story website",
+                url: "https://epfl-ada.github.io/ada-2025-project-datahunt3rs/",
+                description: "Interactive data story with the full analysis, visualizations, and findings.",
+            },
+        ],
     },
     {
         slug: "data-augmentation-box",
