@@ -303,7 +303,7 @@ export const ProjectsData: Project[] = [
         slug: "clickbait-data-analysis",
         title: "Clickbait Data Analysis",
         course: "Applied Data Analysis",
-        timeline: "12.2025",
+        timeline: "08.2025",
         summary: "Analyzed 72.9M YouTube videos to measure when, and for whom, clickbait actually works.",
         description:
             "Team project for EPFL's Applied Data Analysis course, published as the interactive data story \"You Won't Believe What We Found\". We built a clickbait detector for video titles and combined it with the YouNiverse dataset (136k channels, 72.9M videos) to quantify how widespread clickbait is, how much it boosts views and engagement, and how the payoff differs across content categories and channel sizes.",
@@ -347,7 +347,7 @@ export const ProjectsData: Project[] = [
     {
         slug: "eye-tracker-headlamp",
         title: "Eye Tracker Headlamp",
-        timeline: "08.2025",
+        timeline: "12.2025",
         summary: "Built a gaze-aware headlamp that aligns light direction with the wearer’s line of sight.",
         description:
             "Combined an optical camera, IR camera, and dual servos driven by a Raspberry Pi 5 to keep the headlamp beam parallel to the detected gaze vector.",
