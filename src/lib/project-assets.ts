@@ -331,8 +331,11 @@ export function getProjectAssets(slug: string) {
 }
 
 export function getProjectHero(slug: string): ProjectHero | undefined {
-    if (heroOverrides[slug]) {
-        return heroOverrides[slug];
+    const override = heroOverrides[slug];
+    if (override) {
+        // A video override may name a project file (e.g. "videos/demo.mp4") instead of a full URL.
+        const resolved = override.type === "video" ? resolveProjectMedia(slug, override.url) : undefined;
+        return resolved ? { ...override, url: resolved } : override;
     }
     if (heroBySlug[slug]) {
         return heroBySlug[slug];

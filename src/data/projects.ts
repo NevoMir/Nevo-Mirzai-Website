@@ -107,6 +107,8 @@ export const ProjectsData: Project[] = [
             "Crafted terrain-aware reward functions that favored energy-efficient steps.",
         ],
         tags: ["Simulation", "AI", "Robotics", "Control"],
+        // Same video as the first one on the project page.
+        hero: { type: "video", url: "videos/Dog Robot Cover 1080p.mp4" },
         resources: [
             {
                 type: "report",
@@ -326,7 +328,7 @@ export const ProjectsData: Project[] = [
         slug: "data-augmentation-box",
         title: "Data Creation Box",
         course: "MGT-555 Innovation & Entrepreneurship in Engineering",
-        timeline: "12.2025",
+        timeline: "09.2025 (This semester)",
         summary: "Automated rig that creates varied, label-ready image datasets for industrial vision. Won the MGT-555 best startup project competition.",
         description:
             "Team project for EPFL's MGT-555 Innovation & Entrepreneurship in Engineering, which won the competition for the best startup project in the course. Industrial vision systems often rely on brittle rule-based pipelines, and machine learning is held back by the cost of collecting representative images on site. The Data Creation Box is a compact, one-button capture rig: a Raspberry Pi 5 rotates a screen that holds the object and acts as a background, varies the lighting, and captures images from three cameras. The images are labeled in Label Studio and used to fine-tune YOLO11n and YOLO11n-OBB detectors, and a web interface lets operators monitor capture and check results. We validated the pipeline on watch cases and paired it with a market, business-model, and sustainability analysis.",
