@@ -325,23 +325,18 @@ export const ProjectsData: Project[] = [
     {
         slug: "data-augmentation-box",
         title: "Data Creation Box",
-        timeline: "09.2025 (This semester)",
-        summary: "Automated the photo capture process for object-recognition datasets using a custom rig.",
+        course: "MGT-555 Innovation & Entrepreneurship in Engineering",
+        timeline: "12.2025",
+        summary: "Automated rig that creates varied, label-ready image datasets for industrial vision. Won the MGT-555 best startup project competition.",
         description:
-            "Constructed a rotating platform with controllable lighting and backgrounds, scripted camera capture, and paired it with YOLOv12 fine-tuning routines.",
+            "Team project for EPFL's MGT-555 Innovation & Entrepreneurship in Engineering, which won the competition for the best startup project in the course. Industrial vision systems often rely on brittle rule-based pipelines, and machine learning is held back by the cost of collecting representative images on site. The Data Creation Box is a compact, one-button capture rig: a Raspberry Pi 5 rotates a screen that holds the object and acts as a background, varies the lighting, and captures images from three cameras. The images are labeled in Label Studio and used to fine-tune YOLO11n and YOLO11n-OBB detectors, and a web interface lets operators monitor capture and check results. We validated the pipeline on watch cases and paired it with a market, business-model, and sustainability analysis.",
         highlights: [
-            "Engineered synchronized motors, lights, and cameras for repeatability.",
-            "Implemented scripts that capture multi-angle sequences per object.",
-            "Automated training/evaluation cycles for each new SKU.",
+            "We built a Raspberry Pi 5 rig with a rotating screen, programmable LEDs, and three cameras that captures randomized multi-angle, multi-lighting image sequences with one button.",
+            "We labeled captures in Label Studio and fine-tuned YOLO11n and YOLO11n-OBB models that detect two watch-case types on held-out validation images.",
+            "We developed a web interface to monitor capture live, export datasets, and evaluate trained models.",
+            "We estimated one to a few hours from a new part to a labeled dataset and roughly 96.5% less CO2e per integration task than on-site data collection.",
         ],
         tags: ["Mechanical Design", "Computer Vision", "AI", "Embedded"],
-        resources: [
-            {
-                type: "report",
-                label: "Assembly notes",
-                description: "",
-            },
-        ],
         featured: true,
     },
     {
