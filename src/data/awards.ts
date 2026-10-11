@@ -55,7 +55,7 @@ export const AwardsData: Award[] = [
         place: "Lodrino airfield, Switzerland",
         issuer: "World Record Academy",
         summary:
-            "I was one of the 73 children and teenagers who each built and piloted their own drone and flew them all at once, about 30 m high, beating the previous mark of 54 drones. The event was organized by Ated4Kids as part of its project \"Costruisci il tuo primo drone\" (Build your first drone), and the record was certified on the spot by World Record Academy.",
+            "I was one of the teenagers who built their own drones from scratch, piloted them, and flew them all at once in choreographed flights, about 30 m high, beating the previous mark of 54 drones. The event was organized by Ated4Kids, and the record was certified on the spot by World Record Academy.",
         image: {
             src: droneRecordImage,
             alt: "Young pilots holding their LED-lit drones around the framed World Record Academy certificate at Lodrino airfield, with mountains in the background",
