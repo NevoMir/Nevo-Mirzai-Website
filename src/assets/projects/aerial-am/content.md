@@ -278,7 +278,8 @@ This framework is a **first step toward a digital twin** for Aerial AM:
 Future work will:
 
 - Add full **drone dynamics and control**.  
-- Calibrate material parameters with **real experiments**.  
+- Calibrate material parameters with **real experiments**, following the experiment design I prepared: LiDAR scans of the deposited foam under varying temperature, ejection speed, pressure and humidity, plus strength tests on the real foam.  
+- Test the calibrated simulation on **unseen scenarios**.  
 - Scale to **multi-drone** scenarios and larger structures.  
 - Use the simulator as a backbone for **reinforcement learning** and **online monitoring**.
 

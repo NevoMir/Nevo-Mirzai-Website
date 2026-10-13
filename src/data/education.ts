@@ -8,7 +8,7 @@ export const EduData = [
   {
     degree: "M.S. in Robotics with minor in Data Science",
     school: "École polytechnique fédérale de Lausanne",
-    years: "2024 - Present",
+    years: "2024 - 2027",
     logo: epflLogo,
   },
   {
