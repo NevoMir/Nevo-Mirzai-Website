@@ -108,7 +108,7 @@ export const ProjectsData: Project[] = [
         slug: "inverse-rl-research",
         title: "Inverse RL Research",
         course: "Reinforcement Learning",
-        timeline: "02.2025 (This semester)",
+        timeline: "02.2025",
         summary: "Academic deep-dive into the limitations of popular inverse RL formulations.",
         description:
             "Surveyed MaxEnt IRL, adversarial approaches, and offline variants to propose practical heuristics that reduce demonstration requirements. Focused on reproducibility and lightweight evaluation harnesses.",
