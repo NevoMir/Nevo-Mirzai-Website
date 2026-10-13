@@ -1,4 +1,4 @@
-# Physics-Based Simulator for Aerial Additive Manufacturing  
+# 3D Printing Drone Simulation
 2024 • *Simulating expanding, curing foams for drone-based 3D printing.*
 
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
@@ -26,12 +26,11 @@ In simple words:
 
 > A drone flies in a circle and sprays a special foam. In the simulator, this foam first behaves like a thick liquid, then expands, then solidifies into a load-bearing structure — all computed from the physics.
 
+**My contribution:** I modified the simulation framework (the MPM solver of Genesis) so that it supports expanding and curing foam, and I implemented a 3D model of the drone with simple trajectory planning to demonstrate that the simulation behaves as intended.
+
 ---
 
 ## Demo videos
-
-I will add the real videos later.  
-Here are the placeholders and order I will use:
 
 ### 1. Transition to curing (same material, no expansion)
 

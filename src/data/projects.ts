@@ -259,18 +259,18 @@ export const ProjectsData: Project[] = [
     },
     {
         slug: "aerial-am",
-        title: "Aerial Additive Manufacturing Prototype",
+        title: "3D Printing Drone Simulation",
         timeline: "09.2025",
         summary:
-            "Designed a drone-based additive manufacturing simulation in Genesis that deposits material in flight for large-scale structures.",
+            "Extended the Genesis physics engine to simulate expanding, curing foam for drone-based 3D printing, demonstrated with a 3D drone model printing a tower.",
         description:
-            "Built an experimental setup where a multirotor carries a lightweight extrusion head and synchronized resin feed. The work focused on toolpath planning, material curing timing, and the control logic that keeps the nozzle aligned while the platform moves.",
+            "Research project in Prof. Mirko Kovac's lab (Empa) on simulation for aerial additive manufacturing. I modified the Material Point Method (MPM) solver of the Genesis physics engine so that deposited material behaves as a viscoelastic fluid, expands like a foam and cures into a solid. I then implemented a 3D model of the drone with simple trajectory planning, depositing the material layer by layer, to demonstrate that the simulation behaves as intended.",
         highlights: [
-            "Implemented a dual-loop controller that couples flight dynamics with deposition rate.",
-            "Validated toolpaths on curved mandrels and vertical surfaces without scaffolding.",
-            "Packaged the workflow in ROS2 so future teams can iterate on materials and nozzle designs.",
+            "Extended the MPM solver with time-scheduled material transitions: viscoelastic deposition, foam-like expansion and curing.",
+            "Implemented a 3D model of the drone with simple trajectory planning to print a layered tower in simulation.",
+            "Kept the GPU simulation stable with time-step limits, sub-stepping and pre-allocated particle pools.",
         ],
-        tags: ["Robotics", "Control", "Simulation"],
+        tags: ["Robotics", "Simulation"],
     },
     // {
     //     slug: "robotic-arm-scaffolding",
