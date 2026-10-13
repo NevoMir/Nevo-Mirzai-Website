@@ -1,5 +1,5 @@
 # Autonomous Drone Racing
-_Independent • 2022_
+_2022_
 
 <!-- ![Cover](cover/cover.webp) -->
 <video src="cover/cover.mp4" controls autoplay muted loop playsinline height="50vh"></video>
@@ -8,6 +8,6 @@ _Independent • 2022_
 Simulated laps with synthetic gates, applied computer vision for gate detection, and transferred motion primitives to hardware while accounting for aerodynamic drift.
 
 ## Highlights
-- Used ROS + Gazebo to validate trajectories before flight tests.
+- Used ROS + Webots to validate trajectories before flight tests.
 - Incorporated obstacle-avoidance modules for pop-up barriers.
 - Optimized PID gains for tight corners and altitude stability.

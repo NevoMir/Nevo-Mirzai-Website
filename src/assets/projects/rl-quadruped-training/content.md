@@ -1,4 +1,4 @@
-# Evolutionary robotics
+# Quadruped Locomotion with Central Pattern Generators and Deep Reinforcement Learning
 
 **2024 – Improving quadruped locomotion on stairs using CPGs and deep reinforcement learning**
 

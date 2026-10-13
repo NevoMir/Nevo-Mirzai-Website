@@ -113,8 +113,6 @@ export const ProjectsData: Project[] = [
         description:
             "Surveyed MaxEnt IRL, adversarial approaches, and offline variants to propose practical heuristics that reduce demonstration requirements. Focused on reproducibility and lightweight evaluation harnesses.",
         highlights: [
-            "Benchmarked state-of-the-art IRL libraries on shared control tasks.",
-            "Documented common failure modes tied to reward misspecification.",
             "Outlined research directions for safer covariate shift handling.",
         ],
         tags: ["AI"],
@@ -174,7 +172,7 @@ export const ProjectsData: Project[] = [
         description:
             "Simulated laps with synthetic gates, applied computer vision for gate detection, and transferred motion primitives to hardware while accounting for aerodynamic drift.",
         highlights: [
-            "Used ROS + Gazebo to validate trajectories before flight tests.",
+            "Used ROS + Webots to validate trajectories before flight tests.",
             "Incorporated obstacle avoidance modules for pop-up barriers.",
             "Optimized PID gains for tight corners and altitude stability.",
         ],
@@ -199,7 +197,7 @@ export const ProjectsData: Project[] = [
     {
         slug: "hand-gesture-drone-swarms",
         title: "Hand Gesture Control for Drone Swarms with VR",
-        timeline: "10.2025 (Ongoing)",
+        timeline: "10.2025",
         summary: "Designed VR-based hand gesture control that commands the shape and velocity of a drone swarm.",
         description:
             "Uses Meta Quest 3 controllers and dimensionality reduction to convert gestures into swarm formations. Integrates vision feedback and ML classifiers for intent recognition.",
@@ -263,9 +261,10 @@ export const ProjectsData: Project[] = [
         slug: "quadcopter-design-stabilization",
         title: "Quadcopter Design and Stabilization",
         timeline: "07.2020",
-        summary: "Designed, printed, and stabilized a quadcopter with custom PID loops.",
+        course: "High-school project",
+        summary: "High-school project (2020). Designed, printed, and stabilized a quadcopter with custom PID loops: the two-propeller test rig stabilized correctly, while the full drone only stayed in the air for a few seconds.",
         description:
-            "Produced CAD for the airframe, integrated IMU data, and tuned cascaded PID controllers to maintain hover despite lightweight frames.",
+            "High-school project from 2020. Produced CAD for the airframe, integrated IMU (MPU-6050) data on an Arduino and tuned PID controllers. The two-propeller single-axis test rig stabilized correctly; the full quadcopter only stayed in the air for a few seconds.",
         highlights: [
             "3D printed structural components and optimized for weight.",
             "Developed embedded firmware in C++ for sensor fusion.",
@@ -300,7 +299,7 @@ export const ProjectsData: Project[] = [
         slug: "data-augmentation-box",
         title: "Data Creation Box",
         course: "MGT-555 Innovation & Entrepreneurship in Engineering",
-        timeline: "09.2025 (This semester)",
+        timeline: "09.2025",
         summary: "Automated rig that creates varied, label-ready image datasets for industrial vision. Won the MGT-555 best startup project competition.",
         description:
             "Team project for EPFL's MGT-555 Innovation & Entrepreneurship in Engineering, which won the competition for the best startup project in the course. Industrial vision systems often rely on brittle rule-based pipelines, and machine learning is held back by the cost of collecting representative images on site. The Data Creation Box is a compact, one-button capture rig: a Raspberry Pi 5 rotates a screen that holds the object and acts as a background, varies the lighting, and captures images from three cameras. The images are labeled in Label Studio and used to fine-tune YOLO11n and YOLO11n-OBB detectors, and a web interface lets operators monitor capture and check results. We validated the pipeline on watch cases and paired it with a market, business-model, and sustainability analysis.",

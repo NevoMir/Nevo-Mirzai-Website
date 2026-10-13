@@ -1,5 +1,5 @@
 # Data Creation Box
-2025 (This semester) • *An automated rig that creates varied, label-ready image datasets, so industrial vision systems can learn from data instead of hand-tuned rules.*
+2025 • *An automated rig that creates varied, label-ready image datasets, so industrial vision systems can learn from data instead of hand-tuned rules.*
 
 <img src="cover/cover.webp" alt="Sample images of watch cases from the dataset, annotated with the two part classes" width="75%" />
 

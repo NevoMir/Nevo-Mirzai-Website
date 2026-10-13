@@ -1,5 +1,5 @@
 # Self-stabilising Quadcopter  
-Nevò Mirzai Hamadani  
+_High-school project • 2020_  
 
 <img src="cover/cover.webp" width="100%" />
 
@@ -151,13 +151,13 @@ In code:
 
 ## 7. Results and limitations
 
-- **Prototype (single axis)**  
-  Works reasonably well: when you manually disturb the beam, the motors react quickly and try to return it to horizontal.
+- **Prototype (single axis, two propellers)**  
+  Stabilises correctly: when you manually disturb the beam, the motors react quickly and return it to horizontal.
 
 - **Final quadcopter**  
   - The motors react correctly to manually induced tilts.
   - However, there are still **sudden thrust jumps** and incomplete damping.
-  - Full free flight is not yet safe, so tests are done while partially holding the drone.
+  - The full drone could only stay in the air for **a few seconds**.
 
 The main difficulty is tuning the **9 PID gains** (P, I, D for 3 axes). Without a radio link to adjust gains in real time, optimisation is slow and trial-and-error based.
 
