@@ -7,10 +7,7 @@ import { ScrollToTop } from "@/hooks/scroll-to-top";
 
 const About = loadLazy(() => import("@/pages/about"));
 const Awards = loadLazy(() => import("@/pages/awards"));
-const Movies = loadLazy(() => import("@/pages/movies"));
-const Music = loadLazy(() => import("@/pages/music"));
 const Projects = loadLazy(() => import("@/pages/projects"));
-const Publications = loadLazy(() => import("@/pages/publications"));
 const Outreach = loadLazy(() => import("@/pages/outreach"));
 const NotFound = loadLazy(() => import("@/pages/notfound"));
 
@@ -22,12 +19,9 @@ export default function App() {
                 <Routes>
                     <Route path="/" element={<Layout />}>
                         <Route index element={<About />} />
-                        <Route path="movies" element={<Movies />} />
-                        <Route path="music" element={<Music />} />
                         <Route path="projects" element={<Projects />} />
                         <Route path="projects/:slug" element={<Projects />} />
                         <Route path="awards" element={<Awards />} />
-                        <Route path="publications" element={<Publications />} />
                         <Route path="outreach" element={<Outreach />} />
                         <Route path="*" element={<NotFound />} />
                     </Route>

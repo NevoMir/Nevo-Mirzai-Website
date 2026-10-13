@@ -14,7 +14,7 @@ export const SkillsData = [
     {
         category: "AI & Data Science",
         description:
-            "Developing Models and algorithms for data-driven applications.",
+            "Developing models and algorithms for data-driven applications.",
         skills: ["Reinforcement Learning", "Deep Learning", "PyTorch", "scikit-learn"],
     },
     {

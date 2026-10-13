@@ -1,6 +1,6 @@
 # Evolutionary robotics
 
-**2024 – Improving quadruped quadruped locomotion on stairs using CPGs and deep reinforcement learning**
+**2024 – Improving quadruped locomotion on stairs using CPGs and deep reinforcement learning**
 
 <video src="videos/Dog Robot Cover 1080p.mp4" controls autoplay muted loop playsinline height="50vh"></video>
 
@@ -59,13 +59,13 @@ First, we focused on **clean, hand-designed locomotion** using CPGs:
   - **PACE** – left/right sides move together.
   - **BOUND** – front legs together, rear legs together.
 - Each leg’s motion is driven by an oscillator with:
-  - **phase** \(\theta\) and its derivative \(\dot{\theta}\),
-  - **amplitude** \(\mu\),
+  - **phase** $\theta$ and its derivative $\dot{\theta}$,
+  - **amplitude** $\mu$,
   - different frequencies in **swing** (leg in the air) and **stance** (leg on the ground).
 
 By tuning CPG parameters like:
-- swing/stance frequencies \(\omega_{\text{swing}}, \omega_{\text{stance}}\),
-- amplitude \(\mu\),
+- swing/stance frequencies $\omega_{\text{swing}}, \omega_{\text{stance}}$,
+- amplitude $\mu$,
 - ground clearance / penetration,
 - desired step length,
 - coupling strength between legs,
@@ -85,7 +85,7 @@ We also measured:
 - **Cost of Transport (CoT)** for each gait:
   - TROT and WALK can be tuned to be relatively efficient.
   - PACE and BOUND were not optimized as much and show higher CoT.
-  - Increasing joint derivative gains \(K_D\) in WALK reduced CoT significantly by smoothing motion and reducing wasted oscillations.
+  - Increasing joint derivative gains $K_D$ in WALK reduced CoT significantly by smoothing motion and reducing wasted oscillations.
 
 This CPG part gives us **well-understood, repeatable gaits** that work well on flat terrain and gentle slopes.
 
@@ -108,7 +108,7 @@ For this, we used **Deep Reinforcement Learning** with:
 - **Observation space:** starting from joint angles, velocities, and orientation, and extending with:
   - **contact information** (which feet are in contact, contact forces),
   - additional **orientation parameters** for body posture,
-  - and, in CPG-based experiments, the CPG internal states \((r, \dot{r}, \theta, \dot{\theta})\).
+  - and, in CPG-based experiments, the CPG internal states $(r, \dot{r}, \theta, \dot{\theta})$.
 
 This richer observation helps the policy “understand” where the body and feet are with respect to the stairs.
 
@@ -139,10 +139,10 @@ We used **Proximal Policy Optimization (PPO)** (from Stable-Baselines3):
 - **On-policy**, stable, relatively simple to tune.
 - Policy and value networks are **MLPs with two hidden layers of 256 units**.
 - Key hyperparameters:
-  - learning rate starting around \(1 \times 10^{-4}\), gradually reduced as we increased task difficulty,
-  - \(n\_steps = 4096\) (rollout length),
-  - clipping range \(= 0.2\),
-  - discount factor \(\gamma = 0.99\) for smooth, long-term behaviour.
+  - learning rate starting around $1 \times 10^{-4}$, gradually reduced as we increased task difficulty,
+  - $n\_steps = 4096$ (rollout length),
+  - clipping range $= 0.2$,
+  - discount factor $\gamma = 0.99$ for smooth, long-term behaviour.
 
 For the **environment**:
 

@@ -58,7 +58,7 @@ function Profile() {
                                         </Button>
                                     </TooltipTrigger>
                                     <TooltipContent side="bottom">
-                                        <p>Resumé</p>
+                                        <p>Résumé</p>
                                     </TooltipContent>
                                 </Tooltip>
                             ) : (

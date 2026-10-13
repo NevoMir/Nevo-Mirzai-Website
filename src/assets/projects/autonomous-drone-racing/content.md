@@ -11,6 +11,3 @@ Simulated laps with synthetic gates, applied computer vision for gate detection,
 - Used ROS + Gazebo to validate trajectories before flight tests.
 - Incorporated obstacle-avoidance modules for pop-up barriers.
 - Optimized PID gains for tight corners and altitude stability.
-
-## Notes
-- Embed the final race footage once it is exported from the flight logs.

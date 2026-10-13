@@ -1,6 +1,6 @@
 # Identifiability in Inverse Reinforcement Learning
 
-2025 — Brief project summary: understanding when we can reliably recover an agent’s goals from how it behaves.
+2025 — Understanding when we can reliably recover an agent’s goals from how it behaves.
 
 <img src="cover/cover.webp" width="100%" />
 

@@ -23,9 +23,6 @@ In simple words:
 
 ## Demo videos
 
-I will add the real videos later.  
-Here is the order and the video tags so I can just plug in the right files:
-
 ### 1. Hands shaping the ellipsoid (no VR view)
 
 <video src="videos/hands-ellipsoid.mp4" controls autoplay muted loop playsinline height="50vh"></video>

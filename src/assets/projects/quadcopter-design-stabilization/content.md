@@ -105,9 +105,9 @@ In this project it is used to:
 
 To keep the drone level, a **PID controller** acts on the angle error:
 
-\[
+$$
 u(t) = K_P e(t) + K_I \int e(t)\,dt + K_D \frac{de(t)}{dt}
-\]
+$$
 
 - **P**: reacts to the current error (present).
 - **I**: accumulates past error to remove steady-state offset.

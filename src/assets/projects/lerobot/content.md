@@ -6,8 +6,6 @@
 
 ---
 
-## Overview
-
 ## What I Built
 
 I wanted to teach a robot to perform tasks just by showing it how.

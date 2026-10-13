@@ -28,8 +28,3 @@ This course project teaches students how to program a Crazyflie to race through 
 | 6-9  | Simulation development & Q&A, submission April 29 |
 | 10   | Hardware introduction, pick up Crazyflie |
 | 11-14| Hardware tuning, testing runs, final presentation |
-
-## Media (to add)
-- Simulation demo (`sim_2025.gif`)
-- Real drone run footage
-- System diagrams (`arc_simulation.webp`, `sim2real.webp`)

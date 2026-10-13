@@ -84,13 +84,6 @@ export const ProjectsData: Project[] = [
             "Performed error analyses to balance sensitivity with conversational nuance.",
         ],
         tags: ["AI"],
-        resources: [
-            {
-                type: "report",
-                label: "Final report (add PDF link)",
-                description: "",
-            },
-        ],
         featured: true,
     },
     {
@@ -109,13 +102,6 @@ export const ProjectsData: Project[] = [
         tags: ["Simulation", "AI", "Robotics", "Control"],
         // Same video as the first one on the project page.
         hero: { type: "video", url: "videos/Dog Robot Cover 1080p.mp4" },
-        resources: [
-            {
-                type: "report",
-                label: "Training logbook",
-                description: "",
-            },
-        ],
         featured: true,
     },
     {
@@ -147,22 +133,15 @@ export const ProjectsData: Project[] = [
             "Deployed the detector as a small Flask app for quick demos.",
         ],
         tags: ["Computer Vision"],
-        resources: [
-            {
-                type: "report",
-                label: "Lab report placeholder",
-                description: "",
-            },
-        ],
     },
     {
         slug: "robot-vision-navigation",
         title: "Computer Vision Navigation for a Robot",
         course: "Mobile Robotics",
         timeline: "05.2024",
-        summary: "Implemented onboard vision and planning so a Thymio robot could reach goals autonomously.",
+        summary: "Implemented camera-based vision and planning so a Thymio robot could reach goals autonomously.",
         description:
-            "Combined OpenCV perception with particle filtering and A* planning to follow colored waypoints. Tuned closed-loop behavior for reliable on-table navigation.",
+            "Combined OpenCV perception with A* planning to follow colored waypoints. Tuned closed-loop behavior for reliable on-table navigation.",
         highlights: [
             "Designed vision pipeline with color segmentation + morphological cleanup.",
             "Estimated robot pose via EKF and fused wheel odometry with visual beacons.",
@@ -200,13 +179,6 @@ export const ProjectsData: Project[] = [
             "Optimized PID gains for tight corners and altitude stability.",
         ],
         tags: ["Robotics", "Computer Vision", "Control", "Simulation"],
-        resources: [
-            {
-                type: "demo",
-                label: "Flight demo slot",
-                description: "",
-            },
-        ],
         featured: true,
     },
     {
@@ -354,13 +326,6 @@ export const ProjectsData: Project[] = [
             "Optimized calibration so users can remap gaze in under a minute.",
         ],
         tags: ["Computer Vision", "Control", "Mechanical Design"],
-        resources: [
-            {
-                type: "report",
-                label: "System design doc",
-                description: "",
-            },
-        ],
     },
     {
         slug: "personal-website-simpleplain",

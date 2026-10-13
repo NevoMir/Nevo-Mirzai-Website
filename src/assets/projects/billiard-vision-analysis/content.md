@@ -74,3 +74,4 @@ Given `pixmap.bin`, the C program:
   Red:    Xr, Yr, scorer
   Yellow: Xy, Yy, scorey
   White:  Xw, Yw, scorew
+  ```
