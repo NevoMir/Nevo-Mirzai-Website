@@ -13,7 +13,7 @@ export const WorkData = [
   {
     title: "Project Lead: Flight Simulation",
     company: "EPFL Rocket Team",
-    years: "2021 - 2024",
+    years: "2021 - 2025",
     // Use dark mode logo by default; light mode logo can be handled in the component
     logo: rocketTeamLightLogo,
     // alternative
