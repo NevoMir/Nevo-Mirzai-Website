@@ -87,8 +87,13 @@ async function fetchRepos() {
         fs.writeFileSync(outputPath, JSON.stringify(merged, null, 2));
         console.log(`✅ Repos written to ${outputPath}`);
     } catch (error) {
-        console.error("❌ Failed to fetch repos:", error);
-        process.exit(1);
+        // Don't fail the build over this (e.g. GitHub rate-limiting the shared CI IPs):
+        // keep the previous repos.json, or write an empty one if there is none.
+        console.warn("⚠️ Failed to fetch repos, keeping existing data:", error);
+        if (!fs.existsSync(outputPath)) {
+            fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+            fs.writeFileSync(outputPath, "{}");
+        }
     }
 }
 
