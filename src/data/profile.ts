@@ -1,10 +1,11 @@
 import { FaLinkedin, FaRegIdBadge, FaGithub } from "react-icons/fa6";
 import { RESUME_URL } from "@/data/config";
+import profileImage from "./images/profile.webp";
 
 
 export const UserInfo = {
     name: "Nevò Mirzai Hamadani",
-    profile_url: "https://github.com/NevoMir.png",
+    profile_url: profileImage,
     headline: "Student @ EPFL\u00A0\u00A0|\u00A0\u00A0Former Intern @ EAI",
     email: "nevo.mirzai@gmail.com",
     links: [
