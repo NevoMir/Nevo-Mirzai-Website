@@ -37,8 +37,6 @@ const MAX_FINALIZE_ATTEMPTS = 3;
 // After a failed copy the next poll waits this long, so a host that is having a moment can recover.
 const RETRY_SAVE_DELAY_MS = 10_000;
 const SUBMIT_GRACE_MS = 2 * 60 * 1000;
-// Used only when the DAILY_GENERATION_LIMIT var is missing or invalid; kept low because credits are scarce.
-const DEFAULT_DAILY_LIMIT = 5;
 const MAX_PROMPT_CHARS = 1000;
 const MAX_PROVIDERS = 5;
 // Wrong access codes tolerated per client per window before it is turned away (see throttleBadCodes).
@@ -52,9 +50,10 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 // ---------- Providers, access, usage ----------
 
-function dailyLimit(env: Env): number {
+/** A positive DAILY_GENERATION_LIMIT caps paid generations per UTC day; unset (or anything else) means no cap. */
+function dailyLimit(env: Env): number | null {
     const parsed = Number.parseInt(env.DAILY_GENERATION_LIMIT ?? "", 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DAILY_LIMIT;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 /** The access code with stray whitespace removed (a value pasted into the dashboard often carries a newline). */
@@ -137,7 +136,10 @@ async function assertAccess(env: Env, request: Request): Promise<void> {
     }
 }
 
-/** Atomically takes `count` slots from today's cap; hands them back and returns false when that goes over. */
+/**
+ * Atomically takes `count` slots from today's cap; hands them back and returns false when that goes over.
+ * Without a cap it only counts (the "used today" figure in the About dialog).
+ */
 async function reserveUsage(env: Env, day: string, count: number): Promise<boolean> {
     const row = await env.DB.prepare(
         `INSERT INTO usage (day, generations) VALUES (?1, ?2)
@@ -146,7 +148,8 @@ async function reserveUsage(env: Env, day: string, count: number): Promise<boole
     )
         .bind(day, count)
         .first<{ generations: number }>();
-    if (!row || row.generations > dailyLimit(env)) {
+    const limit = dailyLimit(env);
+    if (limit !== null && (!row || row.generations > limit)) {
         await refundUsage(env, day, count);
         return false;
     }

@@ -166,7 +166,7 @@ async function main() {
     check("provider info carries label, vendor, parts, approx_seconds",
         providers.json.providers.every((p) => p.label && p.vendor && typeof p.parts === "boolean" && p.approx_seconds > 0));
     check("default_provider is an available provider", providers.json.providers.some((p) => p.id === providers.json.default_provider && p.available));
-    check("daily_limit and used_today are numbers", Number.isInteger(providers.json.daily_limit) && Number.isInteger(providers.json.used_today));
+    check("daily_limit (or null = no cap) and used_today are numbers", (providers.json.daily_limit === null || Number.isInteger(providers.json.daily_limit)) && Number.isInteger(providers.json.used_today));
     const accessRequired = providers.json.access_required;
     note(`access_required=${accessRequired}, daily_limit=${providers.json.daily_limit}, used_today=${providers.json.used_today}`);
     if (accessRequired && !ACCESS_CODE) {

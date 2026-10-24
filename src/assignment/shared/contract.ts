@@ -38,7 +38,7 @@ export interface ProvidersResponse {
     providers: ProviderInfo[];
     default_provider: ProviderId | null; // first available, preferring "tripo-parts"
     access_required: boolean; // POST /generate needs the ACCESS_HEADER
-    daily_limit: number;
+    daily_limit: number | null; // null = no daily cap
     used_today: number;
 }
 

@@ -209,10 +209,10 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         // server would then refuse to fill. The count may be stale (a new day, a refund), so ask again first.
         // The free demo takes no slot (the server only counts paid models).
         const paid = chosen.filter((id) => id !== "mock").length;
-        if (paid > 0 && info.used_today + paid > info.daily_limit) {
+        if (paid > 0 && info.daily_limit !== null && info.used_today + paid > info.daily_limit) {
             await refreshProviders();
             info = useWorkspaceStore.getState().providers ?? info;
-            if (info.used_today + paid > info.daily_limit) {
+            if (info.daily_limit !== null && info.used_today + paid > info.daily_limit) {
                 toast.warning("Daily limit reached", {
                     description: `${info.used_today} of ${info.daily_limit} generations are used today. Try again tomorrow.`,
                     duration: 9000,
@@ -325,7 +325,11 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         [jobs, activeProjectId, providerList, unstoppable],
     );
 
-    const usage = providersInfo ? { used: providersInfo.used_today, limit: providersInfo.daily_limit } : null;
+    // No cap configured: no "N/limit today" hint at all.
+    const usage =
+        providersInfo && providersInfo.daily_limit !== null
+            ? { used: providersInfo.used_today, limit: providersInfo.daily_limit }
+            : null;
     const hasMessages = messages.length > 0;
     // Short on purpose: the box is one line tall, so a long placeholder would be cut off.
     const placeholder = generating

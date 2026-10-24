@@ -25,8 +25,9 @@
     }
   ],
   "vars": {
-    // Hunyuan's free pack is only ~8 runs, so keep a day's cap well below it.
-    "DAILY_GENERATION_LIMIT": "4",
+    // Open to everyone: no access code and no daily cap (set DAILY_GENERATION_LIMIT to a positive number, or the
+    // ACCESS_CODE secret, to bring either back).
+    "ALLOW_OPEN_GENERATION": "1",
     // "Demo (offline)": replays the bundled desk-lamp assembly so the app and its analysis can be tried without
     // spending API credits. Remove to hide it.
     "MOCK_PROVIDER": "1"

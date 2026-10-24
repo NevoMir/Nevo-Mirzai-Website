@@ -26,6 +26,7 @@ import {
 import { Input } from "@/assignment/components/ui/input";
 import { toast } from "@/assignment/components/ui/sonner";
 import { useTheme } from "@/assignment/hooks/useTheme";
+import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 import {
     checkAccess,
     clearAccessCode,
@@ -53,6 +54,8 @@ export function SettingsMenu({ side = "bottom", align = "end", className = "" }:
     const { mode, setMode } = useTheme();
     const [aboutOpen, setAboutOpen] = useState(false);
     const [accessOpen, setAccessOpen] = useState(false);
+    // Only a deployment with an ACCESS_CODE secret asks for one; otherwise the item would just confuse.
+    const accessRequired = useWorkspaceStore((s) => s.providers?.access_required ?? false);
 
     return (
         <>
@@ -98,9 +101,11 @@ export function SettingsMenu({ side = "bottom", align = "end", className = "" }:
                             </DropdownMenuRadioGroup>
                         </DropdownMenuSubContent>
                     </DropdownMenuSub>
-                    <DropdownMenuItem className="gap-2 text-xs" onClick={() => setAccessOpen(true)}>
-                        <KeyRound className="h-3.5 w-3.5" /> Access code
-                    </DropdownMenuItem>
+                    {accessRequired && (
+                        <DropdownMenuItem className="gap-2 text-xs" onClick={() => setAccessOpen(true)}>
+                            <KeyRound className="h-3.5 w-3.5" /> Access code
+                        </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem className="gap-2 text-xs" onClick={() => setAboutOpen(true)}>
                         <Info className="h-3.5 w-3.5" /> About this app
                     </DropdownMenuItem>
@@ -181,7 +186,9 @@ function AboutDialog({ open, onOpenChange }: DialogState) {
                         )}
                         {info && (
                             <p className="mt-2 text-xs text-muted-foreground">
-                                {info.used_today} of {info.daily_limit} generations used today.
+                                {info.daily_limit === null
+                                    ? `${info.used_today} generation${info.used_today === 1 ? "" : "s"} today.`
+                                    : `${info.used_today} of ${info.daily_limit} generations used today.`}
                             </p>
                         )}
                     </div>

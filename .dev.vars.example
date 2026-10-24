@@ -10,7 +10,11 @@ MESHY_API_KEY=
 # Tencent Cloud API key pair: Hunyuan 3D through Tencent's own API (HY 3D Global).
 TENCENTCLOUD_SECRET_ID=
 TENCENTCLOUD_SECRET_KEY=
-# Optional: when set, generating needs this code (sent as the x-access-code header). Leave empty for open access.
+# Optional: when set, generating needs this code (sent as the x-access-code header).
 ACCESS_CODE=
+# Without an ACCESS_CODE, paid models stay switched off unless this is 1 (wrangler.jsonc sets it: open access).
+ALLOW_OPEN_GENERATION=
+# Optional: a positive number caps paid generations per UTC day; unset means no cap.
+DAILY_GENERATION_LIMIT=
 # Set to 1 to enable the offline "Demo" provider, which replays a bundled desk-lamp assembly without any API call.
 MOCK_PROVIDER=
