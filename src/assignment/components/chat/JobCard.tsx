@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Box, Check, Download, Eye, RotateCcw } from "lucide-react";
+import { Blocks, Box, Check, Download, Eye, RotateCcw } from "lucide-react";
 
 import { VerdictLine } from "@/assignment/components/analysis/VerdictBadge";
 import { Markdown } from "@/assignment/components/chat/Markdown";
@@ -7,7 +7,7 @@ import { ElapsedTime } from "@/assignment/components/chat/ElapsedTime";
 import { GenerationProgressBar } from "@/assignment/components/workspace/GenerationProgressBar";
 import { useShownProgress } from "@/assignment/components/workspace/useShownProgress";
 import { Button } from "@/assignment/components/ui/button";
-import { epochOf, formatBytes, modelFileName, partsLabel } from "@/assignment/components/workspace/format";
+import { epochOf, exampleCoverUrl, formatBytes, modelFileName, partsLabel } from "@/assignment/components/workspace/format";
 import { cn } from "@/assignment/lib/utils";
 import type { Job, ModelAsset, ProviderInfo } from "@/assignment/shared/contract";
 import { providerInfo, providerLabel, viaLabel } from "@/assignment/store/providers";
@@ -15,25 +15,34 @@ import { providerInfo, providerLabel, viaLabel } from "@/assignment/store/provid
 const chip = "rounded-full border border-border px-1.5 text-[10px] leading-4 text-muted-foreground";
 const small = "h-7 gap-1.5 px-2.5 text-xs";
 
-/** The model's provider still, or the Box icon when it gave none (or the image fails to load). */
+/**
+ * The model's picture: the provider's still, or for a bundled example its cover. A stabilized version has no image
+ * of its own (it is made in the browser), so it gets a Blocks glyph on a tile tinted like its chip; the Box icon
+ * stands in for everything else (and for an image that fails to load).
+ */
 export function ModelThumb({ model, className }: { model: ModelAsset; className?: string }) {
     const [failed, setFailed] = useState(false);
+    const src = model.thumbnail_url ?? (model.kind === "example" && model.example_slug ? exampleCoverUrl(model.example_slug) : null);
+    const derived = model.kind === "stabilized";
     return (
         <div
             className={cn(
-                "flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/70 bg-muted text-muted-foreground",
+                "flex shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted text-muted-foreground",
+                derived && !src ? "border-accent/40 bg-accent/10 text-accent-hover dark:text-accent" : "border-border/70",
                 className,
             )}
         >
-            {model.thumbnail_url && !failed ? (
+            {src && !failed ? (
                 <img
-                    src={model.thumbnail_url}
+                    src={src}
                     alt=""
                     loading="lazy"
                     draggable={false}
                     onError={() => setFailed(true)}
                     className="h-full w-full object-cover"
                 />
+            ) : derived ? (
+                <Blocks className="h-1/2 w-1/2" strokeWidth={1.5} aria-hidden />
             ) : (
                 <Box className="h-1/2 w-1/2" strokeWidth={1.5} aria-hidden />
             )}

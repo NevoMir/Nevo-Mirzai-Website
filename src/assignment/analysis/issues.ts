@@ -185,7 +185,10 @@ export function buildIssues(structure: Structure, grid: VoxelGrid, settings: Ana
             kind: "too-many-blocks",
             severity: "error",
             title: `Too many components: ${plural(stats.blockCount, "block")}`,
-            detail: `The design uses ${plural(stats.blockCount, "block")} but the budget is ${settings.maxBlocks}: ${plural(over, "block")} over. Raising the fill threshold above ${pct(settings.fillThreshold)} drops the most weakly filled blocks first.`,
+            detail:
+                `The design uses ${plural(stats.blockCount, "block")} but the budget is ${settings.maxBlocks}: ${plural(over, "block")} over. ` +
+                // Every block of an assembly is whole, so no fill threshold drops any of them.
+                (grid.fromAssembly ? "Remove blocks or raise the budget." : `Raising the fill threshold above ${pct(settings.fillThreshold)} drops the most weakly filled blocks first.`),
             blocks: [],
             focusMm: centreOfVolume,
         });

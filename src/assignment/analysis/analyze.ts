@@ -47,6 +47,8 @@ export function analyzeGrid(grid: VoxelGrid, settings: Partial<AnalysisSettings>
         checks,
         stats: structure.stats,
         summary,
+        stress: null, // the second stage: analysis/stress.ts computeStress + applyStress
+        assembly: null, // set by analysis/assembly.ts for a block assembly
         timingsMs: { voxelize: grid.voxelizeMs, analyze: performance.now() - started },
     };
 }

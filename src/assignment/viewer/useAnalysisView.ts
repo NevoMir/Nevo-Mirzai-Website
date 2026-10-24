@@ -9,12 +9,18 @@
  * the blocks swaps the scene and leaves the camera alone, except the very first look at a model's blocks, which
  * frames the whole 1 m volume. When the scene cannot be built (its chunk is gone after a deploy), `buildFailed`
  * says so, so the stage can tell the user instead of quietly showing the plain model.
+ *
+ * The result it is given is the one to show: the workspace picks it (the stabilized model, or the original blocks
+ * on their own for the Compare chip), and a new result replaces the scene in place, so a switch never moves the
+ * camera. The colouring is the view's, resolved against the result (resolveColorBy): Overlay and a preview of the
+ * stabilizer (`previewing`) are role colours, Stress without a stress analysis is status. While previewing, blocks
+ * that were not in the previous result flash once.
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { AnalysisResult, AnalysisViewState } from "@/assignment/analysis/types";
 import type { BlocksScene, BlocksViewPatch } from "./analysisLayer.ts";
 import { planFocus } from "./analysisFocus.ts";
-import { highlightCut, type SceneLabel } from "./analysisGeometry.ts";
+import { appearedBlocks, highlightCut, resolveColorBy, type SceneLabel } from "./analysisGeometry.ts";
 import type { Environment, GlbScene } from "./glbScene.ts";
 import type { OrbitViewer } from "./orbitViewer.ts";
 import { blockTooltip, calloutElement, createLabelLayer, sceneLabelElement, type LabelLayer, type Placement } from "./overlayLabels.ts";
@@ -27,11 +33,21 @@ const PLACEMENT: Record<SceneLabel["kind"], { placement: Placement; offset: numb
     cog: { placement: "right", offset: 16, clamp: true },
     tip: { placement: "right", offset: 8, clamp: true },
     cut: { placement: "left", offset: 8, clamp: true },
+    stress: { placement: "above", offset: 10, clamp: true },
 };
 
 const prefersReducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-const patchOf = (view: AnalysisViewState): BlocksViewPatch => ({ colorBy: view.colorBy, layerMax: view.layerMax, showGhost: view.showGhost, showCog: view.showCog, highlight: view.highlight });
+/** What the stage shows when the view is not set: the block view with everything at its default. */
+const FALLBACK_VIEW: AnalysisViewState = { mode: "blocks", colorBy: "status", layerMax: 99, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
+
+const patchOf = (view: AnalysisViewState, analysis: AnalysisResult, previewing: boolean): BlocksViewPatch => ({
+    colorBy: resolveColorBy(view, analysis, previewing),
+    layerMax: view.layerMax,
+    showGhost: view.showGhost,
+    showCog: view.showCog,
+    highlight: view.highlight,
+});
 
 export interface AnalysisBridgeArgs {
     viewerRef: RefObject<OrbitViewer | null>;
@@ -47,8 +63,18 @@ export interface AnalysisBridgeArgs {
     modelEpoch: number;
     url: string | null;
     theme: ViewTheme;
+    /** The result to draw (the workspace chooses between the stabilized model and the original blocks, or a preview of the stabilizer). */
     analysis: AnalysisResult | null | undefined;
     view: AnalysisViewState | undefined;
+    /** `analysis` is a preview the stabilizer streams: drawn in role colours, with the blocks each step adds flashing once. */
+    previewing?: boolean;
+    /**
+     * The model on stage is itself a block assembly (a stabilized model): its own cubes are the lattice the blocks are drawn on,
+     * so the "original model" ghost would only lay a translucent shell over every block. No ghost is built for it.
+     */
+    noGhost?: boolean;
+    /** Steps of earlier stabilizer runs the model carries, so a block tooltip numbers the run on screen from 1 (see addedWhen). */
+    stepOffset?: number;
     onBlockHover?: (index: number | null) => void;
     onBlockClick?: (index: number | null) => void;
 }
@@ -75,6 +101,8 @@ export interface AnalysisBridge {
 
 export function useAnalysisView(args: AnalysisBridgeArgs): AnalysisBridge {
     const { viewerRef, sceneRef, envRef, labelsHostRef, stageRef, ready, viewerEpoch, modelEpoch, url, theme, analysis, view } = args;
+    // What the blocks are painted with: the view's colouring, made to fit the result (see resolveColorBy).
+    const colorBy = view && analysis ? resolveColorBy(view, analysis, !!args.previewing) : "status";
     const blocksRef = useRef<BlocksScene | null>(null);
     const labelsRef = useRef<LabelLayer | null>(null);
     const activeRef = useRef(false);
@@ -206,16 +234,19 @@ export function useAnalysisView(args: AnalysisBridgeArgs): AnalysisBridge {
             .then((layer) => {
                 if (cancelled || viewerRef.current !== viewer || sceneRef.current !== glb || viewer.contextLost()) return;
                 const now = latest.current;
+                const previous = blocksRef.current;
                 const built = layer.createBlocksScene({
                     analysis,
-                    view: patchOf(now.view ?? { mode: "blocks", colorBy: "status", layerMax: 99, showGhost: false, showCog: true, highlight: [], focus: null }),
+                    view: patchOf(now.view ?? FALLBACK_VIEW, analysis, !!now.previewing),
                     theme: now.theme,
                     environment: envRef.current?.texture ?? null,
-                    ghost: glb.ghostSources(),
+                    ghost: now.noGhost ? [] : glb.ghostSources(),
+                    stepOffset: now.stepOffset,
                     onChange: () => viewerRef.current?.requestFrame(),
                     reducedMotion: prefersReducedMotion(),
+                    // The blocks a step of the stabilizer added show once, against the result on stage before it.
+                    fresh: now.previewing && previous ? appearedBlocks(previous.analysis.blocks, analysis.blocks) : undefined,
                 });
-                const previous = blocksRef.current;
                 blocksRef.current = built;
                 // Swapped in place when the old analysis was the one on stage: no flash of the model between them.
                 if (previous && viewer.scene() === previous) viewer.setScene(built);
@@ -282,7 +313,7 @@ export function useAnalysisView(args: AnalysisBridgeArgs): AnalysisBridge {
         for (const label of blocks.labels()) {
             keep.add(label.id);
             const place = PLACEMENT[label.kind];
-            layer.set(label.id, { anchor: label.anchor, key: `${label.kind}|${label.text}|${label.sub ?? ""}|${label.tone}`, el: () => sceneLabelElement(label), ...place });
+            layer.set(label.id, { anchor: label.anchor, key: `${label.kind}|${label.text}|${label.sub ?? ""}|${label.tone}|${label.color ?? ""}`, el: () => sceneLabelElement(label), ...place });
         }
         layer.retain(keep);
     }, []);
@@ -292,10 +323,11 @@ export function useAnalysisView(args: AnalysisBridgeArgs): AnalysisBridge {
         const now = latest.current;
         if (!blocks || !now.view) return;
         blocks.setTheme(now.theme);
-        if (blocks.setView(patchOf(now.view))) kick();
+        // A scene born with blocks to flash needs its frames too, though its look did not change.
+        if (blocks.setView(patchOf(now.view, blocks.analysis, !!now.previewing)) || blocks.flashing()) kick();
         syncLabels();
         viewerRef.current?.requestFrame();
-    }, [blocksEpoch, active, theme, view?.colorBy, view?.layerMax, view?.showGhost, view?.showCog, highlightKey, kick, syncLabels, viewerRef]);
+    }, [blocksEpoch, active, theme, colorBy, view?.layerMax, view?.showGhost, view?.showCog, highlightKey, kick, syncLabels, viewerRef]);
 
     // ---- an issue was picked: fly to it and point at it (the rules are in analysisFocus) ----
     useEffect(() => {

@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { RotateCcw, SlidersHorizontal } from "lucide-react";
 
-import { Section } from "@/assignment/components/analysis/atoms";
+import { Section, Segmented } from "@/assignment/components/analysis/atoms";
+import { MATERIAL_FACTS } from "@/assignment/components/analysis/stressText";
 import { Slider } from "@/assignment/components/ui/slider";
 import { cn } from "@/assignment/lib/utils";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { DEFAULT_ANALYSIS_SETTINGS } from "@/assignment/analysis/types";
+import { MATERIAL_IDS, type MaterialId } from "@/assignment/shared/contract";
 import { BUDGET_RANGE, FILL_RANGE, LIMIT_RANGE, sameSettings } from "@/assignment/store/analysisLogic";
+
+const MATERIAL_OPTIONS = MATERIAL_IDS.map((id) => ({ value: id, label: MATERIAL_FACTS[id].label }));
 
 // The native spinner arrows would sit on top of the digits in a box this narrow.
 const fieldClass =
@@ -16,7 +20,7 @@ const fieldClass =
  * A whole-number box that applies every valid value as it is typed and puts the stored value back on blur.
  * `null` (an empty box) is a value only when `nullable`.
  */
-function NumberField({
+export function NumberField({
     id,
     value,
     min,
@@ -136,6 +140,20 @@ export function SettingsSection() {
                         placeholder="No limit"
                         onCommit={(value) => update({ maxBlocks: value })}
                     />
+                </div>
+
+                <div>
+                    <p className="mb-1.5 text-xs font-medium text-foreground">Material</p>
+                    <Segmented<MaterialId>
+                        label="Material"
+                        value={settings.material}
+                        options={MATERIAL_OPTIONS}
+                        onChange={(material) => update({ material })}
+                    />
+                    <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground" data-testid="material-detail">
+                        {MATERIAL_FACTS[settings.material].detail}. What the blocks are made of decides how much stress a joint takes; it changes the stress
+                        estimate, not which blocks there are.
+                    </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-3">

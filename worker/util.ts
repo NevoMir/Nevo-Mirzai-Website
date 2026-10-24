@@ -159,6 +159,14 @@ export function errorSummary(err: unknown): string {
     return "unknown error";
 }
 
+/**
+ * D1 says a column or table is missing: the code is newer than the database, i.e. a migration has not been applied yet
+ * (deploy order: `npx wrangler d1 migrations apply assignment-alex --remote` first, then the Worker).
+ */
+export function isSchemaMismatch(err: unknown): boolean {
+    return err instanceof Error && /no such (column|table)|has no column named/i.test(err.message);
+}
+
 /** The image type a byte string really is (PNG, JPEG or WebP), or null. Never trust a header alone. */
 export function sniffImageType(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/webp" | null {
     if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";

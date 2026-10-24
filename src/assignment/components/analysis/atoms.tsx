@@ -107,39 +107,62 @@ export function ToggleRow({
     );
 }
 
-/** A row of mutually exclusive options (radio semantics) in one rounded track. */
+/** One choice of a Segmented control. A disabled one stays focusable and says why in its tooltip. */
+export interface SegmentedOption<T extends string> {
+    value: T;
+    label: string;
+    icon?: LucideIcon;
+    /** Cannot be picked (the title says why). */
+    disabled?: boolean;
+    title?: string;
+}
+
+/** A row of mutually exclusive options (radio semantics) in one rounded track; `columns` wraps a long list into rows. */
 export function Segmented<T extends string>({
     label,
     value,
     options,
     onChange,
+    columns,
+    disabled = false,
 }: {
     label: string;
     value: T;
-    options: readonly { value: T; label: string; icon?: LucideIcon }[];
+    options: readonly SegmentedOption<T>[];
     onChange: (value: T) => void;
+    /** Options per row (default: all in one row). */
+    columns?: number;
+    /** The whole control is off (the colour is forced by something else). */
+    disabled?: boolean;
 }) {
-    // Radio-group keys: the arrows move the choice (and focus) to the neighbour, the way a native group does.
+    // Radio-group keys: the arrows move the choice (and focus) to the neighbour that can be picked, the way a native group does.
     const move = (event: KeyboardEvent<HTMLDivElement>) => {
         const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
-        if (step === 0) return;
+        if (step === 0 || disabled) return;
         event.preventDefault();
-        const index = options.findIndex((option) => option.value === value);
-        const next = options[(index + step + options.length) % options.length];
+        let at = options.findIndex((option) => option.value === value);
+        for (let tries = 0; tries < options.length; tries++) {
+            at = (at + step + options.length) % options.length;
+            if (!options[at].disabled) break;
+        }
+        const next = options[at];
+        if (next.disabled) return;
         onChange(next.value);
         const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-        buttons[options.indexOf(next)]?.focus();
+        buttons[at]?.focus();
     };
     return (
         <div
             role="radiogroup"
             aria-label={label}
+            aria-disabled={disabled || undefined}
             onKeyDown={move}
-            className="grid gap-0.5 rounded-lg bg-muted p-0.5"
-            style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+            className={cn("grid gap-0.5 rounded-lg bg-muted p-0.5", disabled && "opacity-70")}
+            style={{ gridTemplateColumns: `repeat(${Math.min(columns ?? options.length, options.length)}, minmax(0, 1fr))` }}
         >
             {options.map((option) => {
                 const on = option.value === value;
+                const off = disabled || option.disabled === true;
                 const Icon = option.icon;
                 return (
                     <button
@@ -147,13 +170,19 @@ export function Segmented<T extends string>({
                         type="button"
                         role="radio"
                         aria-checked={on}
+                        aria-disabled={off || undefined}
+                        title={option.title}
                         tabIndex={on ? 0 : -1}
-                        onClick={() => onChange(option.value)}
+                        onClick={() => {
+                            if (!off) onChange(option.value);
+                        }}
                         className={cn(
                             "flex items-center justify-center gap-1 rounded-md px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             on
                                 ? "bg-background font-medium text-foreground shadow-sm"
-                                : "text-muted-foreground hover:text-foreground",
+                                : off
+                                  ? "cursor-not-allowed text-muted-foreground/50"
+                                  : "text-muted-foreground hover:text-foreground",
                         )}
                     >
                         {Icon && <Icon className="h-3 w-3" aria-hidden />}

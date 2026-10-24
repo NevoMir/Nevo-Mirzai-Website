@@ -2,6 +2,7 @@
 // normalizeSettings so the rest of the engine can rely on finite, in-range numbers.
 
 import { DEFAULT_ANALYSIS_SETTINGS } from "./types.ts";
+import { MATERIAL_IDS } from "../shared/contract.ts";
 import type { AnalysisSettings } from "./types.ts";
 
 /**
@@ -29,6 +30,7 @@ export function normalizeSettings(input: Partial<AnalysisSettings> = {}): Analys
         fillThreshold: Math.min(1, Math.max(0, threshold)),
         cantileverLimit: Math.min(MAX_CANTILEVER_LIMIT, Math.max(1, limit)),
         maxBlocks,
+        material: MATERIAL_IDS.includes(input.material as never) ? (input.material as AnalysisSettings["material"]) : d.material,
     };
 }
 

@@ -33,7 +33,7 @@ import { assertGridSize } from "./settings.ts";
 export const SUBDIVISION = 12;
 export const CELLS_PER_BLOCK = SUBDIVISION * SUBDIVISION * SUBDIVISION;
 
-export type AnalysisStage = "voxelize" | "flood" | "analyze";
+export type AnalysisStage = "voxelize" | "flood" | "analyze" | "stress";
 /** `fraction` is overall progress, 0-1. */
 export type ProgressFn = (fraction: number, stage: AnalysisStage) => void;
 
@@ -50,6 +50,11 @@ export interface VoxelGrid {
     surfaceCells: number; // fine cells touched by a triangle (diagnostics)
     triangles: { total: number; used: number; skipped: number };
     voxelizeMs: number;
+    /**
+     * Set by gridFromAssembly: the cells are exact blocks of a block assembly, not the voxelisation of a mesh. Every block is
+     * then whole (nothing is "weakly filled"), so advice about the fill threshold does not apply.
+     */
+    fromAssembly?: boolean;
 }
 
 const OUTSIDE = 2;

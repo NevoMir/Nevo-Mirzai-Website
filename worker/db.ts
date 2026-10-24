@@ -6,18 +6,21 @@ import { API_BASE } from "../src/assignment/shared/contract.ts";
 import type {
     AnalysisSummary,
     BulkAction,
+    DerivedMeta,
     HubProject,
     HubTag,
     Job,
     JobStatus,
     ModelAsset,
+    ModelKind,
+    ModelProvider,
     ProjectData,
     ProjectDetail,
     ProviderId,
 } from "../src/assignment/shared/contract.ts";
 import { readStoredAnalysis } from "./analysis.ts";
 import type { Env } from "./providers/types.ts";
-import { DEFAULT_PROJECT_NAME, HttpError, errorSummary, nowIso } from "./util.ts";
+import { DEFAULT_PROJECT_NAME, HttpError, errorSummary, isRecord, nowIso } from "./util.ts";
 
 const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_PROJECTS = 500;
@@ -58,6 +61,11 @@ export interface ModelRow {
     part_count: number | null;
     created_at: string;
     analysis: string | null; // AnalysisSummary as JSON
+    kind: string; // ModelKind
+    source_model_id: string | null;
+    example_slug: string | null;
+    assembly_hash: string | null;
+    meta: string | null; // DerivedMeta as JSON (kind 'stabilized')
 }
 
 export interface JobRow {
@@ -86,12 +94,36 @@ const PROJECT_COLS =
     "p.thumbnail_version, (SELECT COUNT(*) FROM models m WHERE m.project_id = p.id) AS model_count";
 const TAG_COLS = "id, name, icon, color, created_at";
 export const MODEL_COLS =
-    "id, project_id, job_id, provider, prompt, glb_key, thumb_key, size_bytes, part_count, created_at, analysis";
+    "id, project_id, job_id, provider, prompt, glb_key, thumb_key, size_bytes, part_count, created_at, analysis, " +
+    "kind, source_model_id, example_slug, assembly_hash, meta";
+
+/** glb_key of a model whose file ships with the site (a bundled example), shared by every project made from it. */
+export const STATIC_KEY_PREFIX = "static:";
+export const isStaticKey = (key: string): boolean => key.startsWith(STATIC_KEY_PREFIX);
 export const JOB_COLS =
     "id, project_id, provider, via, prompt, status, progress, stage, error, provider_task_id, provider_state, " +
     "created_at, updated_at, polled_at, finished_at, model_id, poll_errors, finalize_attempts";
 
 // ---------- Mapping ----------
+
+/**
+ * A stored stabilizer log. This is the read path of every project (up to 20 logs of up to 32 KB each), so it parses and
+ * checks the shape only: both writers (worker/derived.ts and worker/examples.ts) store what checkDerivedMeta rebuilt, field
+ * by field, and nothing else writes the column. Running the full validation on each read cost about 0.2 ms a log, which is
+ * a visible share of a Workers Free request (10 ms of CPU) when a project is full of them.
+ */
+export function readStoredDerivedMeta(raw: string | null): DerivedMeta | null {
+    if (!raw) return null;
+    try {
+        const value: unknown = JSON.parse(raw);
+        if (isRecord(value) && value.version === 1 && Array.isArray(value.steps) && isRecord(value.after_summary) && typeof value.assembly_hash === "string") {
+            return value as unknown as DerivedMeta;
+        }
+    } catch {
+        // damaged: the model then shows no log
+    }
+    return null;
+}
 
 export function toHubProject(row: ProjectRow, tagIds: string[]): HubProject {
     return {
@@ -119,14 +151,19 @@ export function toModelAsset(row: ModelRow): ModelAsset {
         id: row.id,
         project_id: row.project_id,
         job_id: row.job_id,
-        provider: row.provider as ProviderId,
+        provider: row.provider as ModelProvider,
         prompt: row.prompt,
-        glb_url: `${API_BASE}/files/models/${row.id}.glb`,
-        thumbnail_url: row.thumb_key ? `${API_BASE}/files/${row.thumb_key}` : null,
+        // An example's file is a static asset of the site (key "static:/assignment_alex/examples/<slug>/original.glb").
+        glb_url: isStaticKey(row.glb_key) ? row.glb_key.slice(STATIC_KEY_PREFIX.length) : `${API_BASE}/files/models/${row.id}.glb`,
+        thumbnail_url: row.thumb_key ? (row.thumb_key.startsWith("/") ? row.thumb_key : `${API_BASE}/files/${row.thumb_key}`) : null,
         size_bytes: row.size_bytes,
         part_count: row.part_count,
         created_at: row.created_at,
         analysis: readStoredAnalysis(row.analysis),
+        kind: (row.kind as ModelKind) ?? "generated",
+        source_model_id: row.source_model_id,
+        example_slug: row.example_slug,
+        derived: row.kind === "stabilized" ? readStoredDerivedMeta(row.meta) : null,
     };
 }
 
@@ -395,8 +432,8 @@ export async function purgeProjects(env: Env, ids: string[]): Promise<number> {
     // lookup and this batch wins: the project is left alone instead of being deleted under the user.
     const trashed = "(SELECT id FROM projects WHERE deleted_at IS NOT NULL AND id IN (SELECT value FROM json_each(?1)))";
     const keys = await env.DB.prepare(
-        `SELECT glb_key AS k FROM models WHERE project_id IN ${trashed}
-         UNION SELECT thumb_key FROM models WHERE thumb_key IS NOT NULL AND project_id IN ${trashed}
+        `SELECT glb_key AS k FROM models WHERE glb_key NOT LIKE 'static:%' AND project_id IN ${trashed}
+         UNION SELECT thumb_key FROM models WHERE thumb_key IS NOT NULL AND thumb_key NOT LIKE '/%' AND project_id IN ${trashed}
          UNION SELECT thumbnail_key FROM projects WHERE thumbnail_key IS NOT NULL AND id IN ${trashed}`,
     )
         .bind(idList)
@@ -410,7 +447,9 @@ export async function purgeProjects(env: Env, ids: string[]): Promise<number> {
         ),
     ]);
     // Files go after the rows: a failed R2 delete leaves an orphan object, never a dangling row.
-    const fileKeys = keys.results.map((r) => r.k).filter(Boolean);
+    // The SQL above already leaves out "static:" keys (files shipped with the site, shared by every project made from an
+    // example); the filter is the second lock on the one door that deletes from R2.
+    const fileKeys = keys.results.map((r) => r.k).filter((k) => Boolean(k) && !isStaticKey(k));
     for (let i = 0; i < fileKeys.length; i += 500) {
         await env.FILES.delete(fileKeys.slice(i, i + 500)).catch(() => {});
     }

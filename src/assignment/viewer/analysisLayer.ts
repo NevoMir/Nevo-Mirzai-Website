@@ -23,6 +23,7 @@ import {
     cellTriangles,
     cutActive,
     describeBlock,
+    describeStress,
     DIM_EDGE_OPACITY,
     DIM_OPACITY,
     dimColor,
@@ -72,8 +73,12 @@ export interface BlocksSceneOptions {
     ghost?: readonly GhostSource[];
     /** The scene changed after the fact: render a frame. */
     onChange?: () => void;
-    /** No pulse on the highlighted blocks. */
+    /** No pulse on the highlighted blocks, no flash on the fresh ones. */
     reducedMotion?: boolean;
+    /** Blocks (indices of analysis.blocks) that have just appeared, as the stabilizer's preview adds them: they flash once. */
+    fresh?: readonly number[];
+    /** Steps of earlier stabilizer runs the model carries: a tooltip numbers the steps of the run on screen from 1 (see addedWhen). */
+    stepOffset?: number;
 }
 
 export interface BlocksScene extends ViewerScene {
@@ -97,8 +102,10 @@ export interface BlocksScene extends ViewerScene {
     toWorld(mm: Vec3): Vec3;
     /** The scene's own labels with world anchors (dimensions, COG, tip direction, layer cut). */
     labels(): SceneLabel[];
-    /** Advances the highlight pulse; true while it needs more frames. */
+    /** Advances the highlight pulse and the flash of fresh blocks; true while it needs more frames. */
     animate(now: number): boolean;
+    /** Fresh blocks are flashing or about to: the host must run frames for them. */
+    flashing(): boolean;
     dispose(): void;
 }
 
@@ -110,6 +117,9 @@ const HALO_OPACITY = 0.9;
 const GHOST_OPACITY = 0.15;
 const PULSE_MS = 1800;
 const PULSE_PERIOD_MS = 600;
+/** The flash of freshly added blocks: one fade, not a loop. */
+const FRESH_MS = 1300;
+const FRESH_SCALE = 1.09;
 /** Drawn after everything, without the depth test: how the COG and the support base show through blocks. */
 const XRAY_ORDER = 20;
 const EDGE_VERTICES = 24;
@@ -366,6 +376,15 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     halo.renderOrder = -2;
     instanced.push(halo);
 
+    // The flash of freshly added blocks: a ring a little further out than the highlight's, fading once.
+    const freshMaterial = paint(new THREE.MeshBasicMaterial({ side: THREE.BackSide, transparent: true, opacity: 0, depthWrite: false }), "fresh");
+    const freshHalo = new THREE.InstancedMesh(unit, freshMaterial, Math.max(1, count));
+    freshHalo.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    freshHalo.count = 0;
+    freshHalo.frustumCulled = false;
+    freshHalo.renderOrder = -2;
+    instanced.push(freshHalo);
+
     const edgeLines = (opacity: number, order: number) => {
         const g = geo(new THREE.BufferGeometry());
         const attribute = new THREE.BufferAttribute(new Float32Array(Math.max(1, count) * EDGE_VERTICES * 3), 3);
@@ -383,7 +402,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     const blocksGroup = new THREE.Group();
     blocksGroup.name = "blocks:blocks";
     root.add(blocksGroup);
-    blocksGroup.add(dimmed, dimmedEdges, halo, active, activeEdges);
+    blocksGroup.add(dimmed, dimmedEdges, halo, freshHalo, active, activeEdges);
 
     // The layer cut: the top faces of the last shown layer, outlined and faintly filled.
     const cells = Math.max(1, analysis.gridSize[0] * analysis.gridSize[1]);
@@ -410,7 +429,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     const hexes: string[] = new Array<string>(count).fill("#94a3b8");
     const swatch = new THREE.Color();
     const recolor = () => {
-        const ctx = { theme, limit, layers };
+        const ctx = { theme, limit, layers, stress: analysis.stress?.byBlock ?? null };
         for (let i = 0; i < count; i += 1) {
             const hex = blockColor(blocks[i], view.colorBy, ctx);
             hexes[i] = hex;
@@ -432,6 +451,9 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     let emphasised: ReadonlySet<number> | null = null; // the highlighted blocks that are shown
     let pulseStart = -1;
     let pulsing = false;
+    let freshStart = -1;
+    const freshSet = new Set<number>((options.fresh ?? []).filter((i) => Number.isInteger(i) && i >= 0 && i < count));
+    let flash = !reduced && freshSet.size > 0;
 
     const writeBox = (array: Float32Array, slot: number, b: Block, size: number) => {
         const o = slot * 16;
@@ -469,14 +491,17 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         const haloMatrices = halo.instanceMatrix.array as Float32Array;
         const activeEdge = activeEdges.geometry.getAttribute("position").array as Float32Array;
         const dimEdge = dimmedEdges.geometry.getAttribute("position").array as Float32Array;
+        const freshMatrices = freshHalo.instanceMatrix.array as Float32Array;
         let nActive = 0;
         let nDim = 0;
         let nHalo = 0;
+        let nFresh = 0;
         for (let i = 0; i < count; i += 1) {
             const b = blocks[i];
             if (b.cell[2] > view.layerMax) continue;
             shownIndices[shownCount++] = i;
             shownSet.add(i);
+            if (flash && freshSet.has(i)) writeBox(freshMatrices, nFresh++, b, cell * FRESH_SCALE);
             if (!focused || highlighted.has(i)) {
                 writeBox(activeMatrices, nActive, b, size);
                 activeColors[nActive * 3] = rgb[i * 3];
@@ -497,6 +522,8 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         active.count = nActive;
         dimmed.count = nDim;
         halo.count = nHalo;
+        freshHalo.count = nFresh;
+        freshHalo.instanceMatrix.needsUpdate = true;
         for (const mesh of [active, dimmed]) {
             mesh.instanceMatrix.needsUpdate = true;
             mesh.instanceColor!.needsUpdate = true;
@@ -556,6 +583,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     rebuildBlocks();
     rebuildSection();
     if (view.highlight.length) pulsing = !reduced;
+    if (flash) freshMaterial.opacity = 0.95;
 
     const labelCache = { key: "", labels: [] as SceneLabel[] };
     const hover = { index: -1 };
@@ -628,7 +656,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         },
 
         isShown: (index) => shownSet.has(index),
-        info: (index) => (index >= 0 && index < count ? describeBlock(blocks[index], analysis.settings) : null),
+        info: (index) => (index >= 0 && index < count ? describeBlock(blocks[index], analysis.settings, describeStress(analysis, index), options.stepOffset ?? 0) : null),
         colorOf: (index) => hexes[index] ?? "#94a3b8",
         anchorOf(index) {
             const b = blocks[index];
@@ -647,7 +675,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         },
 
         labels() {
-            const key = `${view.showCog}|${view.layerMax}`;
+            const key = `${view.showCog}|${view.layerMax}|${view.colorBy}`;
             if (labelCache.key !== key) {
                 labelCache.key = key;
                 labelCache.labels = sceneLabels(analysis, view).map((label) => ({ ...label, anchor: toWorld(label.anchor) }));
@@ -656,17 +684,36 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         },
 
         animate(now) {
-            if (!pulsing) return false;
-            if (pulseStart < 0) pulseStart = now;
-            const t = now - pulseStart;
-            if (t >= PULSE_MS) {
-                pulsing = false;
-                haloMaterial.opacity = HALO_OPACITY;
-                return false;
+            let more = false;
+            if (pulsing) {
+                if (pulseStart < 0) pulseStart = now;
+                const t = now - pulseStart;
+                if (t >= PULSE_MS) {
+                    pulsing = false;
+                    haloMaterial.opacity = HALO_OPACITY;
+                } else {
+                    haloMaterial.opacity = 0.4 + 0.55 * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / PULSE_PERIOD_MS));
+                    more = true;
+                }
             }
-            haloMaterial.opacity = 0.4 + 0.55 * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / PULSE_PERIOD_MS));
-            return true;
+            if (flash) {
+                if (freshStart < 0) freshStart = now;
+                const t = now - freshStart;
+                if (t >= FRESH_MS) {
+                    // Done: the ring comes off, and does not come back with a layer cut.
+                    flash = false;
+                    freshMaterial.opacity = 0;
+                    freshHalo.count = 0;
+                } else {
+                    const left = 1 - t / FRESH_MS;
+                    freshMaterial.opacity = 0.95 * left * left;
+                    more = true;
+                }
+            }
+            return more;
         },
+
+        flashing: () => flash,
 
         dispose() {
             for (const mesh of instanced) mesh.dispose();
@@ -679,6 +726,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
             ghost.clear();
             scene.clear();
             reduced = true;
+            flash = false;
         },
     };
     return handle;

@@ -19,6 +19,8 @@ import {
     type ProjectPatch,
     type TagPatch,
 } from "./db.ts";
+import { createDerivedModel, deleteDerivedModel } from "./derived.ts";
+import { createProjectFromExample, listExamples } from "./examples.ts";
 import { putThumbnail, serveFile } from "./files.ts";
 import { advanceJob, cancelJob, checkAccessCode, getProvidersResponse, startGeneration } from "./jobs.ts";
 import type { Env } from "./providers/types.ts";
@@ -26,6 +28,7 @@ import {
     HttpError,
     errorSummary,
     isRecord,
+    isSchemaMismatch,
     isUuid,
     json,
     jsonError,
@@ -44,6 +47,12 @@ export async function handleApi(request: Request, env: Env, ctx: ExecutionContex
         return await route(request, env, ctx);
     } catch (err) {
         if (err instanceof HttpError) return jsonError(err.status, err.message, err.headers);
+        // The Worker is newer than its database: say so in the log (with the fix) and tell the visitor to retry soon,
+        // instead of an anonymous 500 on every project.
+        if (isSchemaMismatch(err)) {
+            console.error(`database schema is out of date, apply the migrations (npx wrangler d1 migrations apply assignment-alex --remote): ${errorSummary(err)}`);
+            return jsonError(503, "The server is being updated. Please try again in a few minutes.", { "Retry-After": "60" });
+        }
         // Never echo internals (stack traces, SQL, vendor bodies) to the client.
         console.error(`unhandled error: ${errorSummary(err)}`);
         return jsonError(500, "Something went wrong on the server. Please try again.");
@@ -87,9 +96,23 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
             return json({ job: await cancelJob(env, request, a) });
 
         case "models": {
+            if (!a) break;
+            // DELETE /models/:id: a stabilized version only.
+            if (segments.length === 2) {
+                if (method !== "DELETE") methodNotAllowed("DELETE");
+                await deleteDerivedModel(env, a);
+                return json({ ok: true });
+            }
+            if (segments.length !== 3) break;
+            // POST /models/:sourceId/derived: store a stabilized version (raw GLB body, see worker/derived.ts).
+            if (b === "derived") {
+                if (method !== "POST") methodNotAllowed("POST");
+                const { status, model } = await createDerivedModel(env, request, a);
+                return json({ model }, status);
+            }
             // PUT /models/:id/analysis. Open like the rest of the API except generation: it costs nothing and only
             // overwrites derived data. A malformed id or summary is a 400, a well-formed unknown id a 404.
-            if (!a || segments.length !== 3 || b !== "analysis") break;
+            if (b !== "analysis") break;
             if (method !== "PUT") methodNotAllowed("PUT");
             const id = requireUuid(a, "model id");
             const summary = parseAnalysisSummary(await readJsonObject(request, ANALYSIS_BODY_LIMIT));
@@ -97,6 +120,15 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
             if (!model) throw new HttpError(404, "Model not found");
             return json({ model });
         }
+
+        case "examples":
+            if (segments.length !== 1) break;
+            if (method !== "GET") methodNotAllowed("GET", "HEAD");
+            // The list changes only with a deploy. An empty one is not cached: it is a deploy in progress, not an answer.
+            {
+                const list = await listExamples(env);
+                return json(list, 200, list.examples.length > 0 ? { "Cache-Control": "public, max-age=300" } : undefined);
+            }
 
         case "files":
             if (!a || !b || segments.length !== 3) break;
@@ -138,6 +170,13 @@ async function projectRoutes(
             throw new HttpError(400, `action must be one of ${BULK_ACTIONS.join(", ")}`);
         }
         return json({ count: await bulkProjects(env, ids, action as BulkAction) });
+    }
+    // POST /projects/from-example: a project that holds a bundled example (worker/examples.ts).
+    if (count === 2 && a === "from-example") {
+        if (method !== "POST") methodNotAllowed("POST");
+        const body = await readJsonObject(request);
+        const tagId = body.tag_id === undefined || body.tag_id === null ? undefined : requireUuid(body.tag_id, "tag id");
+        return json({ project: await createProjectFromExample(env, body.slug, tagId) }, 201);
     }
     if (count === 2 && a === "tags") {
         if (method !== "POST") methodNotAllowed("POST");
@@ -191,6 +230,7 @@ function parseProjectPatch(body: Record<string, unknown>): ProjectPatch {
 const MAX_MESSAGES = 500;
 const MAX_MESSAGE_CHARS = 4000;
 const MAX_MESSAGE_JOBS = 10;
+const MAX_MESSAGE_MODELS = 10;
 
 /** Checks the workspace data and rebuilds it field by field, so nothing unexpected is stored or served back. */
 function parseProjectData(value: unknown): ProjectData {
@@ -209,7 +249,7 @@ function parseProjectData(value: unknown): ProjectData {
 function parseChatMessage(value: unknown, index: number): ChatMessage {
     const bad = (why: string) => new HttpError(400, `data.messages[${index}] ${why}`);
     if (!isRecord(value)) throw bad("must be an object");
-    const { id, role, content, timestamp, job_ids } = value;
+    const { id, role, content, timestamp, job_ids, model_ids } = value;
     if (typeof id !== "string" || id.length < 1 || id.length > 64) throw bad("needs an id of 1 to 64 characters");
     if (role !== "user" && role !== "assistant") throw bad('needs a role of "user" or "assistant"');
     if (typeof content !== "string" || content.length > MAX_MESSAGE_CHARS) {
@@ -222,6 +262,12 @@ function parseChatMessage(value: unknown, index: number): ChatMessage {
             throw bad("has invalid job_ids");
         }
         message.job_ids = job_ids;
+    }
+    if (model_ids !== undefined) {
+        if (!Array.isArray(model_ids) || model_ids.length > MAX_MESSAGE_MODELS || !model_ids.every(isUuid)) {
+            throw bad("has invalid model_ids");
+        }
+        message.model_ids = model_ids;
     }
     return message;
 }

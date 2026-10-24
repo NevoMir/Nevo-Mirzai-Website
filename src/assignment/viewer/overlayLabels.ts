@@ -203,6 +203,9 @@ export function blockTooltip(info: BlockInfo, color: string): HTMLElement {
     text.append(make("span", "font-medium", info.statusLabel), document.createTextNode(` · ${info.detail}`));
     status.append(swatch, text);
     el.append(head, status);
+    // What the stabilizer made this block for, and how hard its joint works: the lines the colour modes Role and Stress answer.
+    if (info.added) el.append(make("div", "mt-0.5 text-muted-foreground", info.added));
+    if (info.stress) el.append(make("div", info.stress.utilisation === null ? "mt-0.5 text-muted-foreground" : "mt-0.5 font-medium", info.stress.text));
     return el;
 }
 
@@ -210,6 +213,14 @@ export function blockTooltip(info: BlockInfo, color: string): HTMLElement {
 export function sceneLabelElement(label: SceneLabel): HTMLElement {
     if (label.kind === "dimension") return make("div", "rounded bg-background/80 px-1 py-px font-mono text-[10px] tabular-nums text-muted-foreground backdrop-blur-sm", label.text);
     if (label.kind === "tip") return make("div", "rounded-md bg-red-600 px-2 py-0.5 text-[11px] font-medium text-white shadow", label.text);
+    if (label.kind === "stress") {
+        // A pin: the rank and the peak, with a dot in the point's stress colour. Dark on both stages, so the number reads against any block.
+        const el = make("div", "flex items-center gap-1.5 rounded-full border border-white/70 bg-foreground px-2 py-0.5 text-[11px] font-semibold tabular-nums text-background shadow-md");
+        const dot = make("span", "inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/70");
+        if (label.color) dot.style.background = label.color;
+        el.append(dot, document.createTextNode(label.text));
+        return el;
+    }
     if (label.kind === "cut") {
         const el = make("div", "rounded-md bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground shadow");
         el.append(document.createTextNode(label.text));

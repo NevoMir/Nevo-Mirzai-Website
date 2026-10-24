@@ -70,7 +70,7 @@ export function VerdictHeader({ result, verdict }: { result: AnalysisResult; ver
                         <span className="font-medium">Custom settings:</span> {verdict.custom}
                         <span className="text-muted-foreground">
                             {" "}
-                            (default: limit {DEFAULT_ANALYSIS_SETTINGS.cantileverLimit}, fill {Math.round(DEFAULT_ANALYSIS_SETTINGS.fillThreshold * 100)}%)
+                            (default: limit {DEFAULT_ANALYSIS_SETTINGS.cantileverLimit}, fill {Math.round(DEFAULT_ANALYSIS_SETTINGS.fillThreshold * 100)}%, {DEFAULT_ANALYSIS_SETTINGS.material})
                         </span>
                     </span>
                     <button

@@ -4,16 +4,19 @@
 
 import {
     DEFAULT_ANALYSIS_SETTINGS,
+    type AnalysisColorBy,
     type AnalysisResult,
     type AnalysisSettings,
     type Block,
     type CheckKey,
     type CheckRow,
+    type CompareMode,
     type Issue,
     type IssueKind,
+    type StressAnalysis,
     type Vec3,
 } from "@/assignment/analysis/types";
-import type { AnalysisSummary } from "@/assignment/shared/contract";
+import { MATERIAL_IDS, type AnalysisSummary, type MaterialId, type StressSummary } from "@/assignment/shared/contract";
 
 // ---------- settings ----------
 
@@ -50,12 +53,14 @@ export function sanitizeSettings(raw: unknown): AnalysisSettings {
         typeof r.maxBlocks === "number" && Number.isFinite(r.maxBlocks) && r.maxBlocks >= 1
             ? clamp(Math.round(r.maxBlocks), BUDGET_RANGE.min, BUDGET_RANGE.max)
             : null;
+    const material: MaterialId = MATERIAL_IDS.includes(r.material as MaterialId) ? (r.material as MaterialId) : base.material;
     return {
         targetSizeMm: base.targetSizeMm,
         blockSizeMm: base.blockSizeMm,
         fillThreshold: fill,
         cantileverLimit: limit,
         maxBlocks: budget,
+        material,
     };
 }
 
@@ -77,6 +82,7 @@ export function saveSettings(settings: AnalysisSettings): void {
                 fillThreshold: settings.fillThreshold,
                 cantileverLimit: settings.cantileverLimit,
                 maxBlocks: settings.maxBlocks,
+                material: settings.material,
             }),
         );
     } catch {
@@ -89,11 +95,26 @@ export const sameSettings = (a: AnalysisSettings, b: AnalysisSettings): boolean 
     a.blockSizeMm === b.blockSizeMm &&
     a.fillThreshold === b.fillThreshold &&
     a.cantileverLimit === b.cantileverLimit &&
-    a.maxBlocks === b.maxBlocks;
+    a.maxBlocks === b.maxBlocks &&
+    a.material === b.material;
 
 /** One string per distinct set of settings: "was this model already saved with these?" */
 export const settingsKey = (s: AnalysisSettings): string =>
-    `${s.targetSizeMm}|${s.blockSizeMm}|${s.fillThreshold}|${s.cantileverLimit}|${s.maxBlocks ?? "-"}`;
+    `${s.targetSizeMm}|${s.blockSizeMm}|${s.fillThreshold}|${s.cantileverLimit}|${s.maxBlocks ?? "-"}|${s.material}`;
+
+/** The stress part of two summaries. Both missing is the same (a summary saved before the estimate, or nothing on the ground). */
+function sameStress(a: StressSummary | null | undefined, b: StressSummary | null | undefined): boolean {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return (
+        a.material === b.material &&
+        Math.abs(a.max_utilisation - b.max_utilisation) < 1e-6 &&
+        a.stressed_blocks === b.stressed_blocks &&
+        a.overstressed_blocks === b.overstressed_blocks &&
+        a.analysed_blocks === b.analysed_blocks &&
+        a.unsupported_blocks === b.unsupported_blocks
+    );
+}
 
 /** Two summaries that say the same thing about the same settings (analysed_at is ignored). */
 export function sameSummary(a: AnalysisSummary | null | undefined, b: AnalysisSummary | null | undefined): boolean {
@@ -109,7 +130,8 @@ export function sameSummary(a: AnalysisSummary | null | undefined, b: AnalysisSu
         a.fill_threshold === b.fill_threshold &&
         a.cog_inside === b.cog_inside &&
         a.errors === b.errors &&
-        a.warnings === b.warnings
+        a.warnings === b.warnings &&
+        sameStress(a.stress, b.stress)
     );
 }
 
@@ -133,7 +155,12 @@ export interface Verdict {
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
 /** Which settings differ from the assignment's defaults, in words: "limit 9, fill 60%"; null when none do. */
-export function customSettingsNote(s: { cantileverLimit?: number; fillThreshold?: number; maxBlocks?: number | null }): string | null {
+export function customSettingsNote(s: {
+    cantileverLimit?: number;
+    fillThreshold?: number;
+    maxBlocks?: number | null;
+    material?: MaterialId;
+}): string | null {
     const base = DEFAULT_ANALYSIS_SETTINGS;
     const parts: string[] = [];
     if (s.cantileverLimit !== undefined && s.cantileverLimit !== base.cantileverLimit) parts.push(`limit ${s.cantileverLimit}`);
@@ -141,17 +168,28 @@ export function customSettingsNote(s: { cantileverLimit?: number; fillThreshold?
         parts.push(`fill ${Math.round(s.fillThreshold * 100)}%`);
     }
     if (s.maxBlocks !== undefined && s.maxBlocks !== null) parts.push(`budget ${s.maxBlocks}`);
+    if (s.material !== undefined && s.material !== base.material) parts.push(`material ${s.material}`);
     return parts.length > 0 ? parts.join(", ") : null;
 }
 
-export function verdictOf(
-    s: (Pick<AnalysisSummary, "errors" | "warnings" | "blocks"> & Partial<Pick<AnalysisSummary, "cantilever_limit" | "fill_threshold">>) | null | undefined,
-    maxBlocks?: number | null,
-): Verdict | null {
+/** What verdictOf reads of a summary (or of a result, which has no summary of that shape). */
+export type VerdictInput = Pick<AnalysisSummary, "errors" | "warnings" | "blocks"> &
+    Partial<Pick<AnalysisSummary, "cantilever_limit" | "fill_threshold">> & {
+        /** The material the stress was estimated with; a stored summary says it in `stress`. */
+        material?: MaterialId;
+        stress?: Pick<StressSummary, "material"> | null;
+    };
+
+export function verdictOf(s: VerdictInput | null | undefined, maxBlocks?: number | null): Verdict | null {
     if (!s) return null;
     const errors = Math.max(0, Math.round(s.errors));
     const warnings = Math.max(0, Math.round(s.warnings));
-    const custom = customSettingsNote({ cantileverLimit: s.cantilever_limit, fillThreshold: s.fill_threshold, maxBlocks });
+    const custom = customSettingsNote({
+        cantileverLimit: s.cantilever_limit,
+        fillThreshold: s.fill_threshold,
+        maxBlocks,
+        material: s.material ?? s.stress?.material,
+    });
     const base = { errors, warnings, blocks: s.blocks, custom };
     if (errors > 0) {
         return { ...base, kind: "fail", headline: `${plural(errors, "problem")} found`, short: plural(errors, "problem") };
@@ -171,6 +209,7 @@ export const CHECK_ISSUE_KINDS: Record<CheckKey, readonly IssueKind[]> = {
     "long-cantilevers": ["cantilever-too-long"],
     components: ["too-many-blocks"],
     floating: ["floating"],
+    stress: ["overstressed", "highly-stressed"],
 };
 
 export function issuesForCheck(issues: readonly Issue[], key: CheckKey): Issue[] {
@@ -302,6 +341,109 @@ export function reconcileSelection(
 /** Does any of this report text name a direction as +X, -Y, ...? Then the report says which way those point. */
 export const mentionsAxes = (texts: readonly string[]): boolean => texts.some((text) => /(?:^|[\s(])[+\-−][XY]\b/.test(text));
 
+// ---------- colour, compare and preview ----------
+
+/** A result with blocks a stabilizer step added (a stabilized model), so colouring by role says something. */
+export function hasAddedBlocks(result: Pick<AnalysisResult, "assembly"> | null | undefined): boolean {
+    const a = result?.assembly;
+    if (!a) return false;
+    return a.roleCounts.some((n, i) => i > 0 && n > 0);
+}
+
+/**
+ * The colour mode the stage actually uses. The user's choice stands unless it cannot be drawn: stress needs the
+ * estimate, role needs added blocks. Overlay and the live preview of a stabilizer run always paint by role.
+ */
+export function resolveColorBy(
+    choice: AnalysisColorBy,
+    ctx: { stress: boolean; roles: boolean; forceRole: boolean },
+): AnalysisColorBy {
+    if (ctx.forceRole) return "role";
+    if (choice === "stress" && !ctx.stress) return "status";
+    if (choice === "role" && !ctx.roles) return "status";
+    return choice;
+}
+
+/** What the Original | Stabilized | Overlay switch shows; null for a result that is no block assembly. */
+export interface CompareInfo {
+    originalCount: number;
+    addedCount: number;
+    /** There are blocks of the analysed model left to show on their own. */
+    originalAvailable: boolean;
+}
+
+export function compareInfo(result: Pick<AnalysisResult, "assembly"> | null | undefined): CompareInfo | null {
+    const a = result?.assembly;
+    if (!a) return null;
+    const original = a.roleCounts[0] ?? 0;
+    const total = a.roleCounts.reduce((sum, n) => sum + n, 0);
+    return { originalCount: original, addedCount: total - original, originalAvailable: original > 0 };
+}
+
+const cellIndexCache = new WeakMap<object, Map<number, number>>();
+
+/** grid cell -> block index of a result (cached per result). */
+function cellIndex(result: Pick<AnalysisResult, "blocks" | "gridSize">): Map<number, number> {
+    let map = cellIndexCache.get(result);
+    if (!map) {
+        const [gx, gy] = result.gridSize;
+        map = new Map();
+        for (const b of result.blocks) map.set((b.cell[2] * gy + b.cell[1]) * gx + b.cell[0], b.index);
+        cellIndexCache.set(result, map);
+    }
+    return map;
+}
+
+/**
+ * Block indices of `from` as indices of `to`, matched by grid cell; blocks `to` does not have are dropped. The stage may
+ * show another result than the report (the live preview of a run, the original half of a stabilized model), whose block
+ * numbers differ, while the cells stay where they are.
+ */
+export function mapBlockIndices(
+    from: Pick<AnalysisResult, "blocks">,
+    to: Pick<AnalysisResult, "blocks" | "gridSize">,
+    indices: readonly number[],
+): number[] {
+    const at = cellIndex(to);
+    const [gx, gy] = to.gridSize;
+    const out: number[] = [];
+    for (const index of indices) {
+        const b = from.blocks[index];
+        if (!b) continue;
+        const found = at.get((b.cell[2] * gy + b.cell[1]) * gx + b.cell[0]);
+        if (found !== undefined) out.push(found);
+    }
+    return out.sort((a, b) => a - b);
+}
+
+/** The blocks a stabilizer step added, as block indices of `result` (ascending). */
+export function stepBlocks(result: Pick<AnalysisResult, "blocks">, step: number): number[] {
+    const out: number[] = [];
+    for (const b of result.blocks) if (b.step === step) out.push(b.index);
+    return out;
+}
+
+/** The unsaved stabilized result the stage shows while a run is under way (or waiting to be saved). */
+export interface PreviewState {
+    /** The model the run started from: the preview is drawn only while that model is the one on screen. */
+    modelId: string;
+    result: AnalysisResult;
+}
+
+/** What the stage draws: the preview of a run, else the original half of a stabilized model, else the result. */
+export function stageResultOf(s: {
+    result: AnalysisResult | null;
+    resultModelId: string | null;
+    compare: CompareMode;
+    originalResult: AnalysisResult | null;
+    originalFor: AnalysisResult | null;
+    preview: PreviewState | null;
+}): AnalysisResult | null {
+    if (s.preview && s.preview.modelId === s.resultModelId) return s.preview.result;
+    if (s.result && s.compare === "original" && s.originalResult && s.originalFor === s.result) return s.originalResult;
+    return s.result;
+}
+
 // ---------- layers ----------
 
 /**
@@ -392,18 +534,26 @@ const nf = new Intl.NumberFormat("en-US");
 /** 1234.4 -> "1,234". */
 export const fmtMm = (n: number): string => nf.format(Math.round(n));
 
+/** 0.734 -> "73%". */
+export const fmtPct = (u: number): string => `${Math.round(u * 100)}%`;
+
 /** +120 / −45, with a real minus sign. */
 export const fmtSignedMm = (n: number): string => `${n < 0 ? "−" : "+"}${nf.format(Math.abs(Math.round(n)))}`;
 
-/** "Scaled to 1000 × 640 × 820 mm · 237 blocks of 100 mm" */
-export function scaleLine(result: Pick<AnalysisResult, "sizeMm" | "settings" | "stats">): string {
-    const [x, y, z] = result.sizeMm.map((v) => Math.round(v));
+/**
+ * "Scaled to 1000 × 640 × 820 mm · 237 blocks of 100 mm". A block assembly (a stabilized model) was never scaled: it
+ * is made of the blocks themselves.
+ */
+export function scaleLine(result: Pick<AnalysisResult, "sizeMm" | "settings" | "stats"> & { assembly?: AnalysisResult["assembly"] }): string {
     const n = result.stats.blockCount;
-    return `Scaled to ${x} × ${y} × ${z} mm · ${n} ${n === 1 ? "block" : "blocks"} of ${result.settings.blockSizeMm} mm`;
+    const blocks = `${n} ${n === 1 ? "block" : "blocks"} of ${result.settings.blockSizeMm} mm`;
+    if (result.assembly) return `${result.assembly.steps > 0 ? "Block assembly built by the stabilizer" : "Block assembly"} · ${blocks}`;
+    const [x, y, z] = result.sizeMm.map((v) => Math.round(v));
+    return `Scaled to ${x} × ${y} × ${z} mm · ${blocks}`;
 }
 
-/** The sentence under "No problems found": the two numbers that make the design stand. */
-export function passingSentence(result: Pick<AnalysisResult, "stability" | "stats" | "settings">): string {
+/** The sentence under "No problems found": the numbers that make the design stand. */
+export function passingSentence(result: Pick<AnalysisResult, "stability" | "stats" | "settings"> & { stress?: Pick<StressAnalysis, "maxUtilisation"> | null }): string {
     const parts: string[] = [];
     const { stability } = result;
     if (stability) parts.push(`The centre of gravity sits ${fmtMm(Math.max(0, stability.marginMm))} mm inside the support base.`);
@@ -413,6 +563,7 @@ export function passingSentence(result: Pick<AnalysisResult, "stability" | "stat
             ? "Nothing hangs without support."
             : `The longest cantilever is ${plural(longestCantilever, "block")} of the ${result.settings.cantileverLimit} allowed.`,
     );
+    if (result.stress) parts.push(`The highest joint stress is ${fmtPct(result.stress.maxUtilisation)} of what the joints allow.`);
     return parts.join(" ");
 }
 

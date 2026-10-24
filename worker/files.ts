@@ -1,7 +1,9 @@
 // Serving files from R2 (models, provider stills, project thumbnails) and storing project thumbnails.
 // Every file URL is unique or versioned (model ids, ?v=<thumbnail_version>), so responses are immutable.
 
-import { API_BASE } from "../src/assignment/shared/contract.ts";
+import { API_BASE, APP_BASE } from "../src/assignment/shared/contract.ts";
+import { STATIC_KEY_PREFIX } from "./db.ts";
+import { GLB_CONTENT_TYPE } from "./glb.ts";
 import type { Env } from "./providers/types.ts";
 import { HttpError, imageSize, isUuid, json, readBytes, requireUuid, sniffImageType } from "./util.ts";
 
@@ -28,12 +30,43 @@ function fileKey(kind: string, file: string): string | null {
     return null;
 }
 
+/**
+ * GET /files/models/<id>.glb for a model of a bundled example: it has no R2 object, its row's glb_key is "static:<path>" and the
+ * file ships with the site. The model JSON already links to that path directly (ModelAsset.glb_url); this keeps the canonical
+ * URL working for anything that builds it from the id. Null when the model is not such a model.
+ */
+async function serveStaticModel(request: Request, env: Env, key: string): Promise<Response | null> {
+    const id = key.slice("models/".length, -".glb".length);
+    const row = await env.DB.prepare("SELECT glb_key FROM models WHERE id = ?1").bind(id).first<{ glb_key: string }>();
+    if (!row?.glb_key.startsWith(STATIC_KEY_PREFIX)) return null;
+    const path = row.glb_key.slice(STATIC_KEY_PREFIX.length);
+    if (!path.startsWith(`${APP_BASE}/examples/`) || !path.endsWith(".glb") || path.includes("..")) return null;
+    const asset = new Request(new URL(path, "https://assets.local"), { headers: request.headers.has("if-none-match") ? { "If-None-Match": request.headers.get("if-none-match") ?? "" } : {} });
+    const res = await env.ASSETS.fetch(asset);
+    // The site's SPA fallback answers a missing file with HTML.
+    if ((!res.ok && res.status !== 304) || (res.headers.get("content-type") ?? "").includes("text/html")) {
+        await res.body?.cancel().catch(() => {});
+        return null;
+    }
+    // The file changes with a deploy, so unlike R2 objects it is not immutable.
+    const headers = new Headers({ "Content-Type": GLB_CONTENT_TYPE, "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" });
+    const etag = res.headers.get("etag");
+    if (etag) headers.set("ETag", etag);
+    const length = res.headers.get("content-length");
+    if (length && res.status === 200) headers.set("Content-Length", length);
+    return new Response(request.method === "HEAD" || res.status === 304 ? null : res.body, { status: res.status, headers });
+}
+
 export async function serveFile(request: Request, env: Env, kind: string, file: string): Promise<Response> {
     const key = fileKey(kind, file);
     if (!key) throw new HttpError(404, "File not found");
     const head = request.method === "HEAD";
     const object = head ? await env.FILES.head(key) : await env.FILES.get(key);
-    if (!object) throw new HttpError(404, "File not found");
+    if (!object) {
+        const shipped = kind === "models" ? await serveStaticModel(request, env, key) : null;
+        if (shipped) return shipped;
+        throw new HttpError(404, "File not found");
+    }
 
     const headers = new Headers({
         "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",

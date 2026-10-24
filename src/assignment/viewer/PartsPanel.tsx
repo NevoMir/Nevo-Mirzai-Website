@@ -6,7 +6,7 @@
 import { useEffect, useRef } from "react";
 import { Eye, EyeOff, MoreHorizontal } from "lucide-react";
 import { cn } from "@/assignment/lib/utils";
-import { formatCount } from "./format.ts";
+import { partDetail } from "./format.ts";
 import type { PartRow, Px } from "./types.ts";
 
 export interface PartsPanelProps {
@@ -61,10 +61,12 @@ export function PartsPanel({ rows, selected, hidden, onSelect, onToggle, onHover
                                 type="button"
                                 className="h-7 min-w-0 flex-1 truncate rounded-md px-1 text-left"
                                 aria-pressed={on}
-                                title={`${row.name} · ${formatCount(row.triangles)} triangles`}
+                                title={`${row.name} · ${partDetail(row)}`}
                                 onClick={(event) => onSelect(row.id, event.shiftKey || event.metaKey || event.ctrlKey)}
                             >
+                                {row.swatch && <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-[3px] align-[-1px] ring-1 ring-black/25" style={{ background: row.swatch }} />}
                                 {row.name}
+                                {row.detail && <span className="ml-1.5 text-muted-foreground">{row.detail}</span>}
                             </button>
                             <button
                                 type="button"

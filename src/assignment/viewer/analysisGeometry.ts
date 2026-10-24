@@ -7,7 +7,9 @@
 // related by AnalysisTransform: mm = (p - modelMin) * factor + offsetMm. The block scene is built in mm and
 // placed in the display frame by one group transform, so these helpers only map points that cross over
 // (labels, the camera focus).
-import type { AnalysisColorBy, AnalysisResult, AnalysisSettings, AnalysisTransform, Block, BlockStatus, Stability, Vec2, Vec3 } from "../analysis/types.ts";
+import type { AnalysisColorBy, AnalysisResult, AnalysisSettings, AnalysisTransform, Block, BlockStatus, CompareMode, Stability, Vec2, Vec3 } from "../analysis/types.ts";
+import { ROLE_HEX } from "../shared/assembly.ts";
+import { BLOCK_ROLES, type BlockRole, type MaterialId } from "../shared/contract.ts";
 import type { ViewTheme } from "./types.ts";
 
 // ---------- frames ----------
@@ -147,6 +149,8 @@ export interface ColorContext {
     theme: ViewTheme;
     limit: number;
     layers: number;
+    /** Utilisation per block (AnalysisResult.stress.byBlock); NaN = no load path. Absent: every block reads as "no load path". */
+    stress?: ArrayLike<number> | null;
 }
 
 /** The colour of one block under a colouring. */
@@ -157,7 +161,135 @@ export function blockColor(block: Block, colorBy: AnalysisColorBy, ctx: ColorCon
         if (block.reach <= 0) return statusColor("supported", ctx.theme);
         return reachColor(block.reach, ctx.limit);
     }
+    if (colorBy === "stress") return stressColor(ctx.stress?.[block.index] ?? Number.NaN, ctx.theme);
+    if (colorBy === "role") return roleColor(block.role ?? "original", ctx.theme);
     return statusColor(block.status, ctx.theme);
+}
+
+// ---------- stress ----------
+
+/**
+ * Above this share of the allowable a joint is "highly stressed", above STRESS_FAIL_SHARE it is overstressed. They
+ * mirror STRESS_WARN / STRESS_FAIL of analysis/materials.ts, which this file cannot import (that module pulls the FEM
+ * solver into whatever imports it, and the React side imports this file statically); test-viewer.mjs pins them equal.
+ */
+export const STRESS_WARN_SHARE = 0.75;
+export const STRESS_FAIL_SHARE = 1;
+
+/** Stops of the stress ramp: share of the allowable, colour. Blue (idle) through teal and amber to red at the limit, dark red well past it. */
+export const STRESS_RAMP: ReadonlyArray<readonly [number, string]> = [
+    [0, "#3b82f6"],
+    [0.35, "#14b8a6"],
+    [0.7, "#f59e0b"],
+    [1, "#ef4444"],
+    [1.5, "#7f1d1d"],
+];
+/** The share where the ramp ends (everything above is the last colour). */
+export const STRESS_RAMP_MAX = 1.5;
+/** The shares the legend labels: 0, 25, 50, 75 and "100 %+". */
+export const STRESS_TICKS: readonly number[] = [0, 0.25, 0.5, 0.75, 1];
+
+/**
+ * The colour of a joint stressed to `utilisation` (0.73 = 73 % of the allowable). NaN, which is what a block with no
+ * load path carries, is the floating purple: it is not "unstressed" (blue), it is not held up at all.
+ */
+export function stressColor(utilisation: number, theme: ViewTheme = "light"): string {
+    if (Number.isNaN(utilisation)) return statusColor("floating", theme);
+    const u = Math.min(STRESS_RAMP_MAX, Math.max(0, utilisation));
+    for (let n = 1; n < STRESS_RAMP.length; n += 1) {
+        const [u1, c1] = STRESS_RAMP[n];
+        if (u <= u1) {
+            const [u0, c0] = STRESS_RAMP[n - 1];
+            return mixHex(c0, c1, u1 > u0 ? (u - u0) / (u1 - u0) : 1);
+        }
+    }
+    return STRESS_RAMP[STRESS_RAMP.length - 1][1];
+}
+
+/** Colour stops (offset 0..1 along the legend bar) of the stress ramp, read from stressColor so the bar cannot drift from the blocks. */
+export function stressGradientStops(): Array<{ offset: number; color: string }> {
+    return STRESS_RAMP.map(([u]) => ({ offset: u / STRESS_RAMP_MAX, color: stressColor(u) }));
+}
+
+/** The CSS gradient of the legend bar. */
+export function stressGradientCss(): string {
+    return `linear-gradient(to right, ${stressGradientStops()
+        .map((s) => `${s.color} ${Math.round(s.offset * 1000) / 10}%`)
+        .join(", ")})`;
+}
+
+/** "73%": a share of the allowable as the tooltip, the pins and the legend say it. */
+export const percentText = (share: number): string => `${Math.round(share * 100)}%`;
+
+export const MATERIAL_LABELS: Record<MaterialId, string> = { concrete: "Concrete", timber: "Timber" };
+/** What a joint takes in tension, kPa (analysis/materials.ts, pinned equal by test-viewer.mjs): a block's tension is its share of this. */
+export const JOINT_TENSION_KPA: Record<MaterialId, number> = { concrete: 200, timber: 400 };
+
+/** What the stress analysis says about one block, for the tooltip. */
+export interface StressInfo {
+    /** Share of the allowable; null where there is no load path. */
+    utilisation: number | null;
+    /** "Stress 73% of allowable (tension 146 of 200 kPa)", or "No load path (not connected to the ground)". */
+    text: string;
+}
+
+/** The stress of block `index`, or null when no stress analysis was made. */
+export function describeStress(analysis: Pick<AnalysisResult, "stress">, index: number): StressInfo | null {
+    const stress = analysis.stress;
+    if (!stress) return null;
+    const u = stress.byBlock[index];
+    if (u === undefined) return null;
+    if (!Number.isFinite(u)) return { utilisation: null, text: "No load path (not connected to the ground)" };
+    // The peak of a stress point has its numbers from the solver; any other block is read as tension, which governs almost always.
+    const peak = stress.points.find((p) => p.blocks[0] === index);
+    const mode = peak?.mode ?? "tension";
+    const head = `Stress ${percentText(u)} of allowable`;
+    if (mode !== "tension") return { utilisation: u, text: `${head} (${mode})` };
+    const allowable = peak ? peak.allowableKPa : (JOINT_TENSION_KPA[stress.material] ?? JOINT_TENSION_KPA.concrete);
+    const tension = peak ? peak.tensionKPa : u * allowable;
+    return { utilisation: u, text: `${head} (tension ${Math.round(tension)} of ${Math.round(allowable)} kPa)` };
+}
+
+// ---------- roles (a stabilized model) ----------
+
+export const ROLE_LABELS: Record<BlockRole, string> = { original: "Original", column: "Column", footing: "Footing", bracket: "Bracket", bridge: "Bridge", reinforcement: "Reinforcement" };
+/** Plural, as a count reads: "5 columns". */
+export const ROLE_PLURALS: Record<BlockRole, string> = { original: "Original blocks", column: "Columns", footing: "Footing", bracket: "Brackets", bridge: "Bridges", reinforcement: "Reinforcement" };
+
+/** Original blocks are the theme's quiet slate, so what was added carries the colour; each added role has one hue on both stages. */
+export function roleColor(role: BlockRole, theme: ViewTheme): string {
+    return role === "original" ? statusColor("supported", theme) : ROLE_HEX[role];
+}
+
+export function countByRole(blocks: readonly Pick<Block, "role">[]): Record<BlockRole, number> {
+    const counts = Object.fromEntries(BLOCK_ROLES.map((r) => [r, 0])) as Record<BlockRole, number>;
+    for (const b of blocks) counts[b.role ?? "original"] += 1;
+    return counts;
+}
+
+/**
+ * The colouring the stage uses: what the view asks for, unless it cannot be done. A preview of the stabilizer and the
+ * Overlay comparison are always drawn in role colours; Stress needs a stress analysis and Role needs an assembly, and
+ * without them the blocks keep the status colours.
+ */
+export function resolveColorBy(view: { colorBy: AnalysisColorBy; compare?: CompareMode }, analysis: Pick<AnalysisResult, "stress" | "assembly"> | null | undefined, previewing = false): AnalysisColorBy {
+    if (analysis?.assembly && (previewing || view.compare === "overlay")) return "role";
+    if (view.colorBy === "stress" && !analysis?.stress) return "status";
+    if (view.colorBy === "role" && !analysis?.assembly) return "status";
+    return view.colorBy;
+}
+
+/** Blocks of `next` whose cell holds no block in `previous`: what a step of the stabilizer added. Nothing when there was nothing before. */
+export function appearedBlocks(previous: readonly Pick<Block, "cell">[], next: readonly Pick<Block, "cell">[]): number[] {
+    if (previous.length === 0) return [];
+    const code = (c: readonly number[]) => (c[2] * 64 + c[1]) * 64 + c[0];
+    const had = new Set<number>();
+    for (const b of previous) had.add(code(b.cell));
+    const out: number[] = [];
+    next.forEach((b, i) => {
+        if (!had.has(code(b.cell))) out.push(i);
+    });
+    return out;
 }
 
 /**
@@ -191,6 +323,7 @@ export interface BlockPalette {
     ghost: string;
     hover: string;
     highlight: string; // the ring round the blocks an issue points at
+    fresh: string; // the flash round blocks the stabilizer has just added
     cog: string;
     ok: string;
     bad: string;
@@ -209,6 +342,7 @@ export const PALETTE: Record<ViewTheme, BlockPalette> = {
         ghost: "#8b929c",
         hover: "#0f172a",
         highlight: "#2563eb",
+        fresh: "#ce5222",
         cog: "#ce5222",
         ok: "#16a34a",
         bad: "#ef4444",
@@ -225,6 +359,7 @@ export const PALETTE: Record<ViewTheme, BlockPalette> = {
         ghost: "#d1d5db",
         hover: "#ffffff",
         highlight: "#93c5fd",
+        fresh: "#fb923c",
         cog: "#ce5222",
         ok: "#4ade80",
         bad: "#f87171",
@@ -241,12 +376,28 @@ export interface BlockInfo {
     status: BlockStatus;
     statusLabel: string; // "Cantilever"
     detail: string; // "3 blocks from support"
+    /** What the stabilizer added this block as: "Column, added in step 2" (or "in an earlier version"); absent for an original block. */
+    added?: string;
+    /** The block's stress, when the analysis has one: "Stress 73% of allowable (tension 146 of 200 kPa)". */
+    stress?: StressInfo;
     /** All of it on one line, for assistive technology and tests. */
     text: string;
 }
 
-/** What a block tooltip says: where the block is, and why it is the colour it is. */
-export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "blockSizeMm" | "cantileverLimit">): BlockInfo {
+/**
+ * When a block was added, in the numbering of the run on screen: a re-stabilized model's descriptor keeps counting from
+ * the model it was made from, but its timeline starts at 1, so the steps up to `offset` belong to an earlier version.
+ */
+export function addedWhen(step: number | undefined, offset = 0): string {
+    const own = (step ?? offset + 1) - offset;
+    return own > 0 ? `in step ${own}` : "in an earlier version";
+}
+
+/**
+ * What a block tooltip says: where the block is, and why it is the colour it is. `stepOffset`: the steps of earlier runs the
+ * model carries (see addedWhen).
+ */
+export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "blockSizeMm" | "cantileverLimit">, stress: StressInfo | null = null, stepOffset = 0): BlockInfo {
     const [i, j, k] = block.cell;
     const half = settings.blockSizeMm / 2;
     const z0 = Math.round(block.centerMm[2] - half);
@@ -260,7 +411,11 @@ export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "bl
     const statusLabel = STATUS_LABELS[block.status];
     const title = `Block (${i}, ${j}, ${k})`;
     const zRange = `z ${z0}–${z1} mm`;
-    return { title, zRange, status: block.status, statusLabel, detail, text: `${title} · ${zRange} · ${statusLabel} · ${detail}` };
+    const added = block.role && block.role !== "original" ? `${ROLE_LABELS[block.role]}, added ${addedWhen(block.step, stepOffset)}` : undefined;
+    const parts = [title, zRange, statusLabel, detail];
+    if (added) parts.push(added);
+    if (stress) parts.push(stress.text);
+    return { title, zRange, status: block.status, statusLabel, detail, added, stress: stress ?? undefined, text: parts.join(" · ") };
 }
 
 // ---------- labels ----------
@@ -270,13 +425,15 @@ export type LabelTone = "neutral" | "ok" | "bad" | "accent";
 /** Text pinned to a point of the scene; the stage turns it into HTML. `anchor` is in the frame the producer says. */
 export interface SceneLabel {
     id: string;
-    kind: "dimension" | "cog" | "tip" | "cut";
+    kind: "dimension" | "cog" | "tip" | "cut" | "stress";
     anchor: Vec3;
     text: string;
     sub?: string;
     /** A quieter extra line under `sub`. */
     note?: string;
     tone: LabelTone;
+    /** A colour the label carries (the stress pins show the stress colour of their point). */
+    color?: string;
 }
 
 const mmText = (value: number) => `${Math.round(value)} mm`;
@@ -309,8 +466,14 @@ export function tipArrow(stability: Stability, blockMm: number): { from: Vec2; t
     return { from, to: [from[0] + dir[0] * length, from[1] + dir[1] * length], dir };
 }
 
-/** The labels that belong to the scene itself (not to a hovered block), in analysis mm. */
-export function sceneLabels(analysis: AnalysisResult, view: { showCog: boolean; layerMax: number }): SceneLabel[] {
+/** The stress points that get a numbered pin on the stage. */
+export const STRESS_PINS = 3;
+
+/**
+ * The labels that belong to the scene itself (not to a hovered block), in analysis mm. With `colorBy` "stress" the
+ * worst points get a numbered pin ("1 · 73%"): the colours say where, the pins say which first and how much.
+ */
+export function sceneLabels(analysis: AnalysisResult, view: { showCog: boolean; layerMax: number; colorBy?: AnalysisColorBy }): SceneLabel[] {
     const volume = volumeMm(analysis);
     const d = dimensionOffset(volume);
     const labels: SceneLabel[] = [
@@ -330,6 +493,22 @@ export function sceneLabels(analysis: AnalysisResult, view: { showCog: boolean; 
         labels.push({ id: "cog", kind: "cog", anchor: stability.cogMm, text: "Centre of gravity", sub: summary.sub, note: summary.note, tone: summary.tone });
         const arrow = tipArrow(stability, block);
         if (arrow) labels.push({ id: "tip", kind: "tip", anchor: [arrow.to[0], arrow.to[1], block * 0.15], text: "Tips over this way", tone: "bad" });
+    }
+    if (view.colorBy === "stress" && analysis.stress) {
+        for (const point of analysis.stress.points.slice(0, STRESS_PINS)) {
+            const peak = analysis.blocks[point.blocks[0]];
+            // A pin on a block the layer cut hides would hang in the air.
+            if (!peak || peak.cell[2] > view.layerMax) continue;
+            const over = point.utilisation > STRESS_FAIL_SHARE;
+            labels.push({
+                id: `stress-${point.rank}`,
+                kind: "stress",
+                anchor: [peak.centerMm[0], peak.centerMm[1], peak.centerMm[2] + block / 2],
+                text: `${point.rank} · ${percentText(point.utilisation)}`,
+                tone: over ? "bad" : "accent",
+                color: stressColor(point.utilisation),
+            });
+        }
     }
     return labels;
 }

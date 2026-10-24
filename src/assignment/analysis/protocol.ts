@@ -1,5 +1,7 @@
 // Messages between runAnalysis.ts (page) and analysis.worker.ts. Types only, so both sides share one contract.
 
+import type { AssemblyDescriptor } from "../shared/assembly.ts";
+import type { Bounds } from "./assembly.ts";
 import type { AnalysisResult, AnalysisSettings } from "./types.ts";
 import type { AnalysisStage } from "./voxelize.ts";
 
@@ -13,6 +15,18 @@ export interface RunRequest {
     gridKey: string | null;
     positions: Float32Array | null;
     settings: AnalysisSettings;
+    /**
+     * A block assembly (a stabilized model). The grid is built from its cells, never voxelised, so `positions` is
+     * null and `gridKey` is not used: the descriptor travels with every request (it is a few KB and building the grid
+     * from it takes microseconds, so there is nothing worth caching).
+     */
+    assembly?: AssemblyDescriptor | null;
+    /** The bounds of the GLB's triangles in the viewer's frame (sets the result's transform); null: a headless frame. */
+    soupBounds?: Bounds | null;
+    /** The assembly `soupBounds` belong to, when `assembly` is only a part of it (the compare view's original blocks). */
+    frame?: AssemblyDescriptor | null;
+    /** Where lSolver.wasm is, when not at the bundle's own copy (fem/wasmUrl.ts). Only the first request of a worker uses it. */
+    wasmUrl?: string;
 }
 
 export type WorkerRequest = RunRequest;

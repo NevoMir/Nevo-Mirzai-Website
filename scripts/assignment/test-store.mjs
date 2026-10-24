@@ -8,13 +8,16 @@
 // no network: `fetch` is replaced by a small in-memory server.
 import { build } from "esbuild";
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const outDir = path.join(root, "node_modules/.tmp/assignment-store-test");
 mkdirSync(outDir, { recursive: true });
+// The bundle looks for Awatif's solver beside itself (as the browser does beside the page's script): put it there.
+mkdirSync(path.join(outDir, "vendor"), { recursive: true });
+copyFileSync(path.join(root, "src/assignment/analysis/fem/vendor/lSolver.wasm"), path.join(outDir, "vendor/lSolver.wasm"));
 
 // ---------- bundle the modules under test ----------
 
@@ -48,6 +51,15 @@ export * from "@/assignment/store/providers";
 export * from "@/assignment/store/analysis";
 export * from "@/assignment/store/analysisLogic";
 export * from "@/assignment/store/analysisSave";
+export * from "@/assignment/store/stabilize";
+export * from "@/assignment/store/stabilizeLogic";
+export { MATERIAL_FACTS, materialLine, pointLine, solverLine } from "@/assignment/components/analysis/stressText";
+export { STRESS_MATERIALS, STRESS_WARN, STRESS_FAIL } from "@/assignment/analysis/materials";
+export { analyzeAssembly, originalOf } from "@/assignment/analysis/assembly";
+export { applyStress, computeStress } from "@/assignment/analysis/stress";
+export { solveFrameTs } from "@/assignment/analysis/fem/index";
+export { descriptorFromBlocks } from "@/assignment/shared/assembly";
+export { readAssemblyGlb } from "@/assignment/shared/assemblyGlb";
 export { useAnalysisRunner, NOT_READY_RETRY_MS } from "@/assignment/components/analysis/useAnalysisRunner";
 export { DEFAULT_ANALYSIS_SETTINGS, DEFAULT_ANALYSIS_VIEW } from "@/assignment/analysis/types";
 export * from "@/assignment/hooks/useChatSizes";
@@ -73,6 +85,12 @@ await build({
                 b.onResolve({ filter: /^@\/assignment\/components\/ui\/sonner$/ }, () => ({
                     path: "toast-shim",
                     namespace: "shim",
+                }));
+                // The stabilizer's runner (a Web Worker plus Vite's ?url import of the WASM) is replaced by the tests with fakes.
+                b.onResolve({ filter: /analysis\/stabilize\/runStabilize$/ }, () => ({ path: "stabilize-run-stub", namespace: "shim" }));
+                b.onLoad({ filter: /^stabilize-run-stub$/, namespace: "shim" }, () => ({
+                    contents: 'export const runStabilize = async () => { throw new Error("the real stabilizer is not used here"); };',
+                    loader: "js",
                 }));
                 b.onLoad({ filter: /^react-shim$/, namespace: "shim" }, () => ({ contents: SHIM, loader: "js" }));
                 b.onLoad({ filter: /^toast-shim$/, namespace: "shim" }, () => ({ contents: TOAST_SHIM, loader: "js" }));
@@ -867,14 +885,15 @@ await test("polling backs off after errors and the tab coming back looks at once
 // ================= analysis report =================
 
 const AS = () => lib.useAnalysisStore.getState();
-const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], focus: null };
+const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
 const resetAnalysis = () => {
     lib.forgetSavedSummaries();
     fake.putDelay = 0;
     fake.putAnalysis = (id, summary) => ({ status: 200, json: { model: { ...(S().models.find((m) => m.id === id) ?? modelFor(makeJob(crypto.randomUUID()))), id, analysis: summary } } });
     lib.useAnalysisStore.setState({
         settings: lib.sanitizeSettings(null), loaded: null, viewerFailure: null, run: lib.IDLE_RUN, result: null, resultModelId: null,
-        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, selection: null, selectionSerial: 0, layerRaised: false,
+        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, colorChoice: "status", originalResult: null, originalFor: null,
+        originalState: "idle", pendingCompare: null, preview: null, selection: null, stepSelection: null, selectionSerial: 0, layerRaised: false,
         hoverIssueId: null, attempt: 0, panelOpen: true, sheetOpen: false, openRequest: 0,
     });
 };
@@ -899,7 +918,10 @@ await test("analysis settings: garbage becomes valid values, and the fixed sizes
     assert.deepEqual(lib.sanitizeSettings(null), lib.DEFAULT_ANALYSIS_SETTINGS);
     assert.deepEqual(lib.sanitizeSettings("nope"), lib.DEFAULT_ANALYSIS_SETTINGS);
     const wild = lib.sanitizeSettings({ fillThreshold: 5, cantileverLimit: 99, maxBlocks: -3, targetSizeMm: 5, blockSizeMm: 7 });
-    assert.deepEqual(wild, { targetSizeMm: 1000, blockSizeMm: 100, fillThreshold: 0.9, cantileverLimit: 10, maxBlocks: null });
+    assert.deepEqual(wild, { targetSizeMm: 1000, blockSizeMm: 100, fillThreshold: 0.9, cantileverLimit: 10, maxBlocks: null, material: "concrete" });
+    assert.equal(lib.sanitizeSettings({ material: "timber" }).material, "timber");
+    assert.equal(lib.sanitizeSettings({ material: "gold" }).material, "concrete", "an unknown material is the default");
+    assert.equal(lib.sanitizeSettings({ material: 7 }).material, "concrete");
     assert.equal(lib.sanitizeSettings({ fillThreshold: 0 }).fillThreshold, 0.1, "clamped to 10%");
     assert.equal(lib.sanitizeSettings({ fillThreshold: "x" }).fillThreshold, 0.1, "a value that is not a number falls back to the default");
     assert.equal(lib.sanitizeSettings({ fillThreshold: 0.333 }).fillThreshold, 0.33);
@@ -912,7 +934,11 @@ await test("analysis settings: garbage becomes valid values, and the fixed sizes
 await test("analysis settings persist in this browser under their key and survive a bad value", () => {
     resetAnalysis();
     AS().updateSettings({ fillThreshold: 0.5, cantileverLimit: 3, maxBlocks: 120 });
-    assert.deepEqual(JSON.parse(storage.get("assembly-studio-analysis-settings")), { fillThreshold: 0.5, cantileverLimit: 3, maxBlocks: 120 });
+    assert.deepEqual(JSON.parse(storage.get("assembly-studio-analysis-settings")), { fillThreshold: 0.5, cantileverLimit: 3, maxBlocks: 120, material: "concrete" });
+    AS().updateSettings({ material: "timber" });
+    assert.equal(JSON.parse(storage.get("assembly-studio-analysis-settings")).material, "timber", "the material is remembered");
+    assert.equal(lib.loadSettings().material, "timber");
+    AS().updateSettings({ material: "concrete" });
     assert.deepEqual(lib.loadSettings(), AS().settings, "what is stored loads back as it was");
     const before = AS().settings;
     AS().updateSettings({ fillThreshold: 0.5 });
@@ -923,7 +949,7 @@ await test("analysis settings persist in this browser under their key and surviv
     assert.deepEqual(lib.loadSettings(), lib.DEFAULT_ANALYSIS_SETTINGS);
     AS().resetSettings();
     assert.deepEqual(AS().settings, lib.DEFAULT_ANALYSIS_SETTINGS);
-    assert.deepEqual(JSON.parse(storage.get("assembly-studio-analysis-settings")), { fillThreshold: 0.1, cantileverLimit: 4, maxBlocks: null });
+    assert.deepEqual(JSON.parse(storage.get("assembly-studio-analysis-settings")), { fillThreshold: 0.1, cantileverLimit: 4, maxBlocks: null, material: "concrete" });
 });
 
 await test("the verdict says problems, warnings or stable, with the right plural", () => {
@@ -1388,7 +1414,8 @@ await test("two summaries are the same when the numbers agree, whatever the time
     assert.equal(lib.sameSummary(mkSummary(), mkSummary({ errors: 1 })), false);
     assert.equal(lib.sameSummary(mkSummary(), mkSummary({ fill_threshold: 0.4 })), false);
     assert.equal(lib.sameSummary(null, mkSummary()), false);
-    assert.equal(lib.settingsKey(lib.DEFAULT_ANALYSIS_SETTINGS), "1000|100|0.1|4|-");
+    assert.equal(lib.settingsKey(lib.DEFAULT_ANALYSIS_SETTINGS), "1000|100|0.1|4|-|concrete");
+    assert.notEqual(lib.settingsKey({ ...lib.DEFAULT_ANALYSIS_SETTINGS, material: "timber" }), lib.settingsKey(lib.DEFAULT_ANALYSIS_SETTINGS), "another material is another analysis");
     assert.equal(lib.fmtSignedMm(120.4), "+120");
     assert.equal(lib.fmtSignedMm(-45.6), "−46");
     assert.equal(lib.fmtMm(1234.4), "1,234");
@@ -1577,6 +1604,745 @@ await test("the chat panel is at least as wide as the composer needs, at every w
     assert.ok((narrow.preferred / 100) * 800 >= 320, "320 px of chat at an 800 px window");
     assert.ok((narrow.min / 100) * 800 >= 280, "never dragged below 280 px there");
     assert.deepEqual(lib.chatSizesFor(1920), { preferred: 25, min: 18 }, "wide windows keep the old proportions");
+});
+
+
+// ================= stress, compare and the stabilizer =================
+
+const range = (n, from = 0) => Array.from({ length: n }, (_, i) => from + i);
+const box = (x0, x1, y0, y1, z0, z1) => range(x1 - x0, x0).flatMap((i) => range(y1 - y0, y0).flatMap((j) => range(z1 - z0, z0).map((k) => [i, j, k])));
+const uniq = (cells) => [...new Map(cells.map((c) => [c.join(), c])).values()];
+/** A 5-block column on a 6 x 3 base with an arm of `n` blocks off its top: 5 blocks is past the limit of 4 (2 errors, 106 %). */
+const armCells = (n) => uniq([...box(0, 6, 0, 3, 0, 1), ...box(0, 1, 1, 2, 1, 6), ...range(n, 1).map((i) => [i, 1, 5])]);
+const TS = { solve: lib.solveFrameTs, backend: "ts" };
+const plainDesc = (cells) => lib.descriptorFromBlocks(cells.map((cell) => ({ cell })));
+const addedDesc = (cells, added, role = "column", step = 1) => lib.descriptorFromBlocks([...cells.map((cell) => ({ cell })), ...added.map((cell) => ({ cell, role, step }))]);
+/** The engine's own result for an assembly, with the stress estimate (what the runner leaves in the store). */
+const measured = (desc, settings = lib.sanitizeSettings(null)) => {
+    const base = lib.analyzeAssembly(desc, null, settings);
+    return lib.applyStress(base, lib.computeStress(base, TS));
+};
+const TIP_COLUMN = [1, 2, 3, 4].map((k) => [5, 1, k]);
+
+await test("the material is named when it is not concrete: the settings note and the verdict", () => {
+    assert.equal(lib.customSettingsNote({ material: "timber" }), "material timber");
+    assert.equal(lib.customSettingsNote({ cantileverLimit: 9, material: "timber" }), "limit 9, material timber");
+    assert.equal(lib.customSettingsNote({ material: "concrete" }), null);
+    assert.equal(lib.verdictOf({ errors: 0, warnings: 0, blocks: 9, stress: { material: "timber" } }).custom, "material timber", "a saved summary says it in its stress part");
+    assert.equal(lib.verdictOf({ errors: 0, warnings: 0, blocks: 9, stress: { material: "concrete" } }).custom, null);
+    assert.equal(lib.verdictOf({ errors: 0, warnings: 0, blocks: 9, material: "timber" }).custom, "material timber");
+});
+
+await test("two summaries differ when their stress differs; one saved before the estimate existed is not the same as one with it", () => {
+    const stress = { material: "concrete", max_utilisation: 0.5, max_at: [1, 1, 0], stressed_blocks: 0, overstressed_blocks: 0, analysed_blocks: 20, unsupported_blocks: 0 };
+    assert.equal(lib.sameSummary(mkSummary({ stress }), mkSummary({ stress: { ...stress } })), true);
+    assert.equal(lib.sameSummary(mkSummary({ stress }), mkSummary({ stress: { ...stress, max_utilisation: 0.9 } })), false);
+    assert.equal(lib.sameSummary(mkSummary({ stress }), mkSummary({ stress: { ...stress, material: "timber" } })), false);
+    assert.equal(lib.sameSummary(mkSummary(), mkSummary({ stress })), false, "an old stored summary is saved again with its stress");
+    assert.equal(lib.sameSummary(mkSummary(), mkSummary({ stress: null })), true, "nothing on the ground: no stress, nothing to add");
+});
+
+await test("the report's words: the passing sentence names the peak stress, a block assembly is not 'scaled'", () => {
+    const standing = mkResult({ stability: { inside: true, marginMm: 120.4 }, stats: { ...mkResult().stats, longestCantilever: 3 }, stress: { maxUtilisation: 0.543 } });
+    assert.equal(lib.passingSentence(standing), "The centre of gravity sits 120 mm inside the support base. The longest cantilever is 3 blocks of the 4 allowed. The highest joint stress is 54% of what the joints allow.");
+    assert.equal(lib.fmtPct(0.734), "73%");
+    assert.equal(lib.scaleLine(mkResult({ assembly: { roleCounts: [20, 0, 0, 0, 0, 0], steps: 0 } })), "Block assembly · 20 blocks of 100 mm");
+    assert.equal(lib.scaleLine(mkResult({ assembly: { roleCounts: [16, 4, 0, 0, 0, 0], steps: 1 } })), "Block assembly built by the stabilizer · 20 blocks of 100 mm");
+});
+
+await test("the screen's material words are the solver's numbers (they are kept apart so the panel does not load the solver)", () => {
+    for (const id of ["concrete", "timber"]) {
+        const f = lib.MATERIAL_FACTS[id];
+        const m = lib.STRESS_MATERIALS[id];
+        assert.equal(f.label, m.label, id);
+        assert.equal(f.detail, m.detail, id);
+        assert.equal(f.density, m.fem.rho, id);
+        assert.equal(f.youngGPa * 1e9, m.fem.E, id);
+        assert.equal(f.tensionMPa * 1e6, m.fem.jointTension, id);
+        assert.equal(f.compressionMPa * 1e6, m.fem.compression, id);
+        assert.equal(f.shearMPa * 1e6, m.fem.shear, id);
+    }
+    assert.equal(lib.materialLine("concrete"), "Concrete blocks, mortar joints (2400 kg/m³, E 30 GPa; joints take 0.2 MPa tension, 20 MPa compression, 1 MPa shear)");
+    assert.match(lib.solverLine({ backend: "wasm", ms: 12.4 }), /^Solved in 12 ms in your browser with Awatif FEM \(open source, MIT\), one beam per shared face\.$/);
+    assert.match(lib.solverLine({ backend: "ts", ms: 0.4 }), /under 1 ms.*Awatif FEM \(open source, MIT\) \(TypeScript build of its solver\)/);
+    assert.equal(lib.STRESS_WARN, 0.75, "the warning level the screen and the viewer share");
+    assert.equal(lib.STRESS_FAIL, 1);
+});
+
+await test("stress points are described the way the list shows them", () => {
+    const line = lib.pointLine({ mode: "tension", joint: [[4, 5, 6], [5, 5, 6]], cell: [4, 5, 6], utilisation: 0.73, allowableKPa: 200 });
+    assert.equal(line, "Tension · joint (4, 5, 6)–(5, 5, 6) · 146 of 200 kPa");
+    assert.equal(lib.pointLine({ mode: "shear", joint: null, cell: [1, 2, 3], utilisation: 0.5, allowableKPa: 1000 }), "Shear · block (1, 2, 3) · 500 of 1000 kPa");
+});
+
+await test("the colour mode: stress and role fall back to status when they cannot be drawn, and come back when they can", () => {
+    resetAnalysis();
+    AS().runSucceeded("m1", mkResult());
+    AS().setColorBy("stress");
+    assert.equal(AS().colorChoice, "stress", "the choice is remembered");
+    assert.equal(AS().view.colorBy, "status", "no stress estimate: the stage keeps the status colours");
+    AS().setColorBy("role");
+    assert.equal(AS().view.colorBy, "status", "no added blocks: nothing to colour by role");
+    const withStress = measured(plainDesc(armCells(4)));
+    assert.ok(withStress.stress, "the engine made an estimate");
+    AS().setColorBy("stress");
+    AS().runSucceeded("m1", withStress);
+    assert.equal(AS().view.colorBy, "stress", "the estimate arrived: the choice takes effect");
+    AS().runSucceeded("m1", mkResult());
+    assert.equal(AS().view.colorBy, "status", "and goes again when a re-run has none");
+    assert.equal(lib.resolveColorBy("stress", { stress: true, roles: false, forceRole: false }), "stress");
+    assert.equal(lib.resolveColorBy("layer", { stress: false, roles: false, forceRole: true }), "role", "a forced role colouring beats the choice");
+});
+
+await test("compare: only a block assembly has it; Overlay paints by role and leaves with any other colouring; the choice survives", () => {
+    resetAnalysis();
+    AS().runSucceeded("m1", mkResult());
+    AS().setCompare("overlay");
+    assert.equal(AS().view.compare, "stabilized", "a mesh model has no overlay");
+    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
+    assert.equal(lib.hasAddedBlocks(stab), true);
+    assert.deepEqual(lib.compareInfo(stab), { originalCount: 28, addedCount: 4, originalAvailable: true });
+    assert.equal(lib.compareInfo(mkResult()), null);
+    assert.equal(lib.hasAddedBlocks(measured(plainDesc(armCells(5)))), false, "an assembly with nothing added has no role colouring either");
+    AS().runSucceeded("s1", stab);
+    AS().setColorBy("layer");
+    AS().setCompare("overlay");
+    assert.equal(AS().view.compare, "overlay");
+    assert.equal(AS().view.colorBy, "role", "Overlay forces the role colours");
+    assert.equal(AS().colorChoice, "layer", "without forgetting the user's choice");
+    AS().setColorBy("stress");
+    assert.equal(AS().view.compare, "stabilized", "another colouring is the stabilized view");
+    assert.equal(AS().view.colorBy, "stress");
+    AS().setCompare("overlay");
+    AS().setColorBy("role");
+    assert.equal(AS().view.compare, "overlay", "the role colouring is what Overlay is");
+    AS().setCompare("stabilized");
+    assert.equal(AS().view.colorBy, "role", "the choice made inside Overlay stays");
+    AS().setColorBy("layer");
+    AS().setCompare("overlay");
+    AS().setCompare("stabilized");
+    assert.equal(AS().view.colorBy, "layer", "leaving Overlay gives the colouring back");
+    // Another model starts on its own view.
+    AS().setCompare("overlay");
+    AS().modelChanged("s2", "/s2.glb");
+    assert.equal(AS().view.compare, "stabilized");
+    assert.equal(lib.stageResultOf({ result: stab, resultModelId: "s1", compare: "overlay", originalResult: null, originalFor: null, preview: null }), stab);
+});
+
+await test("the original half of a stabilized model is analysed once, in the same frame, with its own stress; a re-run makes it again", async () => {
+    resetAnalysis();
+    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
+    AS().runSucceeded("s1", stab);
+    AS().setCompare("original");
+    assert.equal(AS().view.compare, "original");
+    assert.equal(AS().originalState, "loading");
+    assert.equal(lib.selectStageResult(AS()), stab, "until it is ready the stage keeps the stabilized model");
+    await until(() => AS().originalResult !== null);
+    const orig = AS().originalResult;
+    assert.equal(AS().originalFor, stab);
+    assert.equal(orig.blocks.length, 28, "only the blocks the stabilizer was given");
+    assert.ok(orig.blocks.every((b) => b.role === "original" && b.step === 0));
+    assert.deepEqual(orig.transform, stab.transform, "the same frame, so the camera and the ghost do not move");
+    assert.ok(orig.stress && orig.stress.maxUtilisation > 1, "the original is overstressed: that is what Compare shows");
+    assert.ok(orig.issues.some((i) => i.kind === "cantilever-too-long"), "and its long arm");
+    assert.equal(lib.selectStageResult(AS()), orig);
+    assert.equal(stab.stats.blockCount, 32);
+    AS().ensureOriginal();
+    assert.equal(AS().originalResult, orig, "asked again: nothing is computed twice");
+    // Back and forth does not recompute either.
+    AS().setCompare("overlay");
+    AS().setCompare("original");
+    assert.equal(AS().originalResult, orig);
+    // A re-run (a setting moved) is another result: the stage falls back, the half is made again for it.
+    const rerun = measured(addedDesc(armCells(5), TIP_COLUMN), lib.sanitizeSettings({ material: "timber" }));
+    AS().runSucceeded("s1", rerun);
+    assert.equal(AS().view.compare, "original", "the compare mode stays through a re-run of the same model");
+    assert.equal(lib.selectStageResult(AS()), rerun);
+    await until(() => AS().originalFor === rerun);
+    assert.equal(AS().originalResult.settings.material, "timber");
+    assert.equal(lib.selectStageResult(AS()), AS().originalResult);
+    // Another model drops it.
+    AS().runSucceeded("other", mkResult());
+    assert.equal(AS().originalResult, null);
+    assert.equal(AS().view.compare, "stabilized");
+});
+
+await test("a model with nothing left of its original has no Original half", () => {
+    resetAnalysis();
+    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
+    AS().runSucceeded("s1", { ...stab, assembly: { ...stab.assembly, roleCounts: [0, 32, 0, 0, 0, 0] } });
+    assert.equal(lib.compareInfo(AS().result).originalAvailable, false);
+    AS().setCompare("original");
+    assert.equal(AS().view.compare, "stabilized");
+});
+
+await test("a block of another half is found by its cell: hovering and clicking in the Original view reach the issue of the stabilized model", async () => {
+    resetAnalysis();
+    // A 7-block arm with a column under its tip: still too long at the root, so there are issues on original blocks.
+    const stab = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
+    assert.ok(stab.issues.length > 0);
+    AS().runSucceeded("s1", stab);
+    AS().setCompare("original");
+    await until(() => AS().originalResult !== null);
+    const orig = AS().originalResult;
+    const issue = stab.issues.find((i) => i.blocks.some((b) => stab.blocks[b].role === "original"));
+    assert.ok(issue, "an issue with an original block");
+    const sIndex = issue.blocks.find((b) => stab.blocks[b].role === "original");
+    const cell = stab.blocks[sIndex].cell;
+    const oIndex = orig.blocks.findIndex((b) => b.cell.join() === cell.join());
+    assert.notEqual(oIndex, -1);
+    assert.deepEqual(lib.mapBlockIndices(orig, stab, [oIndex]), [sIndex]);
+    AS().hoverBlock(oIndex);
+    assert.equal(AS().hoverIssueId, AS().blockIssues.get(sIndex), "the hover lights the issue of the same cell");
+    AS().clickBlock(oIndex);
+    assert.equal(AS().selection.ids.length, 1);
+    assert.equal(AS().view.compare, "original", "a click in the viewer stays on the half the user looks at");
+    const shown = AS().view.highlight.map((i) => orig.blocks[i].cell.join());
+    assert.ok(shown.length > 0 && shown.every((c) => stab.issues.some((it) => it.blocks.some((b) => stab.blocks[b].cell.join() === c))), "the highlight is in the original's own numbers");
+    // A card pressed in the panel is about the stabilized model: it shows that half.
+    AS().selectIssues([issue.id]);
+    assert.equal(AS().view.compare, "stabilized");
+    assert.deepEqual(AS().view.highlight, [...issue.blocks].sort((a, b) => a - b));
+});
+
+await test("the stabilizer's preview: drawn by role while it is for the model on screen, a pick starts afresh, a step selection follows the growth", () => {
+    resetAnalysis();
+    const source = measured(plainDesc(armCells(5)));
+    AS().runSucceeded("m1", source);
+    AS().setColorBy("stress");
+    assert.equal(AS().view.colorBy, "stress");
+    AS().selectIssues([source.issues[0].id]);
+    assert.ok(AS().view.highlight.length > 0);
+    const previewOf = (added, step = 1) => ({ ...measured(addedDesc(armCells(5), added, "column", step)), transform: source.transform });
+    const p1 = previewOf(TIP_COLUMN.slice(0, 2));
+    AS().setPreview("m1", p1);
+    assert.equal(AS().view.colorBy, "role", "the stage paints what is being added");
+    assert.equal(AS().colorChoice, "stress", "the user's choice is kept for later");
+    assert.equal(AS().selection, null, "block numbers differ in the preview: the pick starts afresh");
+    assert.equal(lib.selectStageResult(AS()), p1);
+    assert.equal(AS().result, source, "the report still reads the model's own result");
+    // A step selection: the blocks of step 1 in the preview, and they move as blocks are added.
+    AS().selectStepBlocks(1, { atMm: [550, 150, 250], label: "Step 1: column" });
+    assert.equal(AS().stepSelection, 1);
+    assert.deepEqual(AS().view.highlight, lib.stepBlocks(p1, 1));
+    assert.equal(AS().view.highlight.length, 2);
+    assert.deepEqual(AS().view.focus.mm, [550, 150, 250]);
+    const p2 = previewOf(TIP_COLUMN);
+    AS().setPreview("m1", p2);
+    assert.equal(AS().stepSelection, 1);
+    assert.deepEqual(AS().view.highlight, lib.stepBlocks(p2, 1));
+    assert.equal(AS().view.highlight.length, 4, "the selection follows the blocks of the step");
+    // Block hover in the preview: an added block is in no issue of the report; a source block is.
+    const added = p2.blocks.findIndex((b) => b.role === "column");
+    AS().hoverBlock(added);
+    assert.equal(AS().hoverIssueId, null);
+    AS().setPreview("m1", null);
+    assert.equal(AS().view.colorBy, "stress", "the choice is back");
+    assert.equal(AS().selection, null);
+    assert.equal(AS().stepSelection, null);
+    // A preview of another model changes nothing on this one.
+    AS().setPreview("elsewhere", p1);
+    assert.equal(AS().view.colorBy, "stress");
+    assert.equal(lib.selectStageResult(AS()), source);
+});
+
+await test("a step that no block belongs to selects nothing; clearing the pick clears the step", () => {
+    resetAnalysis();
+    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
+    AS().runSucceeded("s1", stab);
+    AS().selectStepBlocks(7, { atMm: [0, 0, 0], label: "Step 7" });
+    assert.equal(AS().selection, null);
+    AS().selectStepBlocks(1, { atMm: [550, 150, 250], label: "Step 1: column" });
+    assert.equal(AS().view.highlight.length, 4);
+    assert.equal(AS().selection.label, "Step 1: column");
+    const serial = AS().selectionSerial;
+    AS().selectStepBlocks(1, { atMm: [550, 150, 250], label: "Step 1: column" });
+    assert.ok(AS().selectionSerial > serial, "each click is a new pick (a phone closes its sheet)");
+    AS().clearSelection();
+    assert.equal(AS().stepSelection, null);
+    assert.deepEqual(AS().view.highlight, []);
+});
+
+await test("a Compare asked for before the model is open takes effect when its analysis lands", () => {
+    resetAnalysis();
+    AS().runSucceeded("src", mkResult());
+    AS().requestCompare("s1", "overlay");
+    assert.deepEqual(AS().pendingCompare, { modelId: "s1", mode: "overlay" });
+    assert.equal(AS().view.compare, "stabilized");
+    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.equal(AS().view.compare, "overlay");
+    assert.equal(AS().view.colorBy, "role");
+    assert.equal(AS().pendingCompare, null);
+    AS().requestCompare("s1", "stabilized");
+    assert.equal(AS().view.compare, "stabilized", "for the model already on screen it is immediate");
+});
+
+await test("a Compare asked for a model survives that model being opened, and is dropped when another model is opened instead", () => {
+    resetAnalysis();
+    AS().runSucceeded("src", mkResult());
+    AS().requestCompare("s1", "overlay");
+    AS().modelChanged("s1", "/s1.glb"); // the Compare button sets the request, then the workspace shows the model
+    assert.deepEqual(AS().pendingCompare, { modelId: "s1", mode: "overlay" }, "still wanted");
+    AS().modelChanged("src", "/src.glb"); // the user went somewhere else first
+    assert.equal(AS().pendingCompare, null, "no longer wanted");
+    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.equal(AS().view.compare, "stabilized", "visiting s1 later does not jump to Overlay");
+});
+
+const mt = (over = {}) => ({ blocks: 28, errors: 2, floating_blocks: 0, over_limit: 1, longest_cantilever: 5, cog_margin_mm: 120, max_utilisation: 1.06, ...over });
+function stepLog(n, move, added, over = {}) {
+    return {
+        n, move, reason: "cantilever", added,
+        text: `Added a ${added}-block ${move} under the arm tip at x = 550 mm, y = 150 mm because the cantilever reached 5 > 4 blocks. Longest cantilever 5 → 0; peak stress 106% → 11%.`,
+        at_mm: [550, 150, 250],
+        before: mt(),
+        after: mt({ blocks: 28 + added, errors: 0, over_limit: 0, longest_cantilever: 0, max_utilisation: 0.11 }),
+        ...over,
+    };
+}
+// ---------- the stabilizer: pure rules ----------
+
+await test("the Options popover's choices are clamped and become the stabilizer's options", () => {
+    assert.deepEqual(lib.sanitizeChoices(null), { target: 0.75, maxBlocks: null });
+    assert.deepEqual(lib.sanitizeChoices({ target: 5, maxBlocks: 5000 }), { target: 0.75, maxBlocks: 1000 }, "the target stops at the warning level");
+    assert.deepEqual(lib.sanitizeChoices({ target: 0.1, maxBlocks: 0 }), { target: 0.4, maxBlocks: null });
+    assert.equal(lib.sanitizeChoices({ target: 0.553 }).target, 0.55);
+    assert.equal(lib.sanitizeChoices({ target: "x" }).target, 0.75);
+    const o = lib.optionsFor({ target: 0.6, maxBlocks: null }, { maxBlocks: 120 });
+    assert.equal(o.targetUtilisation, 0.6);
+    assert.equal(o.maxBlocks, 120, "the analysis budget when none is chosen");
+    assert.equal(lib.optionsFor({ target: 0.6, maxBlocks: 80 }, { maxBlocks: 120 }).maxBlocks, 80);
+    assert.equal(lib.optionsFor(lib.DEFAULT_CHOICES, { maxBlocks: null }).maxBlocks, 1000);
+    assert.equal(o.maxSteps, 40);
+});
+
+await test("the Stabilize card is offered for a model with something to fix, and says why when it cannot run", () => {
+    const stats = { blockCount: 28 };
+    const base = { model: { id: "a", derived: null }, models: [], result: { stats, stress: null }, verdict: { kind: "fail" }, analysing: false };
+    assert.deepEqual(lib.stabilizeOffer(base), { label: "Stabilize", child: null, blocked: null });
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "warn" } }).label, "Reduce stress", "a warning-only model");
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "pass" } }), null, "nothing to fix: no card");
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: null }), null);
+    assert.equal(lib.stabilizeOffer({ ...base, result: { stats: { blockCount: 0 }, stress: null } }), null);
+    assert.match(lib.stabilizeOffer({ ...base, analysing: true }).blocked, /analysis to finish/);
+    assert.match(lib.stabilizeOffer({ ...base, model: { id: "a", derived: { depth: 3 } } }).blocked, /maximum number of times/);
+    const kids = (n) => range(n).map((i) => ({ id: `k${i}`, kind: "stabilized", source_model_id: "a", created_at: iso(i) }));
+    const offer = lib.stabilizeOffer({ ...base, models: kids(2) });
+    assert.equal(offer.child.id, "k1", "the newest version is the one to open");
+    assert.equal(offer.blocked, null, "and a new run is still possible");
+    assert.match(lib.stabilizeOffer({ ...base, models: kids(5) }).blocked, /5 stabilized versions already/);
+    const many = range(20).map((i) => ({ id: `x${i}`, kind: "stabilized", source_model_id: `o${i % 7}`, created_at: iso(i) }));
+    assert.match(lib.stabilizeOffer({ ...base, models: many }).blocked, /20 stabilized versions/);
+});
+
+await test("progress and results in words", () => {
+    assert.equal(lib.progressLine(null, 0), "Step 1 · looking for the next move…");
+    assert.equal(lib.progressLine({ candidatesTotal: 24 }, 2), "Step 3 · evaluating 24 moves…");
+    assert.equal(lib.progressLine({ candidatesTotal: 1 }, 0), "Step 1 · evaluating 1 move…");
+    const start = { errors: 3, max_utilisation: 1.98 };
+    const steps = [stepLog(1, "column", 5, { after: mt({ errors: 1, max_utilisation: 0.72 }) }), stepLog(2, "footing", 2, { after: mt({ errors: 0, max_utilisation: 0.54 }) })];
+    assert.deepEqual(lib.runChips(start, []), { added: 0, problems: [3, 3], stress: [1.98, 1.98] });
+    assert.deepEqual(lib.runChips(start, steps), { added: 7, problems: [3, 0], stress: [1.98, 0.54] });
+    assert.equal(lib.stressArrow(1.98, 0.544), "198% → 54%");
+    assert.equal(lib.stressArrow(null, null), "n/a → n/a");
+    assert.deepEqual(lib.stepChips(steps[0]), ["errors 2 → 1", "peak 106% → 72%", "+5"], "only what the move changed, then its size");
+    assert.deepEqual(lib.stepChips(stepLog(3, "bridge", 2, { before: mt({ floating_blocks: 16, errors: 0, max_utilisation: null, longest_cantilever: 2 }), after: mt({ floating_blocks: 0, errors: 0, max_utilisation: null, longest_cantilever: 2 }) })), ["floating 16 → 0", "+2"]);
+    assert.equal(lib.stabilizedFileName("a-shelf-meshy.glb"), "a-shelf-meshy-stabilized.glb");
+    assert.match(lib.uploadErrorMessage(new Error("The file has unexpected content")), /Reload the page/);
+    assert.equal(lib.uploadErrorMessage(new Error("Too many versions")), "Too many versions");
+    assert.equal(lib.uploadErrorMessage(null), "The version could not be saved.");
+});
+
+await test("a finished run is complete, partial or empty, and says what is left", () => {
+    const meta = (over) => ({ added_blocks: 4, ...over });
+    assert.equal(lib.outcomeOf({ complete: true, meta: meta({}) }), "complete");
+    assert.equal(lib.outcomeOf({ complete: false, meta: meta({}) }), "partial");
+    assert.equal(lib.outcomeOf({ complete: true, meta: meta({ added_blocks: 0 }) }), "nothing");
+    const after = { blocks: 30, errors: 1, warnings: 0, floating_blocks: 0, over_limit: 2, longest_cantilever: 5, cog_margin_mm: 40, max_utilisation: 0.9, overstressed_blocks: 0 };
+    assert.deepEqual(lib.remainingProblems(after, 0.75, 4), ["a cantilever of 5 blocks (limit 4)", "peak stress 90% against the 75% target"]);
+    assert.equal(lib.partialHeadline(after, 0.75, 4), "Improved, not fully stable: 1 problem remains (a cantilever of 5 blocks (limit 4); peak stress 90% against the 75% target)");
+    assert.equal(lib.partialHeadline({ ...after, errors: 2 }, 0.75, 4).split(" (")[0], "Improved, not fully stable: 2 problems remain");
+    assert.deepEqual(lib.remainingProblems({ ...after, over_limit: 0, max_utilisation: 0.5, floating_blocks: 3, cog_margin_mm: -20 }, 0.75, 4), ["3 floating blocks", "the centre of gravity is outside the base"]);
+    assert.equal(lib.stabilizedLine({ added_blocks: 14, before: { ...after, max_utilisation: 1.8 }, after: { ...after, errors: 0, warnings: 0, max_utilisation: 0.54 } }), "+14 blocks · all checks pass · peak stress 180% → 54%");
+    assert.equal(lib.stabilizedLine({ added_blocks: 1, before: { ...after, max_utilisation: null }, after: { ...after, errors: 0, warnings: 2, max_utilisation: null } }), "+1 block · 2 warnings");
+    assert.equal(lib.savedMessage("a shelf", { added_blocks: 14, complete: true, after }), "Stabilized version of **a shelf**: +14 blocks, passes all checks.");
+    assert.equal(lib.savedMessage("a shelf", { added_blocks: 3, complete: false, after }), "Improved version of **a shelf**: +3 blocks, 1 problem left.");
+});
+
+await test("the assembly of a run: a model's own blocks stay as they are and the moves are numbered after the steps it already has", () => {
+    const first = measured(addedDesc(armCells(5), TIP_COLUMN));
+    assert.equal(lib.stepOffsetOf(first), 1);
+    assert.equal(lib.stepOffsetOf(null), 0);
+    const move = { step: stepLog(1, "footing", 1), cells: [[6, 1, 0]], roles: ["footing"] };
+    const desc = lib.previewDescriptor(first, [move]);
+    const asm = lib.analyzeAssembly(desc, null, first.settings);
+    assert.equal(asm.blocks.length, 33);
+    const by = (cell) => asm.blocks.find((b) => b.cell.join() === cell.join());
+    assert.deepEqual([by([5, 1, 2]).role, by([5, 1, 2]).step], ["column", 1], "the first stabilization's column keeps its role and step");
+    assert.deepEqual([by([0, 0, 0]).role, by([0, 0, 0]).step], ["original", 0]);
+    assert.deepEqual([by([6, 1, 0]).role, by([6, 1, 0]).step], ["footing", 2], "the new step 1 is step 2 on the blocks");
+    assert.equal(lib.savedStepOffset(asm, 1), 1, "a saved model: its highest step minus its own log");
+    assert.equal(lib.savedStepOffset(first, 1), 0);
+    // From a mesh (no roles on its blocks) every block of the source is an original.
+    const plain = measured(plainDesc(armCells(5)));
+    const fromMesh = lib.analyzeAssembly(lib.previewDescriptor({ blocks: plain.blocks.map((b) => ({ cell: b.cell })), assembly: null }, [move]), null, plain.settings);
+    assert.equal(fromMesh.blocks.filter((b) => b.role === "original").length, 28);
+    assert.equal(fromMesh.blocks.find((b) => b.cell.join() === "6,1,0").step, 1);
+});
+
+// ---------- the stabilizer: the run ----------
+
+const abortErr = () => Object.assign(new Error("The stabilizer was stopped."), { name: "AbortError" });
+const ST = () => lib.useStabilizeStore.getState();
+const COLUMN_MOVE = () => ({ step: stepLog(1, "column", 4), cells: TIP_COLUMN.map((c) => [...c]), roles: TIP_COLUMN.map(() => "column") });
+const FOOTING_MOVE = () => ({ step: stepLog(1, "footing", 1, { after: mt({ blocks: 29 }) }), cells: [[6, 1, 0]], roles: ["footing"] });
+
+/** A project with one generated model, analysed: the starting point of every run below. */
+function begin(cells = armCells(5), prompt = "a shelf") {
+    resetAnalysis();
+    lib.setStabilizeDeps();
+    ST().discard();
+    const pid = crypto.randomUUID();
+    S().setProject(detail(pid));
+    const model = { ...modelFor(makeJob(pid, { prompt })), id: crypto.randomUUID(), prompt, glb_url: "/src.glb", analysis: null, kind: "generated", source_model_id: null, example_slug: null, derived: null };
+    S().addModel(model);
+    S().setActiveModel(model.id);
+    // A model made from a mesh: its result has no assembly, and its blocks no role or step.
+    const measuredCells = measured(plainDesc(cells));
+    const result = { ...measuredCells, assembly: null, blocks: measuredCells.blocks.map(({ role, step, ...b }) => b) };
+    AS().runSucceeded(model.id, result);
+    return { pid, model, result };
+}
+/** The result a stabilizer that made `moves` would answer with, written by the real GLB writer. */
+async function answerFor(source, moves, over = {}) {
+    const options = lib.optionsFor(lib.DEFAULT_CHOICES, source.settings);
+    const built = await lib.buildStoppedResult({ source, moves, sourceDepth: 0, options, elapsedMs: 12 });
+    return { ...built, stop: built.complete ? "stable" : "no-improving-move", ...over };
+}
+const storedModel = (sourceId, glb, pid) => {
+    const read = lib.readAssemblyGlb(glb, null);
+    assert.ok(read.ok, read.error);
+    return { ...modelFor(makeJob(pid)), id: crypto.randomUUID(), provider: "stabilizer", prompt: "a shelf", glb_url: "/d.glb", kind: "stabilized", source_model_id: sourceId, example_slug: null, derived: read.meta, analysis: read.meta.after_summary };
+};
+/**
+ * A stabilizer that reports `moves` one by one, then waits for `hold.release()` (or Stop) and answers with `answer`.
+ * `uploadFails`: that many uploads fail first. `uploadHold`: uploads wait for uploadHold.release().
+ */
+function fakeStabilizer(pid, { moves = [], answer = null, hold = null, runFails = null, uploadFails = 0, uploadHold = null } = {}) {
+    const seen = { input: null, sourceDepth: null, signal: null, uploads: [], stopped: [] };
+    let failures = uploadFails;
+    lib.setStabilizeDeps({
+        run: async (input, hooks) => {
+            seen.input = input;
+            seen.sourceDepth = hooks.sourceDepth;
+            seen.signal = hooks.signal;
+            for (const m of moves) {
+                await sleep(5);
+                if (hooks.signal.aborted) throw abortErr();
+                hooks.onProgress({ kind: "progress", phase: "evaluating", candidatesDone: 3, candidatesTotal: 24, steps: m.step.n - 1, blocks: 28, elapsedMs: 4 });
+                hooks.onStep({ kind: "step", step: m.step, cells: m.cells, roles: m.roles, blocks: 28 + m.cells.length, elapsedMs: 5 });
+            }
+            if (hold) {
+                await new Promise((resolve, reject) => {
+                    hold.release = resolve;
+                    hooks.signal.addEventListener("abort", () => reject(abortErr()), { once: true });
+                });
+            }
+            if (runFails) throw runFails;
+            return typeof answer === "function" ? answer() : answer;
+        },
+        upload: async (sourceId, glb) => {
+            seen.uploads.push({ sourceId, glb });
+            if (uploadHold) await new Promise((resolve) => (uploadHold.release = resolve));
+            if (failures > 0) {
+                failures -= 1;
+                throw new Error("The server is down.");
+            }
+            return storedModel(sourceId, glb, pid);
+        },
+    });
+    return seen;
+}
+
+await test("a run that reaches its goal shows its work as it goes, then saves itself: the version is open, in the chat, and the preview is gone", async () => {
+    const { pid, model, result } = begin();
+    const hold = {};
+    const complete = await answerFor(result, [COLUMN_MOVE()]);
+    assert.equal(complete.complete, true, "the column under the tip fixes this shelf");
+    const seen = fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: complete, hold });
+    assert.equal(ST().start(model, result), true);
+    assert.equal(ST().start(model, result), false, "one run at a time");
+    assert.equal(ST().status, "running");
+    assert.equal(ST().sourceModelId, model.id);
+    await until(() => ST().steps.length === 1 && AS().preview !== null && AS().preview.result.blocks.length === 32);
+    assert.equal(seen.sourceDepth, 0);
+    assert.equal(seen.input.cells.length, 28);
+    assert.equal(seen.input.assembly, null, "a model made from a mesh has no assembly to keep");
+    assert.equal(seen.input.options.targetUtilisation, 0.75);
+    assert.equal(AS().preview.modelId, model.id);
+    assert.deepEqual(AS().preview.result.transform, result.transform, "drawn in the frame of the model on screen");
+    assert.equal(AS().preview.result.assembly.roleCounts[1], 4);
+    assert.equal(ST().preview, AS().preview.result, "the same object is in both stores");
+    assert.equal(AS().view.colorBy, "role");
+    assert.equal(AS().result, result, "the report keeps reading the model's own analysis");
+    assert.deepEqual(lib.runChips(ST().startMetrics, ST().steps), { added: 4, problems: [2, 0], stress: [1.059, 0.11] }, "the start is the model's own analysis, rounded as the log rounds it");
+    assert.equal(ST().progress, null, "a step ends the progress that led to it");
+    // Selecting a step shows its blocks and flies there.
+    ST().selectStep(1);
+    assert.equal(AS().stepSelection, 1);
+    assert.equal(AS().view.highlight.length, 4);
+    assert.deepEqual(AS().view.focus.mm, [550, 150, 250]);
+    ST().selectStep(1);
+    assert.equal(AS().stepSelection, null, "the same step again clears it");
+    assert.equal(ST().endedAt, null, "nothing has ended yet");
+    hold.release();
+    await until(() => ST().status === "saved");
+    assert.ok(Date.now() - ST().endedAt < 2000, "the end is stamped, so the banner that appears takes the keyboard focus");
+    assert.equal(seen.uploads.length, 1);
+    assert.equal(seen.uploads[0].sourceId, model.id);
+    const saved = S().models.find((m) => m.kind === "stabilized");
+    assert.ok(saved, "the version joined the project's models");
+    assert.equal(saved.source_model_id, model.id);
+    assert.equal(S().activeModelId, saved.id, "and is the one on screen");
+    assert.equal(ST().savedModelId, saved.id);
+    const message = S().messages[S().messages.length - 1];
+    assert.equal(message.role, "assistant");
+    assert.deepEqual(message.model_ids, [saved.id], "the chat presents it as a model card");
+    assert.equal(message.content, "Stabilized version of **a shelf**: +4 blocks, passes all checks.");
+    assert.ok(lib.toasts.some((t) => t.kind === "success" && /stabilized version/i.test(t.title)));
+    assert.equal(AS().preview, null);
+    assert.equal(ST().preview, null);
+    assert.equal(AS().view.colorBy, "status", "the stage is back to the user's colouring");
+    assert.ok(S().revision > 0, "the chat message is an edit the autosave picks up");
+    ST().discard();
+    assert.equal(ST().status, "idle", "the banner is dismissed");
+    assert.equal(ST().endedAt, null, "and forgets when the run ended");
+});
+
+await test("a run that falls short waits for the user: Save as new version keeps it, Discard drops it", async () => {
+    const { pid, model, result } = begin();
+    const partial = await answerFor(result, [FOOTING_MOVE()]);
+    assert.equal(partial.complete, false);
+    const seen = fakeStabilizer(pid, { moves: [FOOTING_MOVE()], answer: partial });
+    ST().start(model, result);
+    await until(() => ST().status === "finished");
+    await sleep(30);
+    assert.equal(seen.uploads.length, 0, "nothing is saved unasked");
+    assert.equal(lib.outcomeOf(ST().result), "partial");
+    assert.equal(AS().preview.result.blocks.length, 29, "the stage keeps showing what it made");
+    await ST().save();
+    assert.equal(ST().status, "saved");
+    assert.equal(seen.uploads.length, 1);
+    assert.equal(S().messages[S().messages.length - 1].content, "Improved version of **a shelf**: +1 block, 2 problems left.");
+    // The other way out.
+    const second = begin();
+    fakeStabilizer(second.pid, { moves: [FOOTING_MOVE()], answer: await answerFor(second.result, [FOOTING_MOVE()]) });
+    ST().start(second.model, second.result);
+    await until(() => ST().status === "finished");
+    ST().discard();
+    assert.equal(ST().status, "idle");
+    assert.equal(AS().preview, null);
+    assert.equal(S().models.filter((m) => m.kind === "stabilized").length, 0);
+});
+
+await test("a run that finds nothing to add says so and saves nothing", async () => {
+    const { pid, model, result } = begin();
+    const none = { ...(await answerFor(result, [FOOTING_MOVE()])) };
+    none.meta = { ...none.meta, added_blocks: 0 };
+    const seen = fakeStabilizer(pid, { answer: none });
+    ST().start(model, result);
+    await until(() => ST().status === "finished");
+    assert.equal(lib.outcomeOf(ST().result), "nothing");
+    await sleep(30);
+    assert.equal(seen.uploads.length, 0);
+});
+
+await test("Stop: with no step yet the card is simply back; with steps they are kept and can be saved as a partial version", async () => {
+    let r = begin();
+    let hold = {};
+    let seen = fakeStabilizer(r.pid, { hold });
+    ST().start(r.model, r.result);
+    await until(() => hold.release);
+    ST().cancel();
+    assert.equal(ST().status, "idle");
+    assert.equal(seen.signal.aborted, true, "the worker is told to stop");
+    assert.equal(AS().preview, null);
+
+    r = begin();
+    hold = {};
+    seen = fakeStabilizer(r.pid, { moves: [COLUMN_MOVE()], hold });
+    ST().start(r.model, r.result);
+    await until(() => ST().steps.length === 1 && hold.release);
+    ST().cancel();
+    assert.equal(ST().status, "canceled");
+    assert.equal(seen.signal.aborted, true);
+    await sleep(20);
+    assert.equal(ST().status, "canceled", "the aborted run's rejection changes nothing");
+    assert.equal(ST().result, null);
+    assert.equal(AS().preview.result.blocks.length, 32, "what was added so far stays on the stage");
+    assert.equal(seen.uploads.length, 0);
+    await ST().save();
+    assert.equal(ST().status, "saved");
+    assert.equal(seen.uploads.length, 1);
+    const read = lib.readAssemblyGlb(seen.uploads[0].glb, null);
+    assert.ok(read.ok, read.error);
+    assert.equal(read.meta.stop, "canceled");
+    assert.equal(read.meta.added_blocks, 4);
+    assert.equal(read.meta.steps.length, 1);
+    assert.equal(read.meta.depth, 1);
+    assert.equal(read.meta.after.errors, 0, "measured by the engine: the column fixed it");
+    assert.equal(read.meta.complete, true);
+    assert.equal(read.descriptor.cells.length / 5, 32);
+    assert.deepEqual(S().messages[S().messages.length - 1].model_ids, [S().activeModelId]);
+});
+
+await test("a save that fails keeps the result: Retry saves it, and the page that is older than the server is told to reload", async () => {
+    const { pid, model, result } = begin();
+    const complete = await answerFor(result, [COLUMN_MOVE()]);
+    const seen = fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: complete, uploadFails: 1 });
+    ST().start(model, result);
+    await until(() => ST().status === "error");
+    assert.equal(ST().errorKind, "save");
+    assert.equal(ST().error, "The server is down.");
+    assert.ok(ST().result.glb instanceof Uint8Array, "the bytes are in memory: Download GLB anyway");
+    assert.ok(lib.toasts.some((t) => t.kind === "error"));
+    assert.equal(S().models.filter((m) => m.kind === "stabilized").length, 0);
+    assert.equal(AS().preview !== null, true, "the stage still shows the version");
+    await ST().save();
+    assert.equal(ST().status, "saved");
+    assert.equal(seen.uploads.length, 2);
+    assert.equal(S().models.filter((m) => m.kind === "stabilized").length, 1);
+});
+
+await test("a run that fails is an error of the run, not of a save; Discard clears it", async () => {
+    const { pid, model, result } = begin();
+    fakeStabilizer(pid, { runFails: new RangeError("There are no blocks to stabilize.") });
+    ST().start(model, result);
+    await until(() => ST().status === "error");
+    assert.equal(ST().errorKind, "run");
+    assert.equal(ST().error, "There are no blocks to stabilize.");
+    await ST().save();
+    assert.equal(ST().status, "error", "there is nothing to save");
+    ST().discard();
+    assert.equal(ST().status, "idle");
+    assert.equal(AS().preview, null);
+});
+
+await test("leaving the project stops a run; a save already under way finishes but is not put on another project's screen", async () => {
+    // Opening another project (or a new chat) while it runs.
+    let r = begin();
+    let hold = {};
+    let seen = fakeStabilizer(r.pid, { moves: [COLUMN_MOVE()], hold });
+    ST().start(r.model, r.result);
+    await until(() => ST().steps.length === 1 && hold.release);
+    S().setProject(detail(crypto.randomUUID()));
+    assert.equal(ST().status, "idle");
+    assert.equal(seen.signal.aborted, true);
+    assert.equal(AS().preview, null);
+    await sleep(20);
+    assert.equal(ST().status, "idle", "the aborted run does not come back");
+
+    // The workspace itself goes (the runner's cleanup).
+    r = begin();
+    hold = {};
+    seen = fakeStabilizer(r.pid, { hold });
+    ST().start(r.model, r.result);
+    await until(() => hold.release);
+    const unmount = mountHook(() => lib.useAnalysisRunner(r.model));
+    unmount();
+    assert.equal(ST().status, "idle");
+    assert.equal(seen.signal.aborted, true);
+
+    // An upload under way when the user moves on.
+    r = begin();
+    const uploadHold = {};
+    const complete = await answerFor(r.result, [COLUMN_MOVE()]);
+    seen = fakeStabilizer(r.pid, { moves: [COLUMN_MOVE()], answer: complete, uploadHold });
+    ST().start(r.model, r.result);
+    await until(() => ST().status === "saving" && uploadHold.release);
+    const other = crypto.randomUUID();
+    S().setProject(detail(other));
+    assert.equal(ST().status, "saving", "an upload is not cut off");
+    uploadHold.release();
+    await until(() => ST().status === "idle");
+    assert.equal(S().activeProjectId, other);
+    assert.equal(S().models.length, 0, "the other project did not get this project's model");
+    assert.equal(S().messages.length, 0);
+    assert.ok(lib.toasts.some((t) => t.kind === "info" && /stabilized version/i.test(t.title)));
+});
+
+await test("stabilizing a stabilized model keeps its blocks' roles and numbers its steps after its own", async () => {
+    const { pid, model, result } = begin(armCells(5));
+    // The model on screen is a stabilized one (depth 1) whose arm is still too long: 7 blocks, a column under the tip is not enough.
+    const first = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
+    const derived = { depth: 1 };
+    const stabilized = { ...model, id: crypto.randomUUID(), kind: "stabilized", source_model_id: model.id, derived };
+    S().addModel(stabilized);
+    S().setActiveModel(stabilized.id);
+    AS().runSucceeded(stabilized.id, first);
+    const move = { step: stepLog(1, "bracket", 1), cells: [[3, 1, 4]], roles: ["bracket"] };
+    const seen = fakeStabilizer(pid, { moves: [move], answer: await answerFor(first, [move]), hold: {} });
+    ST().start(stabilized, first);
+    await until(() => AS().preview && AS().preview.result.blocks.length === first.blocks.length + 1);
+    assert.equal(seen.sourceDepth, 1);
+    assert.deepEqual(seen.input.assembly, first.assembly.descriptor, "the source's roles and steps go to the stabilizer");
+    const p = AS().preview.result;
+    assert.equal(p.assembly.roleCounts[1], 4, "its column is still a column");
+    assert.equal(p.blocks.find((b) => b.cell.join() === "3,1,4").step, 2, "the new step is numbered after step 1");
+    // The timeline's step 1 is the new run's step 1, which is step 2 on the blocks.
+    ST().selectStep(1);
+    assert.equal(AS().stepSelection, 2);
+    assert.deepEqual(AS().view.highlight, [p.blocks.findIndex((b) => b.cell.join() === "3,1,4")]);
+    ST().cancel();
+    await ST().save();
+    const read = lib.readAssemblyGlb(seen.uploads[0].glb, null);
+    assert.ok(read.ok, read.error);
+    assert.equal(read.meta.depth, 2);
+    assert.equal(read.descriptor.cells.length / 5, first.blocks.length + 1);
+});
+
+await test("the runner analyses a stabilized model from its blocks, not by voxelising its triangles", async () => {
+    resetAnalysis();
+    const cells = armCells(5);
+    const desc = addedDesc(cells, TIP_COLUMN);
+    // What the viewer reads from the model's GLB: its triangles (cubes inset in their cells) and the descriptor in its extras.
+    const soup = boxSoup(desc.cells.length ? range(desc.cells.length / 5).map((n) => {
+        const i = desc.cells[n * 5], j = desc.cells[n * 5 + 1], k = desc.cells[n * 5 + 2];
+        return [[(i + 0.02) * 100, (j + 0.02) * 100, (k + 0.02) * 100], [(i + 0.98) * 100, (j + 0.98) * 100, (k + 0.98) * 100]];
+    }) : []);
+    const pid = crypto.randomUUID();
+    S().setProject(detail(pid));
+    const model = { ...modelFor(makeJob(pid)), id: "asm-1", glb_url: "/asm-1.glb", analysis: null };
+    S().addModel(model);
+    AS().setLoaded({ url: "/asm-1.glb", assembly: desc, extractTriangles: () => soup });
+    const stop = mountHook(() => lib.useAnalysisRunner(model));
+    await until(() => AS().resultModelId === "asm-1");
+    const r = AS().result;
+    assert.equal(r.blocks.length, 32, "exactly the blocks of the descriptor (voxelising the cubes would give others)");
+    assert.equal(r.assembly.roleCounts[1], 4);
+    assert.ok(r.stress && r.stress.analysedBlocks === 32, "and the stress estimate came with it");
+    assert.equal(r.summary.errors, 0);
+    stop();
+});
+
+await test("metricsOf leaves the peak out while blocks float and it is under the warning level (the grounded part alone), as the stabilizer logs it", () => {
+    const base = { blocks: 40, errors: 1, warnings: 0, over_limit: 0, longest_cantilever: 0, cog_margin_mm: 0 };
+    const result = (floating, peak) => ({ summary: { ...base, floating_blocks: floating }, stability: null, stress: { maxUtilisation: peak, overstressedBlocks: 0 } });
+    assert.equal(lib.metricsOf(result(12, 0)).max_utilisation, null, "0 % of a lamp whose arms float is not a figure");
+    assert.equal(lib.metricsOf(result(12, 0.4)).max_utilisation, null);
+    assert.equal(lib.metricsOf(result(12, 1.37)).max_utilisation, 1.37, "above the warning level it is a true lower bound and stays");
+    assert.equal(lib.metricsOf(result(0, 0.4)).max_utilisation, 0.4, "nothing floating: the figure is the whole model's");
+    assert.equal(lib.metricsOf(result(12, 0.6), 0.5).max_utilisation, 0.6, "under the run's own (lower) target the same rule applies, not above it");
+    assert.equal(lib.metricsOf({ summary: { ...base, floating_blocks: 3 }, stability: null, stress: null }).max_utilisation, null);
+});
+
+await test("a stopped run never records or tests against a target above the warning level", async () => {
+    resetAnalysis();
+    const { result } = begin();
+    const options = { ...lib.optionsFor(lib.DEFAULT_CHOICES, result.settings), targetUtilisation: 0.9 };
+    const built = await lib.buildStoppedResult({ source: result, moves: [{ step: stepLog(1, "column", 4), cells: TIP_COLUMN.map((c) => [...c]), roles: TIP_COLUMN.map(() => "column") }], sourceDepth: 0, options, elapsedMs: 5 });
+    assert.equal(built.meta.target_utilisation, 0.75, "the target the run really aimed for");
+    assert.ok(built.meta.complete === (built.after.errors === 0 && (built.after.max_utilisation === null || built.after.max_utilisation <= 0.75 + 1e-9)));
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

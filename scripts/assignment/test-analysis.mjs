@@ -3,11 +3,15 @@
 // corners, floating parts, per-body centre of gravity), the issues and check rows (thin joints, directions, edge
 // cases), the downloads, the runAnalysis wrapper and its cache (including empty extractions), the real desk-lamp
 // fixture, and speed on a million triangles. The "E1".."E9" tests pin the review findings fixed in the engine.
+// Block assemblies (a stabilized model: the cells are the blocks) and the stress stage are covered through runAnalysis,
+// through the worker's message protocol and through the report downloads; their numbers are in test-stress-assembly.mjs.
 //
 //   node scripts/assignment/test-analysis.mjs
 //
-// The .ts modules are imported directly (Node 22 strips the types). No browser, no worker thread: runAnalysis runs
-// its main-thread fallback here (Node has no global Worker), which is the same engine code the worker runs.
+// The .ts modules are imported directly (Node 22 strips the types). Most tests run without a Worker: runAnalysis then
+// takes its main-thread fallback (Node has no global Worker), which is the same engine code the worker runs. The worker
+// tests start a Node worker thread on analysis.worker.ts behind a stand-in for the browser's Worker (FakeWorker), so the
+// real module the browser bundles is what answers, wasm solver included. test-worker-build.mjs checks a built site.
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -29,6 +33,9 @@ const { convexHull, hullDistance, directionLabel } = await mod("geometry");
 const { normalizeSettings, maxGridSize } = await mod("settings");
 const { buildReport, buildReportJson, buildBlocksCsv } = await mod("report");
 const { runAnalysis, clearAnalysisCache, EmptyModelError } = await mod("runAnalysis");
+const { withStress, analyzeAssemblyWithStress, resetSharedSolver } = await mod("withStress");
+const { boundsOf, originalOf } = await mod("assembly");
+const { descriptorFromBlocks } = await import("../../src/assignment/shared/assembly.ts");
 const { DEFINITIONS } = await mod("definitions");
 const { DEFAULT_ANALYSIS_SETTINGS } = await mod("types");
 const { checkAnalysisSummary } = await import("../../worker/analysis.ts");
@@ -767,6 +774,7 @@ await test("a component budget: too many blocks is an error with the numbers", (
     assert.equal(over.issues[0].kind, "too-many-blocks");
     assert.equal(over.issues[0].title, "Too many components: 27 blocks");
     assert.match(over.issues[0].detail, /budget is 20: 7 blocks over/);
+    assert.match(over.issues[0].detail, /Raising the fill threshold above \d+% drops the most weakly filled blocks first/, "a voxelised mesh: the fill threshold can drop blocks");
     assert.equal(over.checks[3].status, "fail");
     assert.equal(over.checks[3].value, "27 blocks (budget 20)");
     const ok = run(cube(3), { maxBlocks: 27 }).result;
@@ -1138,16 +1146,17 @@ await test("summary passes the server's validation; report JSON and blocks CSV a
     assert.equal(buildReport(result).cantilever_runs[0].reach, 6);
 
     const csv = buildBlocksCsv(result).trimEnd().split("\n");
-    assert.equal(csv[0], "index,i,j,k,x_mm,y_mm,z_mm,status,reach,body,fill");
+    assert.equal(csv[0], "index,i,j,k,x_mm,y_mm,z_mm,status,reach,body,fill,role,step,utilisation");
     assert.equal(csv.length, result.blocks.length + 1);
     const first = csv[1].split(",");
-    assert.equal(first.length, 11);
+    assert.equal(first.length, 14);
+    assert.deepEqual(first.slice(11), ["", "", ""], "a mesh result before the stress stage: no role, no step, no utilisation");
     assert.equal(first[7], "supported");
     assert.equal(first[8], "0");
     const overreach = csv.find((line) => line.includes(",overreach,"));
     assert.ok(overreach && ["5", "6"].includes(overreach.split(",")[8]), overreach);
     const empty = analyze(soupOf(new Float32Array(0)));
-    assert.equal(buildBlocksCsv(empty), "index,i,j,k,x_mm,y_mm,z_mm,status,reach,body,fill\n");
+    assert.equal(buildBlocksCsv(empty), "index,i,j,k,x_mm,y_mm,z_mm,status,reach,body,fill,role,step,utilisation\n");
     assert.equal(JSON.parse(buildReportJson(empty)).stability, null);
 });
 
@@ -1218,7 +1227,9 @@ await test("analyzeGrid re-evaluates quickly and refuses a grid built for other 
 class FakeWorker {
     static created = 0;
     static instances = [];
+    static sent = []; // every message the page posted, to see what travels (triangles or an assembly)
     static mode = "ok"; // "ok" | "crash"
+    static quiet = false; // keep the thread's stderr out of the test log (a loader reporting a missing file on purpose)
     constructor() {
         FakeWorker.created += 1;
         FakeWorker.instances.push(this);
@@ -1230,7 +1241,7 @@ class FakeWorker {
                    globalThis.self = globalThis;
                    globalThis.postMessage = (m) => parentPort.postMessage(m);
                    import(${JSON.stringify(workerUrl)}).then(() => parentPort.on("message", (data) => globalThis.onmessage({ data })));`;
-        this.thread = new NodeWorker(body, { eval: true });
+        this.thread = new NodeWorker(body, { eval: true, stderr: FakeWorker.quiet });
         this.terminated = false;
         this.onmessage = null;
         this.onerror = null;
@@ -1239,6 +1250,7 @@ class FakeWorker {
         this.thread.on("error", (error) => this.onerror?.({ message: error.message }));
     }
     postMessage(message, transfer) {
+        FakeWorker.sent.push(message);
         this.thread.postMessage(message, transfer ?? []);
     }
     terminate() {
@@ -1253,6 +1265,7 @@ await test("runAnalysis through a worker: same result as in-process, grid reuse 
         clearAnalysisCache();
         const s = shape(gallows(6, 6));
         const inProcess = analyze(s.soup, s.settings);
+        const stressed = await withStress(inProcess);
         let extracted = 0;
         const source = () => (extracted++, s.soup);
         const steps = new Set();
@@ -1260,10 +1273,16 @@ await test("runAnalysis through a worker: same result as in-process, grid reuse 
         assert.equal(FakeWorker.created, 1);
         assert.equal(extracted, 1);
         assert.equal(s.soup.positions.length > 0, true, "the soup was copied, not taken away");
-        assert.ok(steps.has("analyze"));
+        assert.ok(steps.has("analyze") && steps.has("stress"), [...steps].join());
         assert.deepEqual(viaWorker.blocks, inProcess.blocks);
-        assert.deepEqual(viaWorker.issues, inProcess.issues);
         assert.deepEqual(viaWorker.stability, inProcess.stability);
+        // The worker's second stage is the stress estimate (Awatif's wasm there too), the same as withStress in-process.
+        assert.equal(viaWorker.stress.solver.backend, "wasm");
+        assert.deepEqual(viaWorker.issues, stressed.issues);
+        assert.deepEqual(viaWorker.checks, stressed.checks);
+        assert.deepEqual(viaWorker.summary.stress, stressed.summary.stress);
+        assert.deepEqual(viaWorker.stress.byBlock, stressed.stress.byBlock);
+        assert.ok(viaWorker.issues.some((i) => i.kind === "overstressed"), "a 6-block arm of concrete blocks is overstressed");
 
         // New limit, same model: the idle worker still holds the voxel grid, so no triangles are sent or extracted.
         const strict = await runAnalysis(source, { ...s.settings, cantileverLimit: 2 }, { cacheKey: "w-gallows" });
@@ -1317,6 +1336,228 @@ await test("runAnalysis falls back to the main thread when the worker crashes on
         assert.ok(FakeWorker.instances.at(-1).terminated);
     } finally {
         FakeWorker.mode = "ok";
+        clearAnalysisCache();
+        delete globalThis.Worker;
+    }
+});
+
+// ---------- block assemblies (a stabilized model): the cells are the blocks, the triangles only give the frame ----------
+
+const bx = (x0, x1, y0, y1, z0, z1) => range(x1 - x0, x0).flatMap((i) => range(y1 - y0, y0).flatMap((j) => range(z1 - z0, z0).map((k) => [i, j, k])));
+/** A shelf: an 8 x 3 base, a 5-block column, a 6-block arm (overstressed on its own). */
+const shelfBlocks = () => [...bx(0, 8, 0, 3, 0, 1), ...bx(0, 1, 1, 2, 1, 6), ...bx(1, 7, 1, 2, 5, 6)].map((cell) => ({ cell }));
+/** The shelf with a 4-block column added under the arm tip by "step 1": stable. */
+const stabilizedBlocks = () => [...shelfBlocks(), ...[1, 2, 3, 4].map((k) => ({ cell: [6, 1, k], role: "column", step: 1 }))];
+/** The triangles of an assembly's GLB: boxes inset 2 % per side, in the viewer's own frame (any scale and place). */
+function assemblySoup(desc, { unit = 0.1, origin = [3.7, -1.2, 5.1] } = {}) {
+    const floats = [];
+    for (let n = 0; n < desc.cells.length; n += 5) {
+        const [i, j, k] = [desc.cells[n], desc.cells[n + 1], desc.cells[n + 2]];
+        const lo = (v) => (v + 0.02) * unit;
+        const hi = (v) => (v + 0.98) * unit;
+        pushBox(floats, origin[0] + lo(i), origin[1] + lo(j), origin[2] + lo(k), origin[0] + hi(i), origin[1] + hi(j), origin[2] + hi(k));
+    }
+    return soupOf(floats);
+}
+const assemblyBlockCount = (desc) => desc.cells.length / 5;
+
+await test("runAnalysis of a block assembly (main thread): the cells are the blocks, roles on them, a stress stage, cached by cells and material", async () => {
+    clearAnalysisCache();
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const soup = assemblySoup(desc, { unit: 0.25 }); // a GLB in other units than metres
+    let extracted = 0;
+    const source = () => (extracted++, soup);
+    const stages = [];
+    let last = 0;
+    let monotone = true;
+    const r = await runAnalysis(source, {}, { assembly: desc, cacheKey: "asm", onProgress: (p) => { stages.push(p.step); if (p.progress < last - 1e-9) monotone = false; last = p.progress; } });
+    assert.equal(r.blocks.length, assemblyBlockCount(desc));
+    assert.equal(r.timingsMs.voxelize, 0, "nothing was voxelised");
+    assert.deepEqual(r.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0]);
+    assert.deepEqual(r.blocks.filter((b) => b.role === "column").map((b) => b.step), [1, 1, 1, 1]);
+    assert.ok(r.blocks.filter((b) => b.role === "original").every((b) => b.step === 0));
+    assert.equal(r.stress.solver.backend, "wasm");
+    assert.equal(r.stats.overLimitCount, 0);
+    assert.ok(r.stress.maxUtilisation < 0.75, `the column holds the arm up: ${r.stress.maxUtilisation}`);
+    assert.ok(stages.includes("analyze") && stages.includes("stress") && !stages.includes("voxelize"), stages.join());
+    assert.ok(monotone && last === 1, "the bar only moves forward and ends at 100 %");
+    assert.equal(extracted, 1, "the triangles are read once, for their bounds");
+    assert.notEqual(analyze(soup, { targetSizeMm: 800 }).blocks.length, r.blocks.length, "voxelising the same triangles gives other blocks: why the cells are used");
+    // The same as analysing the cells directly, with the transform of the triangles' frame.
+    const direct = await analyzeAssemblyWithStress(desc, boundsOf(soup.positions), {});
+    assert.deepEqual(r.blocks, direct.blocks);
+    assert.deepEqual(r.issues, direct.issues);
+    assert.deepEqual(r.transform, direct.transform);
+    // The triangles' frame is tied to the lattice: 0.25 units of model per block makes 400 mm per unit, and the box
+    // corners (inset 2 mm per side) land at 2 mm and at the far edge of the last cell minus 2 mm.
+    const bounds = boundsOf(soup.positions);
+    near(r.transform.factor, 400, 1e-3);
+    const toMm = (p) => p.map((v, a) => (v - r.transform.modelMin[a]) * r.transform.factor + r.transform.offsetMm[a]);
+    nearVec(toMm(bounds.min), [2, 2, 2], 1e-3, "min corner");
+    nearVec(toMm(bounds.max), [798, 298, 598], 1e-3, "max corner");
+
+    assert.equal(await runAnalysis(source, {}, { assembly: desc, cacheKey: "asm" }), r, "the same cells and settings: the cached result");
+    assert.equal(extracted, 1, "not even the bounds for a cache hit");
+    const timber = await runAnalysis(source, { material: "timber" }, { assembly: desc, cacheKey: "asm" });
+    assert.notEqual(timber, r, "the material is part of the cache key");
+    assert.equal(timber.stress.material, "timber");
+    assert.ok(timber.stress.maxUtilisation < r.stress.maxUtilisation);
+    const other = descriptorFromBlocks(stabilizedBlocks().map((b) => (b.role === "column" && b.cell[2] === 1 ? { ...b, role: "footing" } : b)));
+    const roles = await runAnalysis(source, {}, { assembly: other, cacheKey: "asm" });
+    assert.notEqual(roles, r, "a role is part of the key");
+    assert.equal(roles.assembly.roleCounts[2], 1);
+    const odd = await runAnalysis(source, { blockSizeMm: 50, targetSizeMm: 500 }, { assembly: desc, cacheKey: "asm" });
+    assert.equal(odd.blocks.length, r.blocks.length, "the lattice is the assembly's own: a voxelisation scale does not apply");
+    assert.equal(odd.settings.blockSizeMm, 100);
+
+    // The blocks of the original on their own, in the whole's frame: the compare view's "original".
+    const part = originalOf(desc);
+    const o = await runAnalysis(source, {}, { assembly: part, frame: desc, cacheKey: "asm" });
+    assert.deepEqual(o.transform, r.transform);
+    assert.equal(o.blocks.length, shelfBlocks().length);
+    assert.ok(o.stats.overLimitCount > 0 && o.issues.some((i) => i.kind === "overstressed"), "the original arm is too long and overstressed");
+    assert.ok(o.assembly.roleCounts.slice(1).every((n) => n === 0));
+    clearAnalysisCache();
+});
+
+await test("runAnalysis of a block assembly: an unloaded viewer (no triangles) is an EmptyModelError or a headless frame that is not remembered", async () => {
+    clearAnalysisCache();
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const empty = () => ({ positions: new Float32Array(0) });
+    await assert.rejects(runAnalysis(empty, {}, { assembly: desc, cacheKey: "asm-e", rejectEmpty: true }), (e) => e instanceof EmptyModelError);
+    const headless = await runAnalysis(empty, {}, { assembly: desc, cacheKey: "asm-e" });
+    assert.deepEqual(headless.transform, { factor: 1, modelMin: [0, 0, 0], offsetMm: [0, 0, 0] });
+    assert.equal(headless.blocks.length, assemblyBlockCount(desc));
+    const real = await runAnalysis(assemblySoup(desc), {}, { assembly: desc, cacheKey: "asm-e" });
+    assert.notDeepEqual(real.transform, headless.transform, "the empty answer did not stick to the model");
+    clearAnalysisCache();
+});
+
+/** A Node worker thread running analysis.worker.ts, spoken to in the worker protocol. */
+function rawWorker() {
+    const worker = new FakeWorker();
+    const messages = [];
+    worker.onmessage = (event) => messages.push(event.data);
+    return {
+        messages,
+        async ask(request) {
+            const from = messages.length;
+            worker.postMessage(request);
+            for (let n = 0; n < 1000; n++) {
+                const done = messages.slice(from).find((m) => m.kind === "result" || m.kind === "error" || m.kind === "need-soup");
+                if (done) return { done, messages: messages.slice(from) };
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            throw new Error("the worker did not answer");
+        },
+        stop: () => worker.terminate(),
+    };
+}
+
+await test("the worker's request path with an assembly: cells + bounds in, annotated result with stress out; bad input is refused", async () => {
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const soup = assemblySoup(desc);
+    const settings = normalizeSettings({});
+    const request = (id, extra = {}) => ({ kind: "run", id, gridKey: null, positions: null, settings, assembly: desc, soupBounds: boundsOf(soup.positions), ...extra });
+    const expected = await analyzeAssemblyWithStress(desc, boundsOf(soup.positions), settings);
+    const w = rawWorker();
+    try {
+        const { done, messages } = await w.ask(request(1));
+        assert.equal(done.kind, "result");
+        assert.deepEqual(done.result.blocks, expected.blocks);
+        assert.deepEqual(done.result.issues, expected.issues);
+        assert.deepEqual(done.result.transform, expected.transform);
+        assert.deepEqual(done.result.assembly, expected.assembly);
+        assert.deepEqual(done.result.stress.byBlock, expected.stress.byBlock);
+        assert.equal(done.result.stress.solver.backend, "wasm");
+        const progress = messages.filter((m) => m.kind === "progress");
+        assert.ok(progress.some((m) => m.step === "stress"), "the stress stage reports progress");
+        assert.ok(progress.every((m) => m.fraction <= 1) && progress.map((m) => m.fraction).every((f, n, all) => n === 0 || f >= all[n - 1] - 1e-9), "progress never goes back");
+
+        // The same worker answers a second assembly (the solver stays loaded) and a mesh request.
+        const second = await w.ask(request(2, { settings: normalizeSettings({ material: "timber" }) }));
+        assert.equal(second.done.result.stress.material, "timber");
+        assert.equal(second.done.result.stress.solver.backend, "wasm");
+        const mesh = shape(cube(2));
+        const third = await w.ask({ kind: "run", id: 3, gridKey: "raw-cube", positions: mesh.soup.positions, settings: normalizeSettings(mesh.settings) });
+        assert.equal(third.done.result.blocks.length, 8);
+        assert.ok(third.done.result.stress, "a mesh gets the stress stage too");
+
+        // A frame for a part of the assembly.
+        const part = originalOf(desc);
+        const framed = await w.ask(request(4, { assembly: part, frame: desc }));
+        assert.deepEqual(framed.done.result.transform, expected.transform);
+
+        // Refusals: a descriptor that is not canonical, a frame that is not valid; bounds that are not numbers mean "no frame".
+        const cut = await w.ask(request(5, { assembly: { ...desc, cells: desc.cells.slice(0, 7) } }));
+        assert.equal(cut.done.kind, "error");
+        assert.match(cut.done.message, /block assembly is not valid/);
+        const swapped = await w.ask(request(6, { assembly: { ...desc, cells: [...desc.cells.slice(5, 10), ...desc.cells.slice(0, 5), ...desc.cells.slice(10)] } }));
+        assert.equal(swapped.done.kind, "error");
+        const badFrame = await w.ask(request(7, { frame: { version: 2 } }));
+        assert.equal(badFrame.done.kind, "error");
+        assert.match(badFrame.done.message, /frame is not valid/);
+        const noFrame = await w.ask(request(8, { soupBounds: { min: [0, 0, 0], max: [Infinity, 1, 1] } }));
+        assert.deepEqual(noFrame.done.result.transform, { factor: 1, modelMin: [0, 0, 0], offsetMm: [0, 0, 0] });
+        // Nothing to analyse and nothing held: the old protocol still answers need-soup.
+        const lost = await w.ask({ kind: "run", id: 9, gridKey: "never-seen", positions: null, settings });
+        assert.equal(lost.done.kind, "need-soup");
+    } finally {
+        w.stop();
+    }
+});
+
+await test("the worker falls back to the TypeScript solver when the wasm cannot be loaded, with the same numbers", async () => {
+    const desc = descriptorFromBlocks(shelfBlocks());
+    const settings = normalizeSettings({});
+    FakeWorker.quiet = true;
+    const w = rawWorker();
+    try {
+        const { done } = await w.ask({ kind: "run", id: 1, gridKey: null, positions: null, settings, assembly: desc, soupBounds: null, wasmUrl: pathToFileURL(resolve(ROOT, "src/assignment/analysis/fem/vendor/nope.wasm")).href });
+        assert.equal(done.kind, "result", done.message);
+        assert.equal(done.result.stress.solver.backend, "ts");
+        const wasm = await analyzeAssemblyWithStress(desc, null, settings);
+        assert.equal(wasm.stress.solver.backend, "wasm");
+        assert.ok(Math.abs(done.result.stress.maxUtilisation - wasm.stress.maxUtilisation) < 1e-6);
+        assert.deepEqual(done.result.issues, wasm.issues);
+    } finally {
+        FakeWorker.quiet = false;
+        w.stop();
+    }
+});
+
+await test("runAnalysis of a block assembly through a worker: no triangles are sent, results match the main thread", async () => {
+    globalThis.Worker = FakeWorker;
+    try {
+        clearAnalysisCache();
+        const desc = descriptorFromBlocks(stabilizedBlocks());
+        const soup = assemblySoup(desc);
+        let extracted = 0;
+        const source = () => (extracted++, soup);
+        const before = FakeWorker.sent.length;
+        const stages = new Set();
+        const viaWorker = await runAnalysis(source, {}, { assembly: desc, cacheKey: "asm-w", onProgress: (p) => stages.add(p.step) });
+        const sent = FakeWorker.sent.slice(before);
+        assert.equal(sent.length, 1, "one message: no need-soup round trip");
+        assert.equal(sent[0].positions, null);
+        assert.equal(sent[0].assembly.cells.length, desc.cells.length);
+        assert.deepEqual(sent[0].soupBounds, boundsOf(soup.positions));
+        assert.ok(stages.has("stress") && !stages.has("voxelize"));
+        const direct = await analyzeAssemblyWithStress(desc, boundsOf(soup.positions), {});
+        assert.deepEqual(viaWorker.blocks, direct.blocks);
+        assert.deepEqual(viaWorker.issues, direct.issues);
+        assert.deepEqual(viaWorker.transform, direct.transform);
+        assert.equal(viaWorker.stress.solver.backend, "wasm");
+        assert.equal(await runAnalysis(source, {}, { assembly: desc, cacheKey: "asm-w" }), viaWorker);
+        assert.equal(FakeWorker.sent.length, before + 1, "a cache hit sends nothing");
+        // A different cantilever limit re-evaluates the same cells in the idle worker.
+        const strict = await runAnalysis(source, { cantileverLimit: 2 }, { assembly: desc, cacheKey: "asm-w" });
+        assert.equal(FakeWorker.created > 0, true);
+        assert.ok(strict.stats.overLimitCount > 0 && strict.settings.cantileverLimit === 2);
+        // And a mesh is still voxelised.
+        const mesh = shape(cube(2));
+        assert.equal((await runAnalysis(mesh.soup, mesh.settings, { cacheKey: "asm-w-mesh" })).blocks.length, 8);
+    } finally {
         clearAnalysisCache();
         delete globalThis.Worker;
     }

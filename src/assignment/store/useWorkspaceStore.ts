@@ -90,6 +90,12 @@ interface WorkspaceState {
     upsertJob: (job: Job) => void;
     /** Add a finished model (or replace the one with the same id). Does not select it. */
     addModel: (model: ModelAsset) => void;
+    /**
+     * Drop models the server deleted (a stabilized version and the versions made from it). When the viewer was
+     * showing one of them it moves to `fallbackId` (else the newest model left), which the project then saves.
+     */
+    removeModels: (ids: readonly string[], fallbackId?: string | null) => void;
+    /** Make `id` the model in the viewer. An id the project does not have is ignored (null clears). */
     setActiveModel: (id: string | null) => void;
 
     setSaveStatus: (status: SaveStatus) => void;
@@ -126,6 +132,26 @@ const EMPTY = {
     savedRevision: 0,
 };
 
+/** Fill the ModelAsset fields a server from before the stabilizer does not send (kind then reads "generated"). */
+export function normalizeModel(model: ModelAsset): ModelAsset {
+    const m = model as Partial<ModelAsset> & ModelAsset;
+    if (m.kind && m.source_model_id !== undefined && m.example_slug !== undefined && m.derived !== undefined) return model;
+    return {
+        ...model,
+        kind: m.kind ?? "generated",
+        source_model_id: m.source_model_id ?? null,
+        example_slug: m.example_slug ?? null,
+        derived: m.derived ?? null,
+    };
+}
+
+/** The same for a job's model, so a card never reads `kind` off a bare row. */
+function normalizeJob(job: Job): Job {
+    if (!job.model) return job;
+    const model = normalizeModel(job.model);
+    return model === job.model ? job : { ...job, model };
+}
+
 /** The model the project was last looking at, falling back to its newest. */
 function initialActiveModel(detail: ProjectDetail): string | null {
     const saved = detail.data?.active_model_id;
@@ -156,6 +182,11 @@ export function sanitizeMessages(raw: unknown): ChatMessage[] {
             const ids = (m.job_ids as unknown[]).filter((id): id is string => typeof id === "string");
             if (ids.length > 0) message.job_ids = ids;
         }
+        if (Array.isArray(m.model_ids)) {
+            // At most 10, like the Worker keeps: a card per id, and nothing here can be longer than the chat allows.
+            const ids = (m.model_ids as unknown[]).filter((id): id is string => typeof id === "string" && id !== "").slice(0, 10);
+            if (ids.length > 0) message.model_ids = ids;
+        }
         out.push(message);
     }
     return out;
@@ -177,8 +208,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
             loadingProjectId: s.loadingProjectId === detail.id ? null : s.loadingProjectId,
             project: detail,
             messages: sanitizeMessages(detail.data?.messages),
-            jobs: Object.fromEntries(detail.jobs.map((job) => [job.id, job])),
-            models: detail.models,
+            jobs: Object.fromEntries(detail.jobs.map((job) => [job.id, normalizeJob(job)])),
+            models: detail.models.map(normalizeModel),
             activeModelId: initialActiveModel(detail),
             queuedPrompt: null,
             draft: "",
@@ -220,14 +251,29 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     removeMessage: (id) =>
         set((s) => ({ messages: s.messages.filter((m) => m.id !== id), revision: s.revision + 1 })),
 
-    upsertJob: (job) => set((s) => ({ jobs: { ...s.jobs, [job.id]: job } })),
-    addModel: (model) =>
-        set((s) => ({
-            models: s.models.some((m) => m.id === model.id)
-                ? s.models.map((m) => (m.id === model.id ? model : m))
-                : [...s.models, model],
-        })),
-    setActiveModel: (id) => set((s) => (s.activeModelId === id ? s : { activeModelId: id, revision: s.revision + 1 })),
+    upsertJob: (job) => set((s) => ({ jobs: { ...s.jobs, [job.id]: normalizeJob(job) } })),
+    addModel: (incoming) =>
+        set((s) => {
+            const model = normalizeModel(incoming);
+            return {
+                models: s.models.some((m) => m.id === model.id)
+                    ? s.models.map((m) => (m.id === model.id ? model : m))
+                    : [...s.models, model],
+            };
+        }),
+    removeModels: (ids, fallbackId = null) =>
+        set((s) => {
+            const gone = new Set(ids);
+            if (!s.models.some((m) => gone.has(m.id))) return {};
+            const models = s.models.filter((m) => !gone.has(m.id));
+            if (s.activeModelId === null || !gone.has(s.activeModelId)) return { models };
+            const wanted = fallbackId && models.some((m) => m.id === fallbackId) ? fallbackId : null;
+            return { models, activeModelId: wanted ?? models[models.length - 1]?.id ?? null, revision: s.revision + 1 };
+        }),
+    // An id that is not in the project (a banner or card for a model deleted since) leaves the viewer where it is: the
+    // viewer would go empty and the autosave would store an id the next load cannot open.
+    setActiveModel: (id) =>
+        set((s) => (s.activeModelId === id || (id !== null && !s.models.some((m) => m.id === id)) ? s : { activeModelId: id, revision: s.revision + 1 })),
 
     setSaveStatus: (saveStatus) => set({ saveStatus }),
     markSaved: (revision) => set((s) => ({ savedRevision: Math.max(s.savedRevision, revision) })),

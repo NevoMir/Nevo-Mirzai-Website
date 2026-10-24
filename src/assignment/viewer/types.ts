@@ -37,6 +37,10 @@ export interface PartRow {
     triangles: number;
     /** Size in mm along X, Y, Z of the Z-up scene (the longest side of the whole model is ~100 mm). */
     size: Vec3 | null;
+    /** A colour the part is known by (a role of a stabilized model): a dot in the parts list. */
+    swatch?: string;
+    /** What the list says about the part instead of its triangle count ("12 blocks"). */
+    detail?: string;
 }
 
 /** What the scene is told to show: hover, selection, hidden parts and isolation. */

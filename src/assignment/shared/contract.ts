@@ -47,19 +47,39 @@ export interface ProvidersResponse {
 export type JobStatus = "queued" | "running" | "finalizing" | "succeeded" | "failed" | "canceled";
 export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed", "canceled"];
 
-/** A generated model stored in our own R2 (provider URLs expire and lack CORS). */
+/**
+ * Where a model came from. "generated": a text-to-3D provider made it (every model before the stabilizer existed).
+ * "example": the original model of a bundled example (src/assignment examples manifest), shared by every project
+ * made from it. "stabilized": the corrected block assembly the browser built from another model of the project.
+ */
+export type ModelKind = "generated" | "example" | "stabilized";
+
+/** `provider` of a model: a text-to-3D model, "example" (bundled) or "stabilizer" (made in the browser). */
+export type ModelProvider = ProviderId | "example" | "stabilizer";
+
+/**
+ * A model stored in our own R2 (provider URLs expire and lack CORS), or shipped with the site (kind "example").
+ * Read `kind` as "generated" when it is missing: a server from before the stabilizer does not send it.
+ */
 export interface ModelAsset {
     id: string;
     project_id: string;
-    job_id: string;
-    provider: ProviderId;
+    job_id: string; // "" for a model that no job made (examples); a stabilized model carries its source's job id
+    provider: ModelProvider;
     prompt: string;
-    glb_url: string; // same-origin: `${API_BASE}/files/models/${id}.glb`
+    glb_url: string; // same-origin: `${API_BASE}/files/models/${id}.glb`, or `${APP_BASE}/examples/<slug>/<file>.glb` for examples
     thumbnail_url: string | null; // provider still if it gave one: `${API_BASE}/files/model-thumbs/${id}.<ext>`
     size_bytes: number;
     part_count: number | null; // mesh nodes in the GLB if known, else null
     created_at: string;
     analysis: AnalysisSummary | null; // the latest block analysis, saved by the client after it runs
+    kind: ModelKind;
+    /** The model this one was made from (stabilized only; same project). */
+    source_model_id: string | null;
+    /** The bundled example this model belongs to (kind "example", and the stabilized twin made from it). */
+    example_slug: string | null;
+    /** What the stabilizer did (kind "stabilized"), else null. */
+    derived: DerivedMeta | null;
 }
 
 /**
@@ -84,8 +104,99 @@ export interface AnalysisSummary {
     fill_threshold: number; // 0-1
     errors: number; // constraint violations
     warnings: number;
+    /** The joint-stress estimate; absent on summaries saved before it existed and while it has not been computed. */
+    stress?: StressSummary | null;
     analyzed_at: string;
 }
+
+// ---------- Stress, block roles, stabilized models ----------
+
+/** What a block of an assembly is for. "original" blocks were in the analysed model; the others were added to it. */
+export type BlockRole = "original" | "column" | "footing" | "bracket" | "bridge" | "reinforcement";
+export const BLOCK_ROLES: readonly BlockRole[] = ["original", "column", "footing", "bracket", "bridge", "reinforcement"];
+/** The roles the stabilizer adds (every role except "original"). */
+export type AddedRole = Exclude<BlockRole, "original">;
+
+/** Block material of the stress estimate (src/assignment/analysis/materials.ts has the numbers). */
+export type MaterialId = "concrete" | "timber";
+export const MATERIAL_IDS: readonly MaterialId[] = ["concrete", "timber"];
+
+/** Headline numbers of the stress estimate (self-weight only), saved with the AnalysisSummary. */
+export interface StressSummary {
+    material: MaterialId;
+    /** Highest joint utilisation: 0.73 = 73 % of the allowable stress, above 1 the joint opens. 0..50. */
+    max_utilisation: number;
+    max_at: [number, number, number] | null; // grid cell (i, j, k) of the most stressed block
+    stressed_blocks: number; // blocks above 75 % of the allowable (the warning level)
+    overstressed_blocks: number; // blocks above 100 %
+    analysed_blocks: number; // blocks the solver saw (the ones that stand on the ground)
+    unsupported_blocks: number; // blocks with no load path to the ground: no stress can be computed for them
+}
+
+/** The numbers the stabilizer watches, before and after a step or the whole run. */
+export interface StabilizationMetrics {
+    blocks: number;
+    errors: number;
+    warnings: number;
+    floating_blocks: number;
+    over_limit: number; // blocks beyond the cantilever limit
+    longest_cantilever: number;
+    cog_margin_mm: number | null; // null: nothing touches the ground
+    max_utilisation: number | null; // null: no block stands on the ground
+    overstressed_blocks: number;
+}
+
+export type StabilizeReason = "floating" | "cantilever" | "cog" | "stress";
+export type StabilizeStop = "stable" | "no-improving-move" | "max-steps" | "max-blocks" | "time-budget" | "canceled";
+export type StepMetrics = Pick<
+    StabilizationMetrics,
+    "blocks" | "errors" | "floating_blocks" | "over_limit" | "longest_cantilever" | "cog_margin_mm" | "max_utilisation"
+>;
+
+/** One iteration of the stabilizer: a move, why it was made and what it changed. */
+export interface StabilizeStepLog {
+    n: number; // 1-based; the `step` of every block this move added
+    move: AddedRole;
+    reason: StabilizeReason;
+    added: number; // blocks added
+    /** One or two sentences with the numbers, e.g. "Added a 5-block column under the arm tip at x = 850 mm ...". */
+    text: string;
+    at_mm: [number, number, number]; // where to point the camera
+    before: StepMetrics;
+    after: StepMetrics;
+}
+
+/** Everything a stabilized model records about how it was made (kind "stabilized"; stored in models.meta). */
+export interface DerivedMeta {
+    version: 1;
+    depth: number; // 1: made from a generated or example model, 2: from a stabilized one, ...
+    stabilizer: string; // algorithm version, "1.0.0"
+    solver: "awatif-wasm" | "awatif-ts";
+    material: MaterialId;
+    target_utilisation: number; // the stress level the loop tried to get under (default 0.75)
+    cantilever_limit: number;
+    fill_threshold: number;
+    complete: boolean; // no errors left and stress under the target
+    stop: StabilizeStop;
+    /** Blocks added by THIS run. A second run (depth 2) keeps the first run's blocks, roles and steps as part of the model. */
+    added_blocks: number;
+    added_by_role: Partial<Record<AddedRole, number>>;
+    before: StabilizationMetrics;
+    after: StabilizationMetrics;
+    steps: StabilizeStepLog[]; // at most MAX_STABILIZE_STEPS
+    duration_ms: number;
+    assembly_hash: string; // SHA-256 (hex) of the canonical block list
+    /** The stabilized model's own analysis; also stored in models.analysis so cards show the verdict at once. */
+    after_summary: AnalysisSummary;
+    created_at: string;
+}
+
+export const DERIVED_GLB_LIMIT = 1024 * 1024; // a 1000-block assembly is 650 KB
+export const DERIVED_META_LIMIT = 32 * 1024;
+export const MAX_STABILIZE_STEPS = 60;
+export const MAX_DERIVED_PER_SOURCE = 5;
+export const MAX_DERIVED_PER_PROJECT = 20;
+export const MAX_DERIVED_DEPTH = 3;
 
 export interface Job {
     id: string;
@@ -110,6 +221,8 @@ export interface ChatMessage {
     content: string; // user: the prompt; assistant: markdown written by the client
     timestamp: string;
     job_ids?: string[]; // assistant replies point at the jobs a prompt started (one per provider)
+    /** Assistant replies that present models directly (an opened example, a stabilized version): at most 10. */
+    model_ids?: string[];
 }
 
 /** Free-form workspace state the client saves with PATCH /projects/:id { data }. */
@@ -175,11 +288,58 @@ export type BulkAction = "trash" | "restore" | "archive" | "unarchive" | "purge"
 //
 // PUT    /models/:id/analysis   {summary: AnalysisSummary}  -> {model: ModelAsset}   400 {error} on a malformed summary
 //
-// GET    /files/models/:modelId.glb              -> model/gltf-binary (immutable cache)
+// POST   /models/:sourceId/derived  (raw GLB, Content-Type model/gltf-binary, <= DERIVED_GLB_LIMIT; the stabilizer's
+//                                    metadata travels inside the GLB, see shared/assemblyGlb.ts)
+//                                                 -> 201 {model: ModelAsset}  (200 with the existing model when the same
+//                                                    assembly was stored before, whatever log it came with)
+//                                                    400 {error} invalid file, or a log that disagrees with the blocks
+//                                                    (hash, depth, blocks added, per role, per step), 404 source,
+//                                                    409 source in the bin / chain too deep, 413 too large,
+//                                                    415 wrong content type, 429 per-source / per-project / daily limit
+//                                                    (the first two are checked inside the INSERT, so parallel requests
+//                                                    cannot pass them)
+// DELETE /models/:id                              -> {ok: true}   only models of kind "stabilized"; 409 for the others
+//
+// GET    /examples                                -> ExamplesResponse   (cacheable for 5 minutes)
+// POST   /projects/from-example  CreateProjectFromExampleBody
+//                                                 -> 201 {project: ProjectDetail}  a project holding the example's two
+//                                                    models (kind "example" and its "stabilized" twin), nothing generated
+//                                                    404 unknown slug, 429 project limit
+//
+// GET    /files/models/:modelId.glb              -> model/gltf-binary (immutable cache; for a model of an example the Worker
+//                                                    proxies the site's static file instead, cached for 5 minutes)
 // GET    /files/model-thumbs/:file               -> image
 // GET    /files/thumbs/:projectId.webp           -> image
 //
-// Errors are always JSON {error: string} with a 4xx/5xx status.
+// Errors are always JSON {error: string} with a 4xx/5xx status (503 + Retry-After while the database is behind the Worker).
+
+export interface CreateProjectFromExampleBody {
+    slug: string; // ExampleSummary.slug
+    tag_id?: string; // seed tag, as for CreateProjectBody
+}
+
+/** One bundled example: a generated-style model with problems, and its stabilized version. Nothing here costs tokens. */
+export interface ExampleSummary {
+    slug: string; // ^[a-z0-9-]{3,40}$
+    title: string; // "Mushroom table"
+    prompt: string; // the prompt it stands for ("A mushroom-shaped garden table"); becomes the models' prompt
+    blurb: string; // one sentence on what goes wrong and what the stabilizer does
+    tags: string[]; // "floating", "cantilever", "tipping", "stress", "stable" ...
+    cover_url: string; // 512 x 384 image: also the new project's card image
+    original: { size_bytes: number; part_count: number | null; analysis: AnalysisSummary };
+    stabilized: {
+        size_bytes: number;
+        analysis: AnalysisSummary;
+        added_blocks: number;
+        before: StabilizationMetrics;
+        after: StabilizationMetrics;
+    };
+    version: string; // content hash of the example's files (8 hex)
+}
+
+export interface ExamplesResponse {
+    examples: ExampleSummary[];
+}
 
 export interface CreateProjectBody {
     name?: string; // default "Untitled project"

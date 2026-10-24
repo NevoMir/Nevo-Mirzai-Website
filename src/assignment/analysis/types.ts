@@ -8,7 +8,8 @@
 // centred in X/Y inside the 1000 x 1000 footprint and rests on z = 0. Grid cell (i, j, k) spans
 // [i*100, (i+1)*100) x [j*100, (j+1)*100) x [k*100, (k+1)*100); k is the layer (0 = on the ground).
 
-import type { AnalysisSummary } from "@/assignment/shared/contract";
+import type { AnalysisSummary, BlockRole, MaterialId } from "@/assignment/shared/contract";
+import type { AssemblyDescriptor } from "@/assignment/shared/assembly";
 
 export type Vec3 = [number, number, number];
 export type Vec2 = [number, number];
@@ -23,6 +24,8 @@ export interface AnalysisSettings {
     fillThreshold: number;
     cantileverLimit: number; // longest allowed cantilever, in blocks (4)
     maxBlocks: number | null; // optional budget of components; null = no limit
+    /** What the blocks are made of, for the stress estimate (analysis/materials.ts). Does not change the voxel grid. */
+    material: MaterialId;
 }
 
 export const DEFAULT_ANALYSIS_SETTINGS: AnalysisSettings = {
@@ -36,6 +39,7 @@ export const DEFAULT_ANALYSIS_SETTINGS: AnalysisSettings = {
     fillThreshold: 0.1,
     cantileverLimit: 4,
     maxBlocks: null,
+    material: "concrete",
 };
 
 /** Input: a triangle soup, 9 floats per triangle (x, y, z of 3 vertices), Z-up, any units/placement. */
@@ -70,6 +74,9 @@ export interface Block {
     body: number; // id of the connected structure it belongs to
     fill: number; // 0-1 share of the block filled by the model
     cantilever: number | null; // id of the CantileverRun it belongs to
+    /** Only for a block assembly (a stabilized model): what the block is for, and the stabilizer step that added it (0 = original). */
+    role?: BlockRole;
+    step?: number;
 }
 
 /** A connected group of blocks that have nothing underneath (an overhang, arm, bridge or hanging part). */
@@ -119,7 +126,9 @@ export type IssueKind =
     | "cantilever-too-long"
     | "floating"
     | "too-many-blocks"
-    | "thin-features";
+    | "thin-features"
+    | "overstressed" // a joint carries more than 100 % of the allowable stress (error)
+    | "highly-stressed"; // a joint carries more than STRESS_WARN (75 %) of the allowable (warning)
 
 export interface Issue {
     id: string;
@@ -131,7 +140,7 @@ export interface Issue {
     focusMm: Vec3; // where to point the camera and the callout
 }
 
-export type CheckKey = "cog" | "cantilevered" | "long-cantilevers" | "components" | "floating";
+export type CheckKey = "cog" | "cantilevered" | "long-cantilevers" | "components" | "floating" | "stress";
 
 /** The required constraints, one row each, for the report. */
 export interface CheckRow {
@@ -153,6 +162,48 @@ export interface AnalysisStats {
     coverage: number; // 0-1: share of the model's solid volume that ended up inside blocks
 }
 
+// ---------- Stress (self-weight, linear frame model: analysis/stress.ts) ----------
+
+export type StressMode = "tension" | "compression" | "shear";
+
+/** A place where the structure is stressed: a group of neighbouring blocks around one peak. */
+export interface StressPoint {
+    rank: number; // 1 = the worst
+    blocks: number[]; // indices into AnalysisResult.blocks; blocks[0] is the peak
+    cell: Vec3; // the peak block's grid cell
+    centreMm: Vec3;
+    utilisation: number; // 0.73 = 73 % of the allowable stress
+    mode: StressMode; // which stress governs
+    tensionKPa: number; // joint tension at the peak (0 when the joint is in compression)
+    allowableKPa: number; // what the material allows for the governing mode
+    /** The joint that governs: the two blocks it connects. */
+    joint: [Vec3, Vec3] | null;
+}
+
+export interface StressAnalysis {
+    version: 1;
+    loadCase: "self-weight";
+    material: MaterialId;
+    solver: { name: "Awatif"; backend: "wasm" | "ts"; ms: number };
+    /** Utilisation per entry of AnalysisResult.blocks; NaN where there is no load path (the block is in a floating structure). */
+    byBlock: Float32Array;
+    analysedBlocks: number;
+    unsupportedBlocks: number;
+    maxUtilisation: number;
+    maxBlock: number | null;
+    stressedBlocks: number; // > STRESS_WARN (75 %)
+    overstressedBlocks: number; // > STRESS_FAIL (100 %)
+    points: StressPoint[]; // worst first, at most 8
+}
+
+/** For a result that came from a block assembly (a stabilized model) rather than from voxelising a mesh. */
+export interface AssemblyInfo {
+    descriptor: AssemblyDescriptor;
+    /** Blocks per role in BLOCK_ROLES order. */
+    roleCounts: number[];
+    steps: number; // highest stabilizer step
+}
+
 export interface AnalysisResult {
     settings: AnalysisSettings;
     gridSize: Vec3; // cells per axis (10, 10, 10)
@@ -166,12 +217,22 @@ export interface AnalysisResult {
     checks: CheckRow[];
     stats: AnalysisStats;
     summary: AnalysisSummary;
+    /** null until the stress estimate has run (it is a second stage) or when it could not (nothing stands on the ground). */
+    stress: StressAnalysis | null;
+    assembly: AssemblyInfo | null;
     timingsMs: { voxelize: number; analyze: number };
 }
 
 // ---------- Viewer <-> report panel ----------
 
-export type AnalysisColorBy = "status" | "reach" | "layer";
+export type AnalysisColorBy = "status" | "reach" | "layer" | "stress" | "role";
+
+/**
+ * Which version of a stabilized model the stage shows. "stabilized": the model as it is. "original": only the blocks
+ * that were in the analysed model, analysed on their own (so its floating parts and long arms show). "overlay": the
+ * stabilized model with its added blocks in their role colours (forces colorBy "role").
+ */
+export type CompareMode = "stabilized" | "original" | "overlay";
 
 /** How the viewer shows an analysis. Owned by the workspace, passed to <GlbViewer analysisView>. */
 export interface AnalysisViewState {
@@ -181,6 +242,7 @@ export interface AnalysisViewState {
     showGhost: boolean; // the original model, faint, inside the blocks
     showCog: boolean; // COG marker, drop line, support base outline
     highlight: number[]; // block indices to emphasise (others dimmed); [] = none
+    compare: CompareMode; // only meaningful for a stabilized model
     /** Bumped to ask the viewer to frame `focusMm` (an issue was clicked); the viewer animates the camera to it. */
     focus: { mm: Vec3; token: number; label?: string } | null;
 }
@@ -192,12 +254,15 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisViewState = {
     showGhost: false,
     showCog: true,
     highlight: [],
+    compare: "stabilized",
     focus: null,
 };
 
 /** Handed to the workspace once a GLB is loaded, so it can run the analysis on the same geometry. */
 export interface LoadedModel {
     url: string;
+    /** The block assembly the GLB declares (a stabilized model), else null: then the triangles are voxelised. */
+    assembly: AssemblyDescriptor | null;
     /** The model's triangles in the viewer's frame (Z-up, as loaded: no explode/split offsets). */
     extractTriangles(): TriangleSoup;
 }

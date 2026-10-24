@@ -22,6 +22,13 @@ export interface AnalysisSnapshot {
     result: AnalysisResult | null;
     verdict: Verdict | null;
     run: RunState;
+    /**
+     * What the viewer should draw as `analysis`: `result`, or for a stabilized model on its Original half the blocks it
+     * started from, analysed on their own. The report panel always reads `result`.
+     */
+    viewResult: AnalysisResult | null;
+    /** The stabilizer's work in progress, when it is for this model: the viewer's `previewResult` (drawn instead of `viewResult`). */
+    previewResult: AnalysisResult | null;
     /** The model's GLB is in the viewer, so the analysis can run. */
     ready: boolean;
     /** Why the viewer cannot show this model (so it cannot be analysed), else null. */
@@ -44,6 +51,7 @@ export function verdictOfResult(result: AnalysisResult | null): Verdict | null {
             blocks: result.stats.blockCount,
             cantilever_limit: result.settings.cantileverLimit,
             fill_threshold: result.settings.fillThreshold,
+            material: result.settings.material,
         },
         result.settings.maxBlocks,
     );
@@ -55,6 +63,10 @@ export function useAnalysisSnapshot(model: ModelAsset | null): AnalysisSnapshot 
     const result = useAnalysisStore((s) => s.result);
     const resultModelId = useAnalysisStore((s) => s.resultModelId);
     const failure = useAnalysisStore((s) => s.viewerFailure);
+    const compare = useAnalysisStore((s) => s.view.compare);
+    const originalResult = useAnalysisStore((s) => s.originalResult);
+    const originalFor = useAnalysisStore((s) => s.originalFor);
+    const preview = useAnalysisStore((s) => s.preview);
 
     const modelId = model?.id ?? null;
     const ready = loaded !== null && model !== null && loaded.url === model.glb_url;
@@ -63,7 +75,9 @@ export function useAnalysisSnapshot(model: ModelAsset | null): AnalysisSnapshot 
     const phase = derivePhase({ modelId, ready, run, resultModelId, unavailable: unavailable !== null });
     const current = modelId !== null && resultModelId === modelId ? result : null;
     const verdict = useMemo(() => verdictOfResult(current), [current]);
-    return { phase, result: current, verdict, run, ready, unavailable };
+    const viewResult = current && compare === "original" && originalResult && originalFor === current ? originalResult : current;
+    const previewResult = preview && modelId !== null && preview.modelId === modelId ? preview.result : null;
+    return { phase, result: current, verdict, run, viewResult, previewResult, ready, unavailable };
 }
 
 /**

@@ -3,17 +3,22 @@
 // models list all read the same answer.
 
 import { getProviders } from "@/assignment/lib/api";
-import type { ProviderId, ProviderInfo } from "@/assignment/shared/contract";
+import type { ModelProvider, ProviderId, ProviderInfo } from "@/assignment/shared/contract";
 import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 
-/** Names for a model the server no longer lists (a job made before a key was removed). */
-const FALLBACK_LABELS: Record<ProviderId, string> = {
+/**
+ * Names for a model the server no longer lists (a job made before a key was removed), and for the two makers that
+ * are never listed: a bundled example and the stabilizer.
+ */
+const FALLBACK_LABELS: Record<ModelProvider, string> = {
     "tripo-parts": "Tripo H3.1 · Parts",
     tripo: "Tripo H3.1",
     meshy: "Meshy 7.1",
     rodin: "Rodin Gen-2.5",
     hunyuan: "Hunyuan 3D 3.1",
     mock: "Demo (offline)",
+    example: "Ready-made example",
+    stabilizer: "Stabilizer",
 };
 
 let inFlight: Promise<void> | null = null;
@@ -32,11 +37,11 @@ export function refreshProviders(): Promise<void> {
     return inFlight;
 }
 
-export function providerInfo(providers: readonly ProviderInfo[] | undefined, id: ProviderId): ProviderInfo | undefined {
+export function providerInfo(providers: readonly ProviderInfo[] | undefined, id: ModelProvider): ProviderInfo | undefined {
     return providers?.find((p) => p.id === id);
 }
 
-export function providerLabel(providers: readonly ProviderInfo[] | undefined, id: ProviderId): string {
+export function providerLabel(providers: readonly ProviderInfo[] | undefined, id: ModelProvider): string {
     return providerInfo(providers, id)?.label ?? FALLBACK_LABELS[id] ?? id;
 }
 
@@ -65,6 +70,15 @@ export function viaLabel(via: ProviderInfo["via"] | undefined): string | null {
 export function generationSwitchedOff(providers: readonly ProviderInfo[] | undefined): boolean {
     if (!providers || providers.length === 0) return false;
     return !providers.some((p) => p.available) && providers.some((p) => p.via !== null);
+}
+
+/**
+ * Can a prompt cost anything here? True when some paid text-to-3D model is usable. The free offline demo does not
+ * count, and neither does a list that has not arrived: the new-chat hero starts on the ready-made examples unless
+ * this says there is something to generate with (components/chat/HeroStart.tsx).
+ */
+export function hasPaidProvider(providers: readonly ProviderInfo[] | undefined): boolean {
+    return Boolean(providers?.some((p) => p.available && p.id !== "mock"));
 }
 
 /**

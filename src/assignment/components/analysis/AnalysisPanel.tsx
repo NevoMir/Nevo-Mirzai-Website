@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Blocks, Download, Loader2, PanelLeftClose } from "lucide-react";
 
 import { ChecksSection } from "@/assignment/components/analysis/ChecksSection";
+import { CompareNotice } from "@/assignment/components/analysis/CompareNotice";
 import { DefinitionsSection } from "@/assignment/components/analysis/DefinitionsSection";
 import { IssuesSection } from "@/assignment/components/analysis/IssuesSection";
 import { MetricsSection } from "@/assignment/components/analysis/MetricsSection";
@@ -13,17 +14,18 @@ import {
     UnavailableState,
 } from "@/assignment/components/analysis/PanelStates";
 import { SettingsSection } from "@/assignment/components/analysis/SettingsSection";
+import { StabilizationSection } from "@/assignment/components/analysis/StabilizationSection";
+import { StabilizeCard } from "@/assignment/components/analysis/StabilizeCard";
+import { StressSection } from "@/assignment/components/analysis/StressSection";
 import { VerdictHeader } from "@/assignment/components/analysis/VerdictHeader";
 import { ViewSection } from "@/assignment/components/analysis/ViewSection";
 import type { AnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
-import { downloadText } from "@/assignment/components/analysis/download";
+import { downloadReport } from "@/assignment/components/analysis/reportDownload";
 import { Button } from "@/assignment/components/ui/button";
 import { toast } from "@/assignment/components/ui/sonner";
-import { modelFileName } from "@/assignment/components/workspace/format";
 import { cn } from "@/assignment/lib/utils";
 import type { ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
-import { reportStem } from "@/assignment/store/analysisLogic";
 
 /** Width of the report panel on the desktop, and the space it takes from the viewer (panel + its margins). */
 export const ANALYSIS_PANEL_PX = 320;
@@ -52,15 +54,7 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
         if (!result || !model || busy) return;
         setBusy(kind);
         try {
-            // The report builders load on first use.
-            const report = await import("@/assignment/analysis/report");
-            const stem = reportStem(modelFileName(model));
-            if (kind === "json") {
-                const meta = { modelId: model.id, modelUrl: model.glb_url, prompt: model.prompt, provider: model.provider };
-                downloadText(`${stem}.json`, "application/json", report.buildReportJson(result, meta));
-            } else {
-                downloadText(`${stem}-blocks.csv`, "text/csv", report.buildBlocksCsv(result));
-            }
+            await downloadReport(kind, result, model);
         } catch {
             toast.error("Could not create the file");
         } finally {
@@ -84,8 +78,12 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
         body = (
             <div className={cn("transition-opacity", updating && "opacity-60")} aria-busy={updating}>
                 <VerdictHeader result={result} verdict={verdict} />
+                <CompareNotice />
+                {model && <StabilizeCard model={model} result={result} verdict={verdict} analysing={updating} />}
                 <ChecksSection result={result} />
                 <IssuesSection result={result} />
+                <StressSection result={result} />
+                {model?.kind === "stabilized" && model.derived && <StabilizationSection model={model} meta={model.derived} result={result} />}
                 <ViewSection result={result} />
                 <MetricsSection result={result} />
                 <SettingsSection />

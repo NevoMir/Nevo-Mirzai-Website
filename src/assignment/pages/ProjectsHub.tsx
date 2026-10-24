@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { Archive, Boxes, LayoutGrid, Loader2, Menu, Search, SquarePen, Tag, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, Boxes, LayoutGrid, LayoutTemplate, Loader2, Menu, Search, SquarePen, Tag, Trash2, type LucideIcon } from "lucide-react";
 
 import { BrandLockup } from "@/assignment/components/BrandLockup";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { BulkBar, type BulkMode } from "@/assignment/components/hub/BulkBar";
+import { ExamplesDialog } from "@/assignment/components/hub/ExamplesDialog";
 import { HubSidebar } from "@/assignment/components/hub/HubSidebar";
 import { ProjectCard, type ProjectCardProps } from "@/assignment/components/hub/ProjectCard";
 import { ProjectRow, type ProjectRowProps, type RowClickMods } from "@/assignment/components/hub/ProjectRow";
@@ -145,6 +146,8 @@ export default function ProjectsHub() {
     const [query, setQuery] = useState("");
     const searchRef = useRef<HTMLInputElement>(null);
     const [navOpen, setNavOpen] = useState(false);
+    /** The "From example…" grid, over the page. */
+    const [examplesOpen, setExamplesOpen] = useState(false);
     const [tagDialog, setTagDialog] = useState<{
         open: boolean;
         tag: HubTag | null;
@@ -266,11 +269,16 @@ export default function ProjectsHub() {
     // ---------------------------------------------------------------- navigation
     const openProject = (project: HubProject) => navigate(projectPath(project.id));
 
+    /** The tag a project made here is filed under: the one whose page this is. "Uncategorized" is the absence of a
+     *  tag, and a tag that is gone cannot be filed into. */
+    const seedTagId = (): string | null => {
+        const tagId = filingTagId(view);
+        return tagId && tags.some((t) => t.id === tagId) ? tagId : null;
+    };
+
     /** A fresh chat. `seedTag` files the new project under the tag whose page this is. */
     const startProject = (seedTag: boolean) => {
-        const tagId = seedTag ? filingTagId(view) : null;
-        // "Uncategorized" is the absence of a tag, and a tag that is gone cannot be filed into.
-        const seed = tagId && tags.some((t) => t.id === tagId) ? tagId : null;
+        const seed = seedTag ? seedTagId() : null;
         // Reset first: the workspace mounts with whatever the store still holds from the last
         // visit, and an empty composer is the point of /app/new.
         useWorkspaceStore.getState().startNewChat();
@@ -589,7 +597,7 @@ export default function ProjectsHub() {
     shortcutsRef.current = {
         // The same conditions as the buttons, so a shortcut can never run what the page does not offer.
         canProject: !deletedView && !archivedView,
-        dialogOpen: tagDialog.open || navOpen || !!renaming || !!confirmForever || !!confirmDeleteTag,
+        dialogOpen: tagDialog.open || navOpen || examplesOpen || !!renaming || !!confirmForever || !!confirmDeleteTag,
         newProject: () => startProject(true),
         clearSelection,
     };
@@ -834,6 +842,20 @@ export default function ProjectsHub() {
                                             <SquarePen className="h-4 w-4" /> New project
                                         </Button>
                                     )}
+                                    {!deletedView && !archivedView && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            data-testid="hub-from-example"
+                                            className="shrink-0 gap-2"
+                                            title="Start from a ready-made example. Nothing is generated, so it costs nothing."
+                                            onClick={() => setExamplesOpen(true)}
+                                        >
+                                            <LayoutTemplate className="h-4 w-4" />
+                                            {/* Icon only on a phone, where the search box needs the room; still the button's name. */}
+                                            <span className="sr-only sm:not-sr-only">From example…</span>
+                                        </Button>
+                                    )}
                                     <div className="relative min-w-0 flex-1">
                                         <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                                         <Input
@@ -862,12 +884,17 @@ export default function ProjectsHub() {
                                                     Describe an object and Assembly Studio builds it as a 3D model.
                                                 </p>
                                             </div>
-                                            <Button
-                                                className="gap-2 bg-accent text-accent-foreground hover:bg-accent-hover"
-                                                onClick={() => startProject(false)}
-                                            >
-                                                <SquarePen className="h-4 w-4" /> Describe something to build
-                                            </Button>
+                                            <div className="flex flex-wrap items-center justify-center gap-2">
+                                                <Button
+                                                    className="gap-2 bg-accent text-accent-foreground hover:bg-accent-hover"
+                                                    onClick={() => startProject(false)}
+                                                >
+                                                    <SquarePen className="h-4 w-4" /> Describe something to build
+                                                </Button>
+                                                <Button variant="outline" className="gap-2" onClick={() => setExamplesOpen(true)}>
+                                                    <LayoutTemplate className="h-4 w-4" /> Open an example
+                                                </Button>
+                                            </div>
                                         </div>
                                     ) : (
                                         <p data-testid="hub-empty" className="text-sm text-muted-foreground">
@@ -918,6 +945,8 @@ export default function ProjectsHub() {
                     </div>
                 </main>
             </div>
+
+            <ExamplesDialog open={examplesOpen} onOpenChange={setExamplesOpen} tagId={seedTagId()} />
 
             <TagDialog
                 open={tagDialog.open}

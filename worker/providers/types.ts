@@ -17,6 +17,7 @@ export interface Env {
     ACCESS_CODE?: string; // when set, POST /generate needs it in the x-access-code header
     // Vars
     DAILY_GENERATION_LIMIT?: string;
+    DAILY_DERIVED_LIMIT?: string; // stabilized uploads per UTC day (default 300)
     ALLOW_OPEN_GENERATION?: string; // "1" lets paid generation run without an ACCESS_CODE (deliberate opt-out)
     MOCK_PROVIDER?: string; // "1" enables the offline mock provider (local dev only)
 }

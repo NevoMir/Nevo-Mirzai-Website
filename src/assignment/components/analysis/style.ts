@@ -2,9 +2,11 @@
 // and the icon of each kind of issue. Class names are written out in full so Tailwind finds them.
 
 import {
+    Activity,
     ArrowRightFromLine,
     CircleCheck,
     CircleX,
+    Flame,
     Info,
     Package,
     PackageOpen,
@@ -83,4 +85,6 @@ export const ISSUE_ICON: Record<IssueKind, LucideIcon> = {
     floating: Unplug,
     "too-many-blocks": Package,
     "thin-features": Ruler,
+    overstressed: Flame,
+    "highly-stressed": Activity,
 };

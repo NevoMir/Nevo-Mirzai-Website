@@ -7,6 +7,8 @@
  * app only ever passes its own `/api/assignment_alex/files/...` URLs here.
  */
 import type * as THREE from "three";
+import { ASSEMBLY_EXTRAS_KEY, parseAssemblyDescriptor, type AssemblyDescriptor } from "../shared/assembly.ts";
+import { earlierSteps } from "./assemblyParts.ts";
 import { decodersNeeded, inspectGlb, isGlb } from "./glbHeader.ts";
 import { tagMeshGroups } from "./glbParts.ts";
 
@@ -32,6 +34,15 @@ export interface LoadedGlb {
     /** The glTF scene, untouched (glTF units: metres, +Y up). */
     scene: THREE.Object3D;
     bytes: number;
+    /** The block assembly the file declares (a stabilized model, scenes[0].extras["nevo:assembly"]), else null: then the model is a mesh. */
+    assembly: AssemblyDescriptor | null;
+    /** Steps an assembly carries from earlier stabilizer runs (see earlierSteps); 0 for a mesh and for a first run. */
+    stepOffset: number;
+}
+
+/** The assembly a loaded glTF scene declares. GLTFLoader copies scenes[0].extras onto scene.userData; anything that is not a valid descriptor reads as a plain mesh (it is voxelised like any other). */
+export function assemblyOf(scene: Pick<THREE.Object3D, "userData">): AssemblyDescriptor | null {
+    return parseAssemblyDescriptor(scene.userData?.[ASSEMBLY_EXTRAS_KEY]);
 }
 
 /** A load that failed with a message fit for the user. */
@@ -144,7 +155,8 @@ export async function loadGlb(url: string, options: LoadGlbOptions = {}): Promis
         }
         // Keep a multi-primitive mesh (one object, several materials) as one part.
         tagMeshGroups(gltf.scene, gltf.parser.associations as unknown as ReadonlyMap<unknown, { meshes?: number; primitives?: number }>);
-        return { scene: gltf.scene, bytes: buffer.byteLength };
+        const assembly = assemblyOf(gltf.scene);
+        return { scene: gltf.scene, bytes: buffer.byteLength, assembly, stepOffset: assembly ? earlierSteps(gltf.scene.userData, assembly) : 0 };
     } finally {
         for (const dispose of disposers) dispose();
     }

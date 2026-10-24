@@ -1,6 +1,14 @@
 // The rules behind the numbers, in plain words. Shown in the app ("How is this computed?") and copied into the
 // exported report so a reader can follow the analysis without reading the code.
 
+import { STRESS_FAIL, STRESS_MATERIALS, STRESS_WARN, pct as pc } from "./materials.ts";
+
+const mpa = (pa: number): string => `${Math.round(pa / 1e5) / 10}`;
+const strengths = (id: "concrete" | "timber"): string => {
+    const m = STRESS_MATERIALS[id].fem;
+    return `${mpa(m.jointTension)} / ${mpa(m.compression)} / ${mpa(m.shear)} MPa`;
+};
+
 export interface Definition {
     key: string;
     title: string;
@@ -43,4 +51,28 @@ export const DEFINITIONS: Definition[] = [
         title: "Components",
         text: "The number of blocks used. If a budget is set, using more blocks than the budget is a violation.",
     },
+    {
+        key: "stress",
+        title: "Joint stress",
+        text: `The structure's own weight (no wind, no people) is applied to a 3D beam model of it: every block is a node at its centre, every two blocks that share a face are joined by a 100 mm square beam, and the blocks on the ground are held fixed. Awatif FEM, an open-source (MIT) solver built on the Eigen library (MPL-2.0), solves it in your browser. At each joint its forces give the tension across the joint (the pull of the normal force plus the bending), the crushing of the block and the shear, and the joint's utilisation is the largest of these as a share of what the material allows. Only blocks connected to the ground carry load: a floating part has no load path and is left out. This is a linear elastic estimate for perfectly bonded blocks on an infinitely stiff ground, not a certificate: no buckling, no sliding of loose blocks, no wind. It ranks where the structure is most stressed and how much a change helps. Tipping is judged by the centre-of-gravity check.`,
+    },
+    {
+        key: "utilisation",
+        title: "Utilisation",
+        text: `A joint's stress as a share of what the material allows: 0% is unloaded, 100% is where the joint opens or crushes. A block takes the worst utilisation of its joints. Above ${pc(STRESS_WARN)} a joint is highly stressed (a warning), above ${pc(STRESS_FAIL)} it is overstressed (an error); ${pc(STRESS_WARN)} is just above a cantilever of the allowed 4 concrete blocks, so the stress check agrees with the cantilever rule. Allowed joint tension / compression / shear: concrete blocks with mortar joints ${strengths("concrete")}, timber blocks glued ${strengths("timber")} (the weak values across the grain govern a joint).`,
+    },
+    {
+        key: "stabilizer",
+        title: "Stabilizer",
+        text: `Adds blocks to a model until its checks pass and no joint is above ${pc(STRESS_WARN)} of the allowable stress. It never removes or moves a block of the original, which is kept as it is. Each step adds one kind of support: a column (a vertical run under a block down to the first supported block or the ground), a footing (ground blocks beside the base), a bracket (a one or two block knee under an arm, next to its support), a bridge (the shortest run of blocks that joins a floating part to the structure) or reinforcement (blocks beside a highly stressed joint to thicken it). It tries many candidates and keeps the one that lowers a cost made of the problems left, the stress and the blocks added; the same input always gives the same result. The new blocks sit on the same 100 mm lattice, and the stabilized model is saved next to the original.`,
+    },
+];
+
+/** What the stress estimate does not do, one line each: the report lists them and the stress section's disclosure can too. */
+export const STRESS_ASSUMPTIONS: readonly string[] = [
+    "Load case: the blocks' own weight only (no wind, no people).",
+    "Blocks are bonded to each other and to the ground; the ground is infinitely stiff.",
+    "Linear elastic beams, one per shared face: no buckling, no sliding of loose blocks, no cracking.",
+    "Floating parts have no load path and are not analysed.",
+    "An estimate for ranking and comparing designs, not a structural certificate. Tipping is judged by the centre-of-gravity check.",
 ];

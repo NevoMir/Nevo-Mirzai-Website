@@ -7,6 +7,9 @@ import {
     type AnalysisSummary,
     type BulkAction,
     type CreateProjectBody,
+    type CreateProjectFromExampleBody,
+    type ExampleSummary,
+    type ExamplesResponse,
     type GenerateBody,
     type HubProject,
     type HubTag,
@@ -114,10 +117,10 @@ async function request<T>(method: string, path: string, options: RequestOptions 
         // An empty or non-JSON body: handled below by status.
     }
     if (!res.ok) {
-        const message =
-            payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
-                ? payload.error
-                : `Request failed (${res.status})`;
+        let message = `Request failed (${res.status})`;
+        if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") message = payload.error;
+        // Not our JSON: the platform's own error page (a Worker over its limits, a deploy in progress). Say what to do.
+        else if (res.status >= 500) message = `The server could not finish this (${res.status}); it may be busy. Try again in a moment.`;
         throw new ApiRequestError(res.status, message);
     }
     return payload as T;
@@ -143,6 +146,16 @@ export function listProjects(signal?: AbortSignal): Promise<{ projects: HubProje
 
 export async function createProject(body: CreateProjectBody = {}): Promise<HubProject> {
     const res = await request<{ project: HubProject }>("POST", "/projects", { json: body });
+    return res.project;
+}
+
+/**
+ * A new project holding a bundled example: its generated-style model and the stabilized twin, with the chat
+ * already written. Nothing is generated, so no access code and no token spend. Resolves to the project, ready to show.
+ */
+export async function createProjectFromExample(slug: string, tagId?: string | null): Promise<ProjectDetail> {
+    const body: CreateProjectFromExampleBody = tagId ? { slug, tag_id: tagId } : { slug };
+    const res = await request<{ project: ProjectDetail }>("POST", "/projects/from-example", { json: body });
     return res.project;
 }
 
@@ -247,4 +260,29 @@ export async function cancelJob(id: string): Promise<Job> {
 export async function putModelAnalysis(modelId: string, summary: AnalysisSummary): Promise<ModelAsset> {
     const res = await request<{ model: ModelAsset }>("PUT", `/models/${enc(modelId)}/analysis`, { json: { summary } });
     return res.model;
+}
+
+// ---------- Examples and stabilized models ----------
+
+/** The bundled examples (cacheable: the list only changes with a deploy). */
+export async function listExamples(signal?: AbortSignal): Promise<ExampleSummary[]> {
+    const res = await request<ExamplesResponse>("GET", "/examples", { signal });
+    return Array.isArray(res?.examples) ? res.examples : [];
+}
+
+/**
+ * Store a stabilized version of `sourceId`. `glb` is the assembly GLB the stabilizer wrote (shared/assemblyGlb.ts);
+ * the server accepts only exactly what that writer produces and reads the log out of the file itself. Asking again
+ * for the same assembly returns the model stored the first time.
+ */
+export async function createDerivedModel(sourceId: string, glb: Uint8Array, signal?: AbortSignal): Promise<ModelAsset> {
+    // A copy backed by a plain ArrayBuffer: the stabilizer hands over a view on a transferred buffer.
+    const body = new Blob([new Uint8Array(glb)], { type: "model/gltf-binary" });
+    const res = await request<{ model: ModelAsset }>("POST", `/models/${enc(sourceId)}/derived`, { blob: body, signal });
+    return res.model;
+}
+
+/** Delete a stabilized version, and any version made from it. The server refuses every other kind of model (409). */
+export async function deleteModel(id: string): Promise<void> {
+    await request<{ ok: true }>("DELETE", `/models/${enc(id)}`);
 }

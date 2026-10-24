@@ -25,3 +25,26 @@ export function safeFileName(title: string | undefined, fallback = "model"): str
         .trim();
     return cleaned || fallback;
 }
+
+/** Does this title already say it is the stabilized version? ("Stabilized · {prompt}" is how the workspace names one.) */
+const saysStabilized = (title: string | undefined) => /\bstabili[sz]ed\b/i.test(title ?? "");
+
+/**
+ * The stage's accessible name. A stabilized model keeps its source's prompt, so without a word of its own a screen reader
+ * hears the same name for both versions.
+ */
+export function stageLabel(title: string | undefined, stabilized = false): string {
+    const base = `3D model${title ? ` of ${title}` : ""}`;
+    return stabilized && !saysStabilized(title) ? `${base} (stabilized)` : base;
+}
+
+/** The download file name (no extension) of the model on stage: the original's and the stabilized version's differ. */
+export function downloadStem(title: string | undefined, stabilized = false): string {
+    const stem = safeFileName(title);
+    return stabilized && !saysStabilized(title) ? `${stem}-stabilized` : stem;
+}
+
+/** What the parts list and the hover tooltip say about a part: its own line ("12 blocks" for a role), else its triangle count. */
+export function partDetail(row: { detail?: string; triangles: number }): string {
+    return row.detail ?? `${formatCount(row.triangles)} triangles`;
+}

@@ -8,6 +8,7 @@ import type { LoadedModel, TriangleSoup } from "@/assignment/analysis/types";
 import type { ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { saveSummary } from "@/assignment/store/analysisSave";
+import { useStabilizeStore } from "@/assignment/store/stabilize";
 
 /** A slider drag or a typed number fires many changes; run once the user pauses. */
 const SETTINGS_DEBOUNCE_MS = 350;
@@ -28,6 +29,9 @@ function readTriangles(loaded: LoadedModel): TriangleSoup {
 }
 
 export function useAnalysisRunner(model: ModelAsset | null): void {
+    // The runner lives as long as the workspace: when the workspace goes, so does a stabilizer run that is not saving yet.
+    useEffect(() => () => useStabilizeStore.getState().leave(), []);
+
     const modelId = model?.id ?? null;
     const glbUrl = model?.glb_url ?? null;
     // The handle itself, not just its url: a viewer that reloaded the same model hands over a fresh one, and the
@@ -62,6 +66,8 @@ export function useAnalysisRunner(model: ModelAsset | null): void {
                 const result = await runAnalysis(() => readTriangles(handle), settings, {
                     signal,
                     cacheKey: handle.url,
+                    // A stabilized model declares its blocks: they are analysed as they are, never voxelised again.
+                    assembly: handle.assembly,
                     onProgress: ({ stage, progress }) => {
                         if (!signal.aborted) useAnalysisStore.getState().runProgress(modelId, stage, progress);
                     },

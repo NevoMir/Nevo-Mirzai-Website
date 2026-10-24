@@ -4,9 +4,10 @@ import { Home, Loader2, PanelRightClose, SquarePen, Box } from "lucide-react";
 
 import { AccessCodeGate } from "@/assignment/components/chat/AccessCodeGate";
 import { Composer, MAX_PROMPT_CHARS } from "@/assignment/components/chat/Composer";
-import { ExamplePrompts } from "@/assignment/components/chat/ExamplePrompts";
+import { HeroStart } from "@/assignment/components/chat/HeroStart";
 import { JobCard } from "@/assignment/components/chat/JobCard";
 import { Markdown } from "@/assignment/components/chat/Markdown";
+import { ModelCard } from "@/assignment/components/chat/ModelCard";
 import { BrandLockup } from "@/assignment/components/BrandLockup";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { toast } from "@/assignment/components/ui/sonner";
@@ -64,6 +65,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
 
     const messages = useWorkspaceStore((s) => s.messages);
     const jobs = useWorkspaceStore((s) => s.jobs);
+    const models = useWorkspaceStore((s) => s.models);
     const activeModelId = useWorkspaceStore((s) => s.activeModelId);
     const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
     const sending = useWorkspaceStore((s) => s.sending);
@@ -339,7 +341,8 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
           : "Describe the object you want to build";
 
     const brandMark = <BrandLockup size="lg" dark={isDark} />;
-    const examples = <ExamplePrompts onPick={pickExample} />;
+    // Ready-made example projects or example prompts, whichever the deployment can offer (components/chat/HeroStart.tsx).
+    const examples = <HeroStart onPick={pickExample} tagId={tagId} />;
 
     // The composer, rendered exactly once: at the bottom of the panel or, before the first message,
     // portalled over the canvas (heroActive).
@@ -475,6 +478,24 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                                 {msg.job_ids && msg.job_ids.length > 0 && (
                                     <div className="mt-2 flex flex-col gap-2">
                                         {msg.job_ids.map((id) => (jobs[id] ? renderCard(jobs[id]) : null))}
+                                    </div>
+                                )}
+                                {msg.model_ids && msg.model_ids.length > 0 && (
+                                    // A model that was deleted since (a stabilized version) simply has no card:
+                                    // the sentence above still reads on its own.
+                                    <div className="mt-2 flex flex-col gap-2" data-testid="message-models">
+                                        {msg.model_ids.map((id) => {
+                                            const model = models.find((m) => m.id === id);
+                                            return model ? (
+                                                <ModelCard
+                                                    key={id}
+                                                    model={model}
+                                                    models={models}
+                                                    active={model.id === activeModelId}
+                                                    onView={viewModel}
+                                                />
+                                            ) : null;
+                                        })}
                                     </div>
                                 )}
                             </div>

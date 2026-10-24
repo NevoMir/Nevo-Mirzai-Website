@@ -5,6 +5,7 @@
 // soup would look like a valid (empty) model, and the analysis of it, "No blocks", would be cached and saved as if
 // it were the model's verdict.
 import type { LoadedModel } from "../analysis/types.ts";
+import type { AssemblyDescriptor } from "../shared/assembly.ts";
 
 export interface ModelHandle {
     model: LoadedModel;
@@ -12,12 +13,14 @@ export interface ModelHandle {
     retire(): boolean;
 }
 
-export function createModelHandle(url: string, read: () => Float32Array | null): ModelHandle {
+/** `assembly`: the block assembly the GLB declares (a stabilized model), else null; the analysis then reads its cells instead of voxelising the triangles. */
+export function createModelHandle(url: string, read: () => Float32Array | null, assembly: AssemblyDescriptor | null = null): ModelHandle {
     let retired = false;
     const gone = () => new Error("The model is no longer shown in the viewer, so it cannot be analysed.");
     return {
         model: {
             url,
+            assembly,
             extractTriangles: () => {
                 if (retired) throw gone();
                 // A scene that was freed under the handle reads as nothing at all.

@@ -40,6 +40,13 @@ export function SelectionCard({ rows, hidden, isolated, onIsolate, onHide, onCle
                     <X className="h-3.5 w-3.5" />
                 </Button>
             </div>
+            {rows.length === 1 && one.detail && (
+                <p className="mt-1.5 flex items-center gap-2">
+                    <span className="text-muted-foreground">Blocks</span>
+                    {one.swatch && <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[3px] ring-1 ring-black/25" style={{ background: one.swatch }} />}
+                    <span className="font-medium">{one.detail.replace(/ blocks?$/, "")}</span>
+                </p>
+            )}
             <p className="mt-1.5 flex gap-2">
                 <span className="text-muted-foreground">Triangles</span>
                 <span className="font-medium">{formatCount(triangles)}</span>

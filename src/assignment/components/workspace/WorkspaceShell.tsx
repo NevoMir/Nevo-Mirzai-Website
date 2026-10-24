@@ -23,6 +23,7 @@ import { useAnalysisRunner } from "@/assignment/components/analysis/useAnalysisR
 import { GenerationOverlay } from "@/assignment/components/workspace/GenerationOverlay";
 import { InlineName } from "@/assignment/components/hub/InlineName";
 import { ModelsPanel } from "@/assignment/components/workspace/ModelsPanel";
+import { modelFileName, modelTitle } from "@/assignment/components/workspace/format";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { Button } from "@/assignment/components/ui/button";
 import {
@@ -44,11 +45,12 @@ import {
     setProjectPinned,
     trashProjects,
 } from "@/assignment/lib/hub/hubClient";
-import type { AnalysisViewState, LoadedModel } from "@/assignment/analysis/types";
+import type { AnalysisViewState, CompareMode, LoadedModel } from "@/assignment/analysis/types";
 import type { HubProject, ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { dockFits, dockInset } from "@/assignment/store/analysisLogic";
 import { completedThisSession, isTerminalJob, latestJobIds } from "@/assignment/store/jobs";
+import { deleteStabilized } from "@/assignment/store/models";
 import { saveNow, whenSaved } from "@/assignment/store/persist";
 import { useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 
@@ -122,11 +124,21 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     const providers = useWorkspaceStore((s) => s.providers?.providers);
 
     const activeModel = models.find((m) => m.id === activeModelId) ?? null;
+    // A stabilized model names and downloads as its own version, and links back to the model it was made from (when that is in the project).
+    const stageTitle = activeModel ? modelTitle(activeModel) : undefined;
+    const stageDownloadName = activeModel ? modelFileName(activeModel).replace(/\.glb$/i, "") : undefined;
+    const sourceId = activeModel?.kind === "stabilized" ? activeModel.source_model_id : null;
+    const sourcePrompt = sourceId ? (models.find((m) => m.id === sourceId)?.prompt ?? null) : null;
+    const derivedFrom = useMemo(
+        () => (sourceId && sourcePrompt !== null ? { title: sourcePrompt, onOpen: () => useWorkspaceStore.getState().setActiveModel(sourceId) } : null),
+        [sourceId, sourcePrompt],
+    );
 
     // ---- analysis: runs on its own once the model's GLB is in the viewer ----
     useAnalysisRunner(activeModel);
     const snapshot = useAnalysisSnapshot(activeModel);
     const analysisView = useAnalysisStore((s) => s.view);
+    const originalState = useAnalysisStore((s) => s.originalState);
     const analysisPanelOpen = useAnalysisStore((s) => s.panelOpen);
     const analysisOn = tab === "analysis";
     const viewerAnalysisView = useMemo<AnalysisViewState>(
@@ -159,6 +171,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
         workspace.setWorkspaceTab("analysis");
         useAnalysisStore.getState().setSheetOpen(true);
     }, []);
+    // The viewer's Original | Stabilized | Overlay chip: the store decides which result the stage draws (and computes the original half).
+    const handleCompareChange = useCallback((mode: CompareMode) => useAnalysisStore.getState().setCompare(mode), []);
     const handleBlockHover = useCallback((index: number | null) => useAnalysisStore.getState().hoverBlock(index), []);
     const handleBlockClick = useCallback((index: number | null) => useAnalysisStore.getState().clickBlock(index), []);
     // The viewer stops reporting hovers once the blocks leave the stage: a card must not stay lit.
@@ -355,15 +369,20 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                     <Suspense fallback={null}>
                         <GlbViewer
                             url={activeModel?.glb_url ?? null}
-                            title={activeModel?.prompt}
+                            title={stageTitle}
+                            downloadName={stageDownloadName}
+                            derivedFrom={derivedFrom}
+                            compareStatus={originalState}
                             insets={viewerInsets}
                             overlay={showOverlay ? <GenerationOverlay jobs={running} providers={providers} /> : null}
                             emptyState={emptyState}
                             onThumbnail={handleThumbnail}
                             onLoadError={handleLoadError}
                             onModelReady={handleModelReady}
-                            analysis={snapshot.result}
+                            analysis={snapshot.viewResult}
                             analysisView={viewerAnalysisView}
+                            previewResult={snapshot.previewResult}
+                            onCompareChange={handleCompareChange}
                             analysisBusy={snapshot.phase === "running"}
                             onBlockHover={handleBlockHover}
                             onBlockClick={handleBlockClick}
@@ -587,6 +606,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                 activeModelId={activeModelId}
                                 providers={providers}
                                 onView={viewModel}
+                                onDelete={deleteStabilized}
                             />
                         </div>
                     </div>

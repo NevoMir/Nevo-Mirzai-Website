@@ -201,7 +201,8 @@ export function IssuesSection({ result }: { result: AnalysisResult }) {
                             <IssueCard key={issue.id} issue={issue} />
                         ))}
                     </ul>
-                    {issues.some((issue) => issue.kind === "floating") && <FloatingHint result={result} />}
+                    {/* An assembly is its blocks (nothing was left out by a fill threshold), so a floating part is floating. */}
+                    {!result.assembly && issues.some((issue) => issue.kind === "floating") && <FloatingHint result={result} />}
                     {mentionsAxes(issues.map((issue) => `${issue.title} ${issue.detail}`)) && <DirectionsHint className="mt-2" />}
                 </>
             )}

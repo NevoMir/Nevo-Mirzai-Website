@@ -251,6 +251,10 @@ async function main() {
     check("a message without a valid role is rejected", (await patchData({ messages: [{ ...message, role: "system" }], active_model_id: null })).status === 400);
     check("a message with oversized content is rejected", (await patchData({ messages: [{ ...message, content: "x".repeat(4001) }], active_model_id: null })).status === 400);
     check("a message with bad job_ids is rejected", (await patchData({ messages: [{ ...message, job_ids: ["nope"] }], active_model_id: null })).status === 400);
+    check("a message with bad model_ids is rejected", (await patchData({ messages: [{ ...message, model_ids: ["nope"] }], active_model_id: null })).status === 400);
+    check("a message with more than 10 model_ids is rejected", (await patchData({ messages: [{ ...message, model_ids: Array(11).fill(UNKNOWN_ID) }], active_model_id: null })).status === 400);
+    const withModels = await patchData({ messages: [{ ...message, model_ids: [UNKNOWN_ID] }], active_model_id: null });
+    check("valid model_ids are kept", withModels.status === 200 && (await call("GET", `/projects/${first.id}`)).json.project.data.messages[0].model_ids?.[0] === UNKNOWN_ID);
     const withExtras = await patchData({ messages: [{ ...message, job_ids: [UNKNOWN_ID], extra: "dropped" }], active_model_id: null, junk: "k".repeat(500) });
     const extrasBack = (await call("GET", `/projects/${first.id}`)).json.project.data;
     check("unknown keys are dropped, valid job_ids kept", withExtras.status === 200 && extrasBack.junk === undefined &&
@@ -462,6 +466,7 @@ async function main() {
     check("glb_url is same-origin under /files/models/", model.glb_url === `/api/assignment_alex/files/models/${model.id}.glb`);
     check("part_count >= 8 (the lamp has 9 parts)", model.part_count >= 8, String(model.part_count));
     check("no provider still, so thumbnail_url is null", model.thumbnail_url === null);
+    check("a generated model is kind generated, with no source, example or stabilizer log", model.kind === "generated" && model.source_model_id === null && model.example_slug === null && model.derived === null);
 
     const glb = await fetch(`${BASE}${model.glb_url}`);
     const glbBytes = Buffer.from(await glb.arrayBuffer());
@@ -660,7 +665,10 @@ async function main() {
         const r = await call(method, `/models/${model.id}/analysis`, method === "GET" || method === "DELETE" ? undefined : {});
         check(`${method} /models/:id/analysis is 405 with Allow: PUT`, r.status === 405 && /PUT/.test(r.headers.get("allow") ?? ""), String(r.status));
     }
-    check("/models/:id and /models are 404", (await call("PUT", `/models/${model.id}`, { summary: goodSummary() })).status === 404 && (await call("PUT", "/models", {})).status === 404);
+    // PUT /models/:id is not a route (the analysis lives at /analysis); /models/:id answers DELETE only (stabilized versions, see smoke-derived.mjs).
+    const putModel = await call("PUT", `/models/${model.id}`, { summary: goodSummary() });
+    check("PUT /models/:id is 405 with Allow: DELETE, and /models is 404", putModel.status === 405 && /DELETE/.test(putModel.headers.get("allow") ?? "") && (await call("PUT", "/models", {})).status === 404);
+    check("a generated model cannot be deleted through DELETE /models/:id: 409", (await call("DELETE", `/models/${model.id}`)).status === 409);
     check("/models/:id/analysis/extra is 404", (await call("PUT", `/models/${model.id}/analysis/extra`, { summary: goodSummary() })).status === 404);
     check("the response is no-store JSON", put.headers.get("cache-control") === "no-store" && /json/.test(put.headers.get("content-type") ?? ""));
 
@@ -688,6 +696,29 @@ async function main() {
     check("its GLB is gone from R2 (404)", (await fetch(`${BASE}${model.glb_url}`)).status === 404);
     check("its job is gone (404)", (await call("GET", `/jobs/${okJob.id}`)).status === 404);
     created.projects = created.projects.filter((id) => id !== gen.id);
+}
+
+async function examples() {
+    section("examples: GET /examples and POST /projects/from-example");
+    const list = await call("GET", "/examples");
+    check("GET /examples is 200 JSON with an examples array", list.status === 200 && /json/.test(list.headers.get("content-type") ?? "") && Array.isArray(list.json?.examples));
+    check("HEAD works too", (await fetch(`${API}/examples`, { method: "HEAD" })).status === 200);
+    check("POST /examples is 405 with Allow", await call("POST", "/examples", {}).then((r) => r.status === 405 && /GET/.test(r.headers.get("allow") ?? "")));
+    check("/examples/extra is 404", (await call("GET", "/examples/extra")).status === 404);
+    check("an unknown example is 404 {error}", await call("POST", "/projects/from-example", { slug: "no-such-example" }).then((r) => r.status === 404 && typeof r.json?.error === "string"));
+    check("a slug that is a path is 400", (await call("POST", "/projects/from-example", { slug: "../../etc/passwd" })).status === 400);
+    check("no slug is 400, a number is 400", (await call("POST", "/projects/from-example", {})).status === 400 && (await call("POST", "/projects/from-example", { slug: 5 })).status === 400);
+    check("a bad tag id is 400", (await call("POST", "/projects/from-example", { slug: "no-such-example", tag_id: "nope" })).status === 400);
+    check("GET /projects/from-example is 405 with Allow: POST", await call("GET", "/projects/from-example").then((r) => r.status === 405 && /POST/.test(r.headers.get("allow") ?? "")));
+    check("a body that is not an object is 400", (await call("POST", "/projects/from-example", "[]")).status === 400);
+    const first = list.json?.examples?.[0];
+    if (!first) {
+        note("no examples are served yet (public/assignment_alex/examples/manifest.json): opening one is not tested here; smoke-derived.mjs does it once they exist");
+        return;
+    }
+    const opened = await call("POST", "/projects/from-example", { slug: first.slug });
+    check(`opening "${first.slug}" gives a project with its original and stabilized models`, opened.status === 201 && opened.json?.project?.models?.length === 2 && opened.json.project.models[0].kind === "example" && opened.json.project.models[1].kind === "stabilized");
+    if (opened.status === 201) created.projects.push(opened.json.project.id);
 }
 
 async function routing() {
@@ -738,6 +769,7 @@ async function cleanup() {
 
 try {
     await main();
+    await examples();
     await routing();
 } catch (err) {
     failed++;

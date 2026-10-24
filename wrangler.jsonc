@@ -28,6 +28,8 @@
     // Open to everyone: no access code and no daily cap (set DAILY_GENERATION_LIMIT to a positive number, or the
     // ACCESS_CODE secret, to bring either back).
     "ALLOW_OPEN_GENERATION": "1",
+    // Optional: DAILY_DERIVED_LIMIT caps the stabilized versions saved per UTC day (default 300; each is one R2 write
+    // of at most 1 MiB, nothing is generated or paid for).
     // "Demo (offline)": replays the bundled desk-lamp assembly so the app and its analysis can be tried without
     // spending API credits. Remove to hide it.
     "MOCK_PROVIDER": "1"

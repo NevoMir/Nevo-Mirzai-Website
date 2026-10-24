@@ -3,7 +3,10 @@
 // disposal, and the orbit viewer itself on a stub WebGL context (environment, hover, insets, context
 // loss, GPU memory across model switches). Also the structural-analysis block view: the frame mapping,
 // colour ramps, tooltip wording, outline geometry, block picking, triangle extraction, and the block
-// scene on the stub context (levels of detail, picking, labels, disposal).
+// scene on the stub context (levels of detail, picking, labels, disposal). And the stabilized-model side: the
+// stress ramp and its legend, role colours, the colouring a result can do, the stress tooltip and pins, blocks that
+// flash when the stabilizer's preview adds them, the assembly a GLB declares (loaded through GLTFLoader), its roles
+// in the parts list, and the hook's compare / preview behaviour (the scene is swapped in place, the camera is kept).
 //
 //   node scripts/assignment/test-viewer.mjs
 //
@@ -26,7 +29,8 @@ const split = await viewer("splitComponents");
 const { explodeFactor, explodeOffsets, worldDeltaToLocal, unionCentre, EXPLODE_MAX } = await viewer("explode");
 const framing = await viewer("framing");
 const { inspectGlb, isGlb, decodersNeeded } = await viewer("glbHeader");
-const { num, formatCount, safeFileName } = await viewer("format");
+const viewerFormat = await viewer("format");
+const { num, formatCount, safeFileName } = viewerFormat;
 const stage = await viewer("stage");
 const loadGlbModule = await viewer("loadGlb");
 const { buildGlbScene, disposeObject } = await viewer("glbScene");
@@ -2416,7 +2420,7 @@ register("./react-shim-hooks.mjs", import.meta.url);
 const { renderHook } = await import("./react-hook-shim.mjs");
 const { useAnalysisView } = await viewer("useAnalysisView");
 
-const BLOCKS_VIEW = { mode: "blocks", colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], focus: null };
+const BLOCKS_VIEW = { mode: "blocks", colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
 const wait = (ms = 15) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The hook with a stand-in viewer (it records flights and frames) and the real label layer over a fake DOM. */
@@ -2424,15 +2428,15 @@ async function hookStage(overrides = {}) {
     const make = fakeDocument();
     const host = Object.assign(make("div"), { clientWidth: 1440, clientHeight: 900 });
     const analysis = makeAnalysis();
-    const log = { flights: [], frames: 0, hovers: [], clicks: [], errors: [] };
+    const log = { flights: [], frames: 0, hovers: [], clicks: [], errors: [], fits: 0, refreshes: 0, sets: [] };
     const listeners = new Set();
     let onStage = null;
     let at = { x: 600, y: 400, visible: true };
     const viewer = {
         scene: () => onStage,
-        setScene: (scene) => (onStage = scene),
-        fitView() {},
-        refresh() {},
+        setScene: (scene) => (log.sets.push(scene), (onStage = scene)),
+        fitView: () => (log.fits += 1),
+        refresh: () => (log.refreshes += 1),
         contextLost: () => false,
         flyToBox: (box, ms) => log.flights.push({ box, ms }),
         requestFrame: () => (log.frames += 1),
@@ -2608,6 +2612,660 @@ await test("hook: a block view that cannot be built says so, and clears when the
         console.error = log;
     }
     t.hook.unmount();
+});
+
+// ---------- stress, roles, compare and loading an assembly (a stabilized model) ----------
+
+console.log("stress colours, roles, compare (a stabilized model)");
+
+const engine = (name) => import(`../../src/assignment/${name}.ts`);
+const sharedAssembly = await engine("shared/assembly");
+const sharedGlb = await engine("shared/assemblyGlb");
+const sharedContract = await engine("shared/contract");
+const assemblyEngine = await engine("analysis/assembly");
+const stressEngine = await engine("analysis/stress");
+const femEngine = await engine("analysis/fem/index");
+const materialsEngine = await engine("analysis/materials");
+const assemblyParts = await viewer("assemblyParts");
+
+const range = (n, from = 0) => Array.from({ length: n }, (_, i) => from + i);
+/** A 6-block column with a 6-block arm on top: far past the joint limit. */
+const ARM = [...range(6).map((k) => [0, 0, k]), ...range(6, 1).map((i) => [i, 0, 5])];
+/** What a stabilizer adds under the arm's tip: a column (step 1) and a bracket (step 2). */
+const ADDED = [...range(5).map((k) => ({ cell: [6, 0, k], role: "column", step: 1 })), { cell: [5, 0, 4], role: "bracket", step: 2 }];
+const ORIGINAL_DESC = sharedAssembly.descriptorFromBlocks(ARM.map((cell) => ({ cell })));
+const STABILIZED_DESC = sharedAssembly.descriptorFromBlocks([...ARM.map((cell) => ({ cell })), ...ADDED]);
+const tsSolver = { solve: femEngine.solveFrameTs, backend: "ts" };
+/** The real engine's result, stress included (the TypeScript solver, so no WASM is needed). */
+const solved = (desc, frame = desc) => {
+    const result = assemblyEngine.analyzeAssembly(desc, null, {}, frame);
+    return stressEngine.applyStress(result, stressEngine.computeStress(result, tsSolver));
+};
+const ORIGINAL = solved(ORIGINAL_DESC);
+const STABILIZED = solved(STABILIZED_DESC);
+const ONLY_ORIGINAL = solved(assemblyEngine.originalOf(STABILIZED_DESC), STABILIZED_DESC);
+
+await test("fixtures: the arm is overstressed, the stabilized model is not, and the original blocks on their own match the first", () => {
+    assert.ok(ORIGINAL.stress.maxUtilisation > 1.4, "overstressed");
+    assert.ok(STABILIZED.stress.maxUtilisation < geom.STRESS_WARN_SHARE, "stabilized");
+    assert.equal(STABILIZED.blocks.length, ARM.length + ADDED.length);
+    assert.deepEqual(STABILIZED.assembly.roleCounts, [12, 5, 0, 1, 0, 0]);
+    near(ONLY_ORIGINAL.stress.maxUtilisation, ORIGINAL.stress.maxUtilisation, 1e-6, "the original subset");
+});
+
+await test("the stress ramp: blue at 0, teal 35 %, amber 70 %, red at 100 %, dark red from 150 %; NaN is the floating purple", () => {
+    assert.equal(geom.stressColor(0), "#3b82f6");
+    assert.equal(geom.stressColor(0.35), "#14b8a6");
+    assert.equal(geom.stressColor(0.7), "#f59e0b");
+    assert.equal(geom.stressColor(1), "#ef4444");
+    assert.equal(geom.stressColor(1.5), "#7f1d1d");
+    assert.equal(geom.stressColor(2.4), "#7f1d1d", "beyond the end of the ramp");
+    assert.equal(geom.stressColor(Infinity), "#7f1d1d");
+    assert.equal(geom.stressColor(-0.2), "#3b82f6", "below zero is zero");
+    assert.equal(geom.stressColor(Number.NaN), geom.statusColor("floating", "light"));
+    assert.equal(geom.stressColor(Number.NaN, "dark"), geom.statusColor("floating", "dark"));
+    assert.equal(geom.stressColor(Number.NaN), "#a855f7");
+    // Between stops it blends the two neighbours, by where it sits between them.
+    assert.equal(geom.stressColor(0.175), geom.mixHex("#3b82f6", "#14b8a6", 0.5));
+    assert.equal(geom.stressColor(0.85), geom.mixHex("#f59e0b", "#ef4444", 0.5));
+    assert.equal(geom.stressColor(1.25), geom.mixHex("#ef4444", "#7f1d1d", 0.5));
+    // Hotter reads warmer: the hue only falls (blue, teal, amber, red) up to 100 %, and past it the colour darkens.
+    const hue = (u) => {
+        const [r, g, b] = geom.hexToRgb(geom.stressColor(u));
+        const max = Math.max(r, g, b);
+        const d = max - Math.min(r, g, b);
+        const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+        return ((h * 60) + 360) % 360;
+    };
+    for (let u = 0; u < 1; u += 0.05) assert.ok(hue(u + 0.05) <= hue(u) + 1e-6, `hue at ${u}`);
+    const light = (u) => geom.hexToRgb(geom.stressColor(u)).reduce((a, b) => a + b, 0);
+    for (let u = 1; u < 1.5; u += 0.05) assert.ok(light(u + 0.05) <= light(u) + 1e-9, `darker past the limit at ${u}`);
+});
+
+await test("the legend bar and the blocks share one function: the bar's stops are stressColor at the ramp's own stops", () => {
+    const stops = geom.stressGradientStops();
+    assert.equal(stops.length, geom.STRESS_RAMP.length);
+    stops.forEach((s, i) => {
+        const [u] = geom.STRESS_RAMP[i];
+        assert.equal(s.color, geom.stressColor(u));
+        near(s.offset, u / geom.STRESS_RAMP_MAX, 1e-12);
+    });
+    assert.equal(stops[0].offset, 0);
+    assert.equal(stops.at(-1).offset, 1);
+    const css = geom.stressGradientCss();
+    assert.ok(css.startsWith("linear-gradient(to right, #3b82f6 0%"), css);
+    for (const s of stops) assert.ok(css.includes(s.color), s.color);
+    assert.deepEqual(geom.STRESS_TICKS, [0, 0.25, 0.5, 0.75, 1], "ticks at 0, 25, 50, 75 and 100%+");
+    assert.equal(geom.percentText(0.734), "73%");
+});
+
+await test("the thresholds and strengths this file keeps are the engine's (it cannot import them: that pulls the FEM solver into the page)", () => {
+    assert.equal(geom.STRESS_WARN_SHARE, materialsEngine.STRESS_WARN);
+    assert.equal(geom.STRESS_FAIL_SHARE, materialsEngine.STRESS_FAIL);
+    for (const id of sharedContract.MATERIAL_IDS) {
+        near(geom.JOINT_TENSION_KPA[id], materialsEngine.materialOf(id).fem.jointTension / 1000, 1e-9, id);
+        assert.equal(geom.MATERIAL_LABELS[id], materialsEngine.materialOf(id).label);
+    }
+});
+
+await test("block colours by stress: the utilisation of the block; no load path or no stress analysis at all is the floating purple", () => {
+    const ctx = { theme: "light", limit: 4, layers: 6, stress: STABILIZED.stress.byBlock };
+    for (const b of ORIGINAL.blocks) {
+        const own = geom.blockColor(b, "stress", { ...ctx, stress: ORIGINAL.stress.byBlock });
+        assert.equal(own, geom.stressColor(ORIGINAL.stress.byBlock[b.index]), `block ${b.index}`);
+    }
+    const hot = ORIGINAL.blocks[ORIGINAL.stress.maxBlock];
+    assert.equal(geom.blockColor(hot, "stress", { ...ctx, stress: ORIGINAL.stress.byBlock }), geom.stressColor(ORIGINAL.stress.maxUtilisation), "the hottest block");
+    const nan = [Number.NaN];
+    assert.equal(geom.blockColor({ ...hot, index: 0 }, "stress", { ...ctx, stress: nan }), "#a855f7");
+    assert.equal(geom.blockColor(hot, "stress", { theme: "light", limit: 4, layers: 6 }), "#a855f7", "no stress array");
+    assert.equal(geom.blockColor(hot, "stress", { ...ctx, stress: [] }), "#a855f7", "a block the array does not cover");
+});
+
+await test("roles: original blocks are the theme's slate, each added role has one hue on both stages", () => {
+    assert.equal(geom.roleColor("original", "light"), geom.statusColor("supported", "light"));
+    assert.equal(geom.roleColor("original", "dark"), geom.statusColor("supported", "dark"));
+    assert.notEqual(geom.roleColor("original", "light"), geom.roleColor("original", "dark"));
+    const hues = { column: "#f59e0b", footing: "#8b5cf6", bracket: "#22c55e", bridge: "#06b6d4", reinforcement: "#ec4899" };
+    for (const [role, hex] of Object.entries(hues)) {
+        assert.equal(geom.roleColor(role, "light"), hex, role);
+        assert.equal(geom.roleColor(role, "dark"), hex, role);
+        assert.equal(sharedAssembly.ROLE_HEX[role], hex, "the GLB's materials use the same hues");
+    }
+    const ctx = { theme: "dark", limit: 4, layers: 6 };
+    for (const b of STABILIZED.blocks) assert.equal(geom.blockColor(b, "role", ctx), geom.roleColor(b.role, "dark"));
+    assert.equal(geom.blockColor({ ...STABILIZED.blocks[0], role: undefined }, "role", ctx), geom.roleColor("original", "dark"), "a mesh's blocks have no role: original");
+    assert.deepEqual(geom.countByRole(STABILIZED.blocks), { original: 12, column: 5, footing: 0, bracket: 1, bridge: 0, reinforcement: 0 });
+    assert.equal(geom.ROLE_LABELS.column, "Column");
+    assert.equal(geom.ROLE_PLURALS.original, "Original blocks");
+    assert.deepEqual(Object.values(sharedAssembly.ROLE_NODE_NAMES), Object.values(geom.ROLE_PLURALS), "the legend and the parts list name the roles alike");
+});
+
+await test("the colouring the stage uses: the view's, unless the result cannot do it; Overlay and a preview are role colours", () => {
+    const plain = makeAnalysis(); // a voxelised mesh: no stress, no assembly
+    const view = (colorBy, compare = "stabilized") => ({ colorBy, compare });
+    assert.equal(geom.resolveColorBy(view("stress"), plain), "status", "no stress analysis");
+    assert.equal(geom.resolveColorBy(view("role"), plain), "status", "no assembly");
+    assert.equal(geom.resolveColorBy(view("reach"), plain), "reach");
+    assert.equal(geom.resolveColorBy(view("stress"), STABILIZED), "stress");
+    assert.equal(geom.resolveColorBy(view("role"), STABILIZED), "role");
+    assert.equal(geom.resolveColorBy(view("stress", "overlay"), STABILIZED), "role", "Overlay forces role colours");
+    assert.equal(geom.resolveColorBy(view("status", "original"), STABILIZED), "status", "Original keeps the view's colouring");
+    assert.equal(geom.resolveColorBy(view("stress"), STABILIZED, true), "role", "a preview of the stabilizer");
+    assert.equal(geom.resolveColorBy(view("stress", "overlay"), plain), "status", "Overlay means nothing for a mesh");
+    assert.equal(geom.resolveColorBy(view("stress", "overlay"), null), "status");
+    assert.equal(geom.resolveColorBy({ colorBy: "layer" }, STABILIZED), "layer", "no compare in the view");
+});
+
+await test("the stress tooltip: share of the allowable and the tension against it; the peak of a point has the solver's own numbers", () => {
+    // A hand-made stress: block 0 is a point's peak (73 %, 146 of 200 kPa); block 1 is 50 %; block 2 has no load path.
+    const stress = {
+        material: "concrete",
+        byBlock: Float32Array.from([0.73, 0.5, Number.NaN]),
+        points: [{ rank: 1, blocks: [0], cell: [0, 0, 0], centreMm: [50, 50, 50], utilisation: 0.73, mode: "tension", tensionKPa: 146, allowableKPa: 200, joint: null }],
+    };
+    assert.equal(geom.describeStress({ stress }, 0).text, "Stress 73% of allowable (tension 146 of 200 kPa)");
+    assert.equal(geom.describeStress({ stress }, 1).text, "Stress 50% of allowable (tension 100 of 200 kPa)", "another block: its share of the material's tension strength");
+    assert.equal(geom.describeStress({ stress: { ...stress, material: "timber" } }, 1).text, "Stress 50% of allowable (tension 200 of 400 kPa)");
+    assert.deepEqual(geom.describeStress({ stress }, 2), { utilisation: null, text: "No load path (not connected to the ground)" });
+    assert.equal(geom.describeStress({ stress }, 9), null, "a block the stress does not cover");
+    assert.equal(geom.describeStress({ stress: null }, 0), null, "no stress analysis: nothing to say");
+    const shear = { ...stress, points: [{ ...stress.points[0], mode: "shear" }] };
+    assert.equal(geom.describeStress({ stress: shear }, 0).text, "Stress 73% of allowable (shear)");
+    // On the real result: the text carries the real peak.
+    const peak = ORIGINAL.stress.points[0];
+    const real = geom.describeStress(ORIGINAL, peak.blocks[0]);
+    assert.equal(real.text, `Stress ${Math.round(peak.utilisation * 100)}% of allowable (tension ${Math.round(peak.tensionKPa)} of ${Math.round(peak.allowableKPa)} kPa)`);
+});
+
+await test("the block tooltip text says what was added and, when there is a stress analysis, the stress", () => {
+    const column = STABILIZED.blocks.find((b) => b.role === "column");
+    const plainText = geom.describeBlock(column, STABILIZED.settings);
+    assert.equal(plainText.added, `Column, added in step 1`);
+    assert.ok(plainText.text.endsWith("Column, added in step 1"));
+    assert.equal(plainText.stress, undefined);
+    const withStress = geom.describeBlock(column, STABILIZED.settings, geom.describeStress(STABILIZED, column.index));
+    assert.match(withStress.text, / · Column, added in step 1 · Stress \d+% of allowable \(tension \d+ of 200 kPa\)$/);
+    const original = STABILIZED.blocks.find((b) => b.role === "original");
+    assert.equal(geom.describeBlock(original, STABILIZED.settings).added, undefined, "an original block was not added");
+    // A mesh's block: exactly the old wording.
+    const old = makeAnalysis();
+    assert.equal(geom.describeBlock(old.blocks[0], old.settings).text, "Block (4, 4, 0) · z 0–100 mm · Supported · rests on the ground");
+});
+
+await test("the tooltip element shows the lines (fake DOM)", () => {
+    fakeDocument();
+    const column = STABILIZED.blocks.find((b) => b.role === "column");
+    const info = geom.describeBlock(column, STABILIZED.settings, geom.describeStress(STABILIZED, column.index));
+    const el = labelsModule.blockTooltip(info, "#f59e0b");
+    const text = el.textContent;
+    assert.ok(text.includes(info.added), text);
+    assert.ok(text.includes(info.stress.text), text);
+    const none = labelsModule.blockTooltip(geom.describeBlock(makeAnalysis().blocks[0], makeAnalysis().settings), "#94a3b8");
+    assert.ok(!none.textContent.includes("Stress") && !none.textContent.includes("added"));
+});
+
+await test("stress pins: the top three points get '1 · 148%' on their peak block, only in the stress colouring, and not above the layer cut", () => {
+    const base = { showCog: false, layerMax: 9 };
+    assert.deepEqual(geom.sceneLabels(ORIGINAL, { ...base, colorBy: "status" }).filter((l) => l.kind === "stress"), [], "only when colouring by stress");
+    assert.deepEqual(geom.sceneLabels(ORIGINAL, base).filter((l) => l.kind === "stress"), [], "a view without a colouring: none");
+    const pins = geom.sceneLabels(ORIGINAL, { ...base, colorBy: "stress" }).filter((l) => l.kind === "stress");
+    assert.equal(pins.length, geom.STRESS_PINS);
+    assert.equal(geom.STRESS_PINS, 3);
+    const points = ORIGINAL.stress.points;
+    pins.forEach((pin, n) => {
+        const point = points[n];
+        const peak = ORIGINAL.blocks[point.blocks[0]];
+        assert.equal(pin.id, `stress-${point.rank}`);
+        assert.equal(pin.text, `${point.rank} · ${Math.round(point.utilisation * 100)}%`);
+        assert.deepEqual(pin.anchor, [peak.centerMm[0], peak.centerMm[1], peak.centerMm[2] + 50], "on top of its block");
+        assert.equal(pin.color, geom.stressColor(point.utilisation));
+    });
+    assert.equal(pins[0].tone, "bad", "over the limit");
+    assert.equal(pins[1].tone, "accent", "under it");
+    // The layer cut hides the pins of blocks it cuts away.
+    const lowest = Math.min(...pins.map((p) => ORIGINAL.blocks[points[Number(p.id.slice(7)) - 1].blocks[0]].cell[2]));
+    const cut = geom.sceneLabels(ORIGINAL, { ...base, layerMax: lowest - 1, colorBy: "stress" }).filter((l) => l.kind === "stress");
+    assert.ok(cut.length < pins.length);
+    assert.deepEqual(geom.sceneLabels(STABILIZED, { ...base, colorBy: "stress" }).filter((l) => l.kind === "stress").map((l) => l.text.split(" · ")[0]), ["1", "2", "3"]);
+    assert.deepEqual(geom.sceneLabels({ ...ORIGINAL, stress: null }, { ...base, colorBy: "stress" }).filter((l) => l.kind === "stress"), [], "no stress analysis: no pins");
+    // The pin is drawn as a pill with the point's colour (fake DOM).
+    fakeDocument();
+    const el = labelsModule.sceneLabelElement(pins[0]);
+    assert.equal(el.textContent, pins[0].text);
+    assert.equal(el.children[0].style.background, pins[0].color);
+});
+
+await test("the block scene paints by stress and by role from the same functions as the legend, and follows the theme", () => {
+    const stress = createBlocksScene({ analysis: ORIGINAL, view: { ...DEFAULT_VIEW, colorBy: "stress" }, theme: "light" });
+    ORIGINAL.blocks.forEach((b) => assert.equal(stress.colorOf(b.index), geom.stressColor(ORIGINAL.stress.byBlock[b.index]), `block ${b.index}`));
+    const active = stress.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.find((o) => o.isInstancedMesh && o.renderOrder === 0);
+    const first = new THREE.Color(geom.stressColor(ORIGINAL.stress.byBlock[0]));
+    near(active.instanceColor.array[0], first.r, 1e-6);
+    near(active.instanceColor.array[1], first.g, 1e-6);
+    // Pins reach the viewer through the scene's own labels, with world anchors, and only while colouring by stress.
+    assert.equal(stress.labels().filter((l) => l.kind === "stress").length, 3);
+    stress.setView({ ...DEFAULT_VIEW, colorBy: "status" });
+    assert.equal(stress.labels().filter((l) => l.kind === "stress").length, 0, "the label cache follows the colouring");
+    // Tooltips of the scene carry the stress.
+    stress.setView({ ...DEFAULT_VIEW, colorBy: "stress" });
+    assert.match(stress.info(ORIGINAL.stress.maxBlock).text, /Stress 148% of allowable \(tension 297 of 200 kPa\)/);
+    stress.dispose();
+
+    const role = createBlocksScene({ analysis: STABILIZED, view: { ...DEFAULT_VIEW, colorBy: "role" }, theme: "light" });
+    STABILIZED.blocks.forEach((b) => assert.equal(role.colorOf(b.index), geom.roleColor(b.role, "light")));
+    const original = STABILIZED.blocks.findIndex((b) => b.role === "original");
+    const column = STABILIZED.blocks.findIndex((b) => b.role === "column");
+    role.setTheme("dark");
+    assert.equal(role.colorOf(original), geom.statusColor("supported", "dark"), "the slate follows the theme");
+    assert.equal(role.colorOf(column), "#f59e0b", "an added role does not");
+    role.dispose();
+});
+
+await test("appearedBlocks: the cells of the new result that held no block before", () => {
+    const before = [{ cell: [0, 0, 0] }, { cell: [0, 0, 1] }];
+    const after = [{ cell: [0, 0, 0] }, { cell: [0, 0, 1] }, { cell: [1, 0, 1] }, { cell: [1, 0, 0] }];
+    assert.deepEqual(geom.appearedBlocks(before, after), [2, 3]);
+    assert.deepEqual(geom.appearedBlocks(before, before), []);
+    assert.deepEqual(geom.appearedBlocks([], after), [], "nothing before: nothing 'appears'");
+    const step1 = solved(sharedAssembly.descriptorFromBlocks([...ARM.map((cell) => ({ cell })), ...ADDED.slice(0, 5)]), STABILIZED_DESC);
+    const stepAdded = geom.appearedBlocks(ORIGINAL.blocks, step1.blocks);
+    assert.deepEqual(stepAdded.map((i) => step1.blocks[i].role), ["column", "column", "column", "column", "column"]);
+});
+
+await test("fresh blocks flash once and then settle; reduced motion, a layer cut and a disposed scene keep them off", () => {
+    const fresh = [ORIGINAL.blocks.length - 1, 0];
+    const frames = [];
+    const blocks = createBlocksScene({ analysis: ORIGINAL, view: DEFAULT_VIEW, theme: "light", fresh, onChange: () => frames.push(1) });
+    const flashRing = () => blocks.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.find((o) => o.isInstancedMesh && o.material.side === THREE.BackSide && o.renderOrder === -2 && o.material.color.getHexString() === "ce5222");
+    assert.equal(blocks.flashing(), true, "the host must run frames");
+    assert.equal(flashRing().count, 2);
+    assert.equal(blocks.animate(1000), true);
+    const start = flashRing().material.opacity;
+    assert.ok(start > 0.9, "starts bright");
+    blocks.animate(1600);
+    const mid = flashRing().material.opacity;
+    assert.ok(mid < start && mid > 0, "fades");
+    assert.equal(blocks.animate(1000 + 5000), false, "over");
+    assert.equal(flashRing().count, 0);
+    assert.equal(flashRing().material.opacity, 0);
+    assert.equal(blocks.flashing(), false);
+    blocks.setView({ ...DEFAULT_VIEW, layerMax: 3 });
+    assert.equal(flashRing().count, 0, "does not come back with the cut");
+    blocks.dispose();
+
+    const still = createBlocksScene({ analysis: ORIGINAL, view: DEFAULT_VIEW, theme: "light", fresh, reducedMotion: true });
+    assert.equal(still.flashing(), false);
+    still.animate(0);
+    assert.equal(still.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.filter((o) => o.isInstancedMesh && o.count > 0 && o.renderOrder === -2).length, 0, "no ring at all");
+    still.dispose();
+
+    // The layer cut hides the flash of a block it cuts away; indices that are not blocks are ignored.
+    const cut = createBlocksScene({ analysis: ORIGINAL, view: { ...DEFAULT_VIEW, layerMax: 2 }, theme: "light", fresh: [0, ORIGINAL.blocks.length - 1, 999, -1, 1.5] });
+    const ring = cut.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.find((o) => o.isInstancedMesh && o.renderOrder === -2 && o.material.color.getHexString() === "ce5222");
+    assert.equal(ring.count, 1, "block 0 is on layer 0; the last block is in the arm, above the cut");
+    cut.dispose();
+    const none = createBlocksScene({ analysis: ORIGINAL, view: DEFAULT_VIEW, theme: "light" });
+    assert.equal(none.flashing(), false, "nothing fresh: nothing flashes");
+    none.dispose();
+});
+
+await test("a scene with stress colours, role colours and a flashing ring leaves nothing behind on the GPU", () => {
+    const dom = stubDom();
+    const v = mountOrbitViewer(dom.container, createEmptyViewerScene(), { theme: "light" });
+    const model = buildGlbScene(modelOf(2), { onChange: () => v.requestFrame() });
+    v.setScene(model);
+    v.setView("iso");
+    v.requestFrame();
+    const memory = () => ({ geometries: v.renderer.info.memory.geometries, textures: v.renderer.info.memory.textures, programs: v.renderer.info.programs.length });
+    const baseline = memory();
+    for (let round = 0; round < 3; round += 1) {
+        const blocks = createBlocksScene({ analysis: STABILIZED, view: { ...DEFAULT_VIEW, colorBy: "stress" }, theme: "light", fresh: [12, 13, 14], onChange: () => v.requestFrame() });
+        v.setScene(blocks);
+        v.requestFrame();
+        blocks.animate(100);
+        blocks.setView({ ...DEFAULT_VIEW, colorBy: "role" });
+        blocks.setView({ ...DEFAULT_VIEW, colorBy: "stress", layerMax: 3 });
+        blocks.animate(2000);
+        v.requestFrame();
+        if (round === 0) assert.ok(memory().geometries > baseline.geometries, "the harness sees the allocations");
+        v.setScene(model);
+        blocks.dispose();
+        v.requestFrame();
+        assert.deepEqual(memory(), baseline, `round ${round}`);
+        assert.equal(blocks.flashing(), false);
+    }
+    model.dispose();
+    v.dispose();
+});
+
+// ---------- loading an assembly ----------
+
+await test("assemblyOf reads the descriptor GLTFLoader leaves on scene.userData; anything else reads as a plain mesh", () => {
+    const { assemblyOf } = loadGlbModule;
+    const read = assemblyOf({ userData: { "nevo:assembly": STABILIZED_DESC } });
+    assert.deepEqual(read, STABILIZED_DESC);
+    assert.equal(assemblyOf({ userData: {} }), null, "no extras");
+    assert.equal(assemblyOf({ userData: undefined }), null);
+    assert.equal(assemblyOf({ userData: { "nevo:assembly": "nope" } }), null);
+    assert.equal(assemblyOf({ userData: { "nevo:assembly": { ...STABILIZED_DESC, version: 2 } } }), null, "another version");
+    assert.equal(assemblyOf({ userData: { "nevo:assembly": { ...STABILIZED_DESC, cells: STABILIZED_DESC.cells.slice(0, 7) } } }), null, "a truncated list");
+    const shuffled = [...STABILIZED_DESC.cells];
+    shuffled.splice(0, 5, ...STABILIZED_DESC.cells.slice(-5));
+    assert.equal(assemblyOf({ userData: { "nevo:assembly": { ...STABILIZED_DESC, cells: shuffled } } }), null, "not in canonical order");
+    assert.equal(assemblyOf({ userData: { "nevo:assembly": { ...STABILIZED_DESC, cells: STABILIZED_DESC.cells.map((c, n) => (n === 3 ? 99 : c)) } } }), null, "a role that does not exist");
+});
+
+const assemblyBytes = (desc) => sharedGlb.writeAssemblyGlb(desc);
+const responseOf = (bytes) => new Response(bytes, { headers: { "content-length": String(bytes.byteLength) } });
+
+await test("loadGlb of a stabilized model's GLB returns its assembly; a plain mesh's GLB returns none", async () => {
+    const loaded = await withFetch(responseOf(assemblyBytes(STABILIZED_DESC)), () => loadGlbModule.loadGlb("/a.glb"));
+    assert.deepEqual(loaded.assembly, STABILIZED_DESC, "lossless through the writer, the container and GLTFLoader");
+    assert.equal(loaded.scene.userData["nevo:assembly"].cells.length, STABILIZED_DESC.cells.length);
+    const plain = await withFetch(responseOf(await makeGlb()), () => loadGlbModule.loadGlb("/m.glb"));
+    assert.equal(plain.assembly, null);
+    disposeObject(plain.scene);
+    disposeObject(loaded.scene);
+});
+
+await test("a model handle carries the assembly (null for a mesh), and a retired handle still refuses", () => {
+    const soup = new Float32Array(9);
+    const mesh = createModelHandle("/m.glb", () => soup);
+    assert.equal(mesh.model.assembly, null);
+    const stabilized = createModelHandle("/a.glb", () => soup, STABILIZED_DESC);
+    assert.equal(stabilized.model.assembly, STABILIZED_DESC);
+    assert.equal(stabilized.model.url, "/a.glb");
+    assert.equal(stabilized.retire(), true);
+    assert.throws(() => stabilized.model.extractTriangles(), /no longer shown/);
+    assert.equal(stabilized.model.assembly, STABILIZED_DESC, "what the model is does not change when it leaves the stage");
+});
+
+await test("an assembly's GLB shows as its roles in the parts list (names, colours, block counts), and Explode works", async () => {
+    const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+    const loaded = await new GLTFLoader().parseAsync(toBuffer(assemblyBytes(STABILIZED_DESC)), "");
+    tagMeshGroups(loaded.scene, loaded.parser.associations);
+    const parts = extractParts(loaded.scene);
+    assert.deepEqual(
+        parts.map((p) => p.name),
+        ["Original blocks", "Columns", "Brackets"],
+        "one part per role present, named like the legend says",
+    );
+    assert.deepEqual(parts.map((p) => countTriangles(p.object)), [12 * 12, 5 * 12, 1 * 12], "12 triangles per cube");
+    const scene = buildGlbScene(loaded.scene);
+    assert.equal(scene.rows.length, 3);
+    const rows = assemblyParts.decorateAssemblyRows(scene.rows, STABILIZED_DESC);
+    assert.deepEqual(rows.map((r) => [r.name, r.detail, r.swatch]), [["Original blocks", "12 blocks", "#64748b"], ["Columns", "5 blocks", "#f59e0b"], ["Brackets", "1 block", "#22c55e"]]);
+    assert.equal(rows[0].triangles, scene.rows[0].triangles, "the rest of the row is untouched");
+    assert.equal(assemblyParts.decorateAssemblyRows(scene.rows, null), scene.rows, "a mesh's rows are returned as they are");
+    assert.equal(assemblyParts.decorateAssemblyRows([{ id: "p1", name: "Gear", triangles: 4, size: null }], STABILIZED_DESC)[0].detail, undefined, "a part that is no role stays");
+    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED_DESC), { original: 12, added: 6 });
+    assert.deepEqual(assemblyParts.assemblyCounts(ORIGINAL_DESC), { original: 12, added: 0 });
+    assert.equal(assemblyParts.roleOfPart("Columns"), "column");
+    assert.equal(assemblyParts.roleOfPart("Gear"), undefined);
+
+    // Explode moves the roles apart and back without leaving anything behind; the triangles (what the analysis reads) are the same.
+    const soup0 = scene.extractTriangles();
+    assert.equal(soup0.length, 18 * 12 * 9);
+    const centreOf = (id) => new THREE.Box3().setFromObject(scene.parts.get(id)).getCenter(new THREE.Vector3());
+    const rest = parts.map((p) => centreOf(p.id).toArray());
+    scene.setExplode(100);
+    const apart = parts.map((p) => centreOf(p.id).toArray());
+    assert.ok(apart.some((c, i) => c.some((v, a) => Math.abs(v - rest[i][a]) > 1e-6)), "the roles moved");
+    assert.deepEqual(Array.from(scene.extractTriangles()), Array.from(soup0), "the analysis never sees the explode offsets");
+    scene.setExplode(0);
+    parts.forEach((p, i) => centreOf(p.id).toArray().forEach((v, a) => near(v, rest[i][a], 1e-6)));
+    // Split would turn each cube into a piece and lose the roles; the viewer does not offer it for an assembly, but it must not break.
+    const summary = await scene.split();
+    assert.equal(typeof summary.pieces, "number");
+    scene.unsplit();
+    assert.deepEqual(scene.rows.map((r) => r.name), ["Original blocks", "Columns", "Brackets"], "joined again: the roles are back");
+    scene.dispose();
+});
+
+// ---------- the hook: compare, preview, pins ----------
+
+await test("hook: switching Original | Stabilized | Overlay swaps the scene in place; the camera is not touched", async () => {
+    const t = await hookStage({ analysis: STABILIZED, view: { ...BLOCKS_VIEW, colorBy: "stress" } });
+    const first = t.viewer.scene();
+    assert.ok(first?.analysis === STABILIZED, "the stabilized result is on stage");
+    assert.equal(t.log.fits, 1, "the first look at this model's blocks frames the volume once");
+    const camera = { fits: t.log.fits, refreshes: t.log.refreshes, flights: t.log.flights.length };
+    // Original: the workspace hands over the original blocks' result.
+    await t.update({ analysis: ONLY_ORIGINAL, view: { ...t.props.view, compare: "original" } });
+    const second = t.viewer.scene();
+    assert.notEqual(second, first, "a new scene");
+    assert.ok(second.analysis === ONLY_ORIGINAL);
+    assert.equal(t.log.sets.at(-1), second, "put on stage by the swap");
+    assert.equal(t.log.fits, camera.fits, "no re-framing");
+    assert.equal(t.log.refreshes, camera.refreshes, "no re-fit of the camera");
+    assert.equal(t.log.flights.length, camera.flights, "no flight");
+    // Overlay: the full result again, in role colours whatever the colouring asked for.
+    await t.update({ analysis: STABILIZED, view: { ...t.props.view, compare: "overlay" } });
+    const overlay = t.viewer.scene();
+    assert.ok(overlay.analysis === STABILIZED);
+    STABILIZED.blocks.forEach((b) => assert.equal(overlay.colorOf(b.index), geom.roleColor(b.role, "light"), `block ${b.index}`));
+    assert.equal(overlay.labels().filter((l) => l.kind === "stress").length, 0, "no pins in role colours");
+    // Back to the model as it is: the asked-for colouring (stress) returns, with its pins.
+    await t.update({ view: { ...t.props.view, compare: "stabilized" } });
+    const back = t.viewer.scene();
+    assert.equal(back, overlay, "the same scene recoloured: nothing to rebuild for a colouring");
+    STABILIZED.blocks.forEach((b) => assert.equal(back.colorOf(b.index), geom.stressColor(STABILIZED.stress.byBlock[b.index])));
+    assert.equal(back.labels().filter((l) => l.kind === "stress").length, 3);
+    assert.equal(t.log.fits, camera.fits);
+    assert.equal(t.log.refreshes, camera.refreshes);
+    assert.equal(t.log.flights.length, camera.flights);
+    t.hook.unmount();
+});
+
+await test("hook: stress pins are HTML labels on the stage while colouring by stress, and go with the colouring", async () => {
+    const t = await hookStage({ analysis: ORIGINAL, view: { ...BLOCKS_VIEW, colorBy: "stress" } });
+    const pins = () => t.host.children.filter((c) => /^\d · \d+%$/.test(c.textContent));
+    const want = ORIGINAL.stress.points.slice(0, 3).map((p) => `${p.rank} · ${Math.round(p.utilisation * 100)}%`);
+    assert.deepEqual(pins().map((c) => c.textContent).sort(), want.sort());
+    await t.view({ colorBy: "status" });
+    assert.equal(pins().length, 0);
+    await t.view({ colorBy: "stress" });
+    assert.equal(pins().length, 3);
+    await t.view({ layerMax: 0 });
+    assert.ok(pins().length < 3, "the pins of cut-away blocks go");
+    // A result with no stress analysis (a mesh, or the estimate failed) is coloured by status, and has no pins.
+    await t.update({ analysis: { ...ORIGINAL, stress: null }, view: { ...t.props.view, layerMax: 9 } });
+    assert.equal(pins().length, 0);
+    assert.equal(t.viewer.scene().colorOf(0), geom.statusColor(ORIGINAL.blocks[0].status, "light"));
+    t.hook.unmount();
+});
+
+await test("hook: a preview of the stabilizer is drawn in role colours and the blocks each step adds flash once", async () => {
+    const step1 = solved(sharedAssembly.descriptorFromBlocks([...ARM.map((cell) => ({ cell })), ...ADDED.slice(0, 5)]), STABILIZED_DESC);
+    const t = await hookStage({ analysis: ORIGINAL, view: { ...BLOCKS_VIEW, colorBy: "stress" } });
+    // The original result's block scene is on stage (stress colours; the arm has no roles but the assembly's: all original).
+    assert.ok(t.viewer.scene().analysis === ORIGINAL);
+    assert.equal(t.viewer.scene().flashing(), false);
+    const fitsBefore = t.log.fits;
+    await t.update({ analysis: step1, previewing: true });
+    const preview = t.viewer.scene();
+    assert.ok(preview.analysis === step1);
+    step1.blocks.forEach((b) => assert.equal(preview.colorOf(b.index), geom.roleColor(b.role, "light")));
+    assert.equal(preview.flashing(), true, "the five new column blocks flash");
+    const ring = preview.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.find((o) => o.isInstancedMesh && o.renderOrder === -2 && o.material.color.getHexString() === "ce5222");
+    assert.equal(ring.count, 5);
+    assert.equal(t.log.fits, fitsBefore, "the preview does not move the camera");
+    // The next step: only what it adds flashes, against the step before.
+    const step2 = solved(STABILIZED_DESC, STABILIZED_DESC);
+    await t.update({ analysis: step2 });
+    const next = t.viewer.scene();
+    assert.equal(next.scene.getObjectByName("blocks:root").getObjectByName("blocks:blocks").children.find((o) => o.isInstancedMesh && o.renderOrder === -2 && o.material.color.getHexString() === "ce5222").count, 1, "the bracket");
+    // The preview ends and the saved model's result takes its place: no flash for a result that is not a preview.
+    await t.update({ analysis: STABILIZED, previewing: false });
+    assert.equal(t.viewer.scene().flashing(), false);
+    assert.equal(t.viewer.scene().colorOf(0), geom.stressColor(STABILIZED.stress.byBlock[0]), "back to the asked-for colouring");
+    t.hook.unmount();
+});
+
+await test("hook: a mesh's block view is unchanged by all of this (status colours, no pins, no flash)", async () => {
+    const t = await hookStage({ view: { ...BLOCKS_VIEW, colorBy: "role", compare: "overlay" } });
+    const scene = t.viewer.scene();
+    assert.equal(scene.colorOf(0), geom.statusColor("supported", "light"), "role and overlay mean nothing for a mesh");
+    assert.equal(scene.flashing(), false);
+    assert.equal(scene.labels().some((l) => l.kind === "stress"), false);
+    t.hook.unmount();
+});
+
+// ---------- findings: labels, step numbering, ghost, chip text ----------
+
+console.log("compare chip, steps, ghost, labels (review findings)");
+
+await test("the stage's name and the download name tell a stabilized version from its source (V4)", () => {
+    const { stageLabel, downloadStem } = viewerFormat;
+    assert.equal(stageLabel("A desk lamp"), "3D model of A desk lamp");
+    assert.equal(stageLabel("A desk lamp", true), "3D model of A desk lamp (stabilized)");
+    assert.equal(stageLabel("Stabilized · A desk lamp", true), "3D model of Stabilized · A desk lamp", "a title that says so already");
+    assert.equal(stageLabel(undefined), "3D model");
+    assert.equal(stageLabel(undefined, true), "3D model (stabilized)");
+    assert.equal(downloadStem("A desk lamp"), "A desk lamp");
+    assert.equal(downloadStem("A desk lamp", true), "A desk lamp-stabilized");
+    assert.notEqual(downloadStem("A desk lamp"), downloadStem("A desk lamp", true), "two files, two names");
+    assert.equal(downloadStem("Stabilized · A desk lamp", true), "Stabilized · A desk lamp");
+    assert.equal(downloadStem(undefined, true), "model-stabilized");
+    assert.equal(downloadStem("a/b:c", true), "a b c-stabilized", "still a safe file name");
+});
+
+await test("a part's line is the same in the list and the hover tooltip: a role says blocks, a mesh part says triangles (V5)", () => {
+    const { partDetail } = viewerFormat;
+    assert.equal(partDetail({ triangles: 108, detail: "9 blocks" }), "9 blocks");
+    assert.equal(partDetail({ triangles: 1234 }), "1,234 triangles");
+    // The rows the tooltip is looked up in are the decorated ones.
+    const rows = assemblyParts.decorateAssemblyRows([{ id: "p2", name: "Columns", triangles: 60, size: null }], STABILIZED_DESC);
+    assert.equal(partDetail(rows[0]), "5 blocks");
+});
+
+await test("steps: a first run is numbered as logged; a re-stabilized model's tooltips count its own run from 1, earlier blocks say so (V3)", () => {
+    assert.equal(geom.addedWhen(2), "in step 2");
+    assert.equal(geom.addedWhen(2, 0), "in step 2");
+    assert.equal(geom.addedWhen(9, 6), "in step 3");
+    assert.equal(geom.addedWhen(6, 6), "in an earlier version");
+    assert.equal(geom.addedWhen(2, 6), "in an earlier version");
+    assert.equal(geom.addedWhen(undefined, 6), "in step 1", "no step recorded: the first of the run");
+    const column = STABILIZED.blocks.find((b) => b.role === "column"); // step 1
+    const bracket = STABILIZED.blocks.find((b) => b.role === "bracket"); // step 2
+    assert.equal(geom.describeBlock(column, STABILIZED.settings).added, "Column, added in step 1");
+    assert.equal(geom.describeBlock(bracket, STABILIZED.settings, null, 0).added, "Bracket, added in step 2");
+    // The same blocks in a model whose own run started after step 1: the column is from before, the bracket is its step 1.
+    assert.equal(geom.describeBlock(column, STABILIZED.settings, null, 1).added, "Column, added in an earlier version");
+    assert.equal(geom.describeBlock(bracket, STABILIZED.settings, null, 1).added, "Bracket, added in step 1");
+    assert.ok(geom.describeBlock(bracket, STABILIZED.settings, null, 1).text.endsWith("Bracket, added in step 1"));
+    const original = STABILIZED.blocks.find((b) => b.role === "original");
+    assert.equal(geom.describeBlock(original, STABILIZED.settings, null, 5).added, undefined, "an original block was never added");
+});
+
+// The second run on top of STABILIZED_DESC (steps 1-2): a footing at step 3 and a column at step 4. Its log lists two steps, from 1.
+const RE_DESC = sharedAssembly.descriptorFromBlocks([...ARM.map((cell) => ({ cell })), ...ADDED, { cell: [7, 0, 0], role: "footing", step: 3 }, { cell: [8, 0, 0], role: "column", step: 4 }]);
+const logMetrics = (blocks, bad) => ({ blocks, errors: bad ? 1 : 0, warnings: 0, floating_blocks: 0, over_limit: bad ? 3 : 0, longest_cantilever: bad ? 7 : 3, cog_margin_mm: 17, max_utilisation: bad ? 1.98 : 0.21, overstressed_blocks: bad ? 3 : 0 });
+const logStep = (m) => ({ blocks: m.blocks, errors: m.errors, floating_blocks: m.floating_blocks, over_limit: m.over_limit, longest_cantilever: m.longest_cantilever, cog_margin_mm: m.cog_margin_mm, max_utilisation: m.max_utilisation });
+const reMeta = async () => {
+    const before = logMetrics(18, true);
+    const after = logMetrics(20, false);
+    const summary = { version: 1, blocks: 20, bodies: 1, floating_blocks: 0, cantilevered: 0, longest_cantilever: 0, over_limit: 0, cantilever_limit: 4, cog_mm: [150, 150, 100], cog_inside: true, cog_margin_mm: 50, size_mm: [300, 300, 300], coverage: 1, fill_threshold: 0.1, errors: 0, warnings: 0, stress: { material: "concrete", max_utilisation: 0.21, max_at: [1, 1, 0], stressed_blocks: 0, overstressed_blocks: 0, analysed_blocks: 20, unsupported_blocks: 0 }, analyzed_at: "2026-10-24T10:00:00.000Z" };
+    return {
+        version: 1, depth: 2, stabilizer: "1.0.0", solver: "awatif-ts", material: "concrete", target_utilisation: 0.6, cantilever_limit: 4, fill_threshold: 0.1, complete: true, stop: "stable", added_blocks: 2, added_by_role: { footing: 1, column: 1 }, before, after,
+        steps: [
+            { n: 1, move: "footing", reason: "stress", added: 1, text: "Added a footing.", at_mm: [750, 50, 50], before: logStep(before), after: logStep(logMetrics(19, true)) },
+            { n: 2, move: "column", reason: "stress", added: 1, text: "Added a column.", at_mm: [850, 50, 50], before: logStep(logMetrics(19, true)), after: logStep(after) },
+        ],
+        duration_ms: 42, assembly_hash: await sharedAssembly.assemblyHash(RE_DESC), after_summary: summary, created_at: "2026-10-24T10:00:01.000Z",
+    };
+};
+
+await test("earlierSteps: the descriptor's top step minus the steps its own log lists; no log, no offset (V3)", async () => {
+    const { earlierSteps, topStep } = assemblyParts;
+    assert.equal(topStep(ORIGINAL_DESC), 0);
+    assert.equal(topStep(STABILIZED_DESC), 2);
+    assert.equal(topStep(RE_DESC), 4);
+    const log = (n) => ({ "nevo:stabilization": { steps: Array.from({ length: n }, (_, i) => ({ n: i + 1 })) } });
+    assert.equal(earlierSteps(log(2), STABILIZED_DESC), 0, "a first run lists every step it has");
+    assert.equal(earlierSteps(log(2), RE_DESC), 2, "the second run's two steps sit on the first run's two");
+    assert.equal(earlierSteps(undefined, RE_DESC), 0);
+    assert.equal(earlierSteps({}, RE_DESC), 0, "no log: nothing says how the steps were counted");
+    assert.equal(earlierSteps({ "nevo:stabilization": "nope" }, RE_DESC), 0);
+    assert.equal(earlierSteps({ "nevo:stabilization": { steps: "nope" } }, RE_DESC), 0);
+    assert.equal(earlierSteps(log(9), STABILIZED_DESC), 0, "never negative");
+    // Through the real writer, container and GLTFLoader.
+    const meta = await reMeta();
+    const loaded = await withFetch(responseOf(sharedGlb.writeAssemblyGlb(RE_DESC, meta)), () => loadGlbModule.loadGlb("/re.glb"));
+    assert.deepEqual(loaded.assembly, RE_DESC);
+    assert.equal(loaded.stepOffset, 2, "a re-stabilized model");
+    disposeObject(loaded.scene);
+    const first = await withFetch(responseOf(assemblyBytes(STABILIZED_DESC)), () => loadGlbModule.loadGlb("/a.glb"));
+    assert.equal(first.stepOffset, 0, "no log in this file");
+    disposeObject(first.scene);
+    const plain = await withFetch(responseOf(await makeGlb()), () => loadGlbModule.loadGlb("/m.glb"));
+    assert.equal(plain.stepOffset, 0, "a mesh");
+    disposeObject(plain.scene);
+});
+
+await test("hook: a stabilized model has no ghost (its cubes would only veil the blocks); a mesh keeps it (V2)", async () => {
+    const source = { geometry: new THREE.BoxGeometry(100, 100, 100), matrix: new THREE.Matrix4() };
+    const scene = { current: { ghostSources: () => [source] } };
+    const ghostOf = (t) => t.viewer.scene().scene.getObjectByName("blocks:ghost");
+    const mesh = await hookStage({ sceneRef: scene, view: { ...BLOCKS_VIEW, showGhost: true } });
+    assert.equal(ghostOf(mesh).children.length, 1, "the original model's ghost");
+    assert.equal(ghostOf(mesh).visible, true);
+    mesh.hook.unmount();
+    const assembly = await hookStage({ sceneRef: scene, analysis: STABILIZED, noGhost: true, view: { ...BLOCKS_VIEW, showGhost: true } });
+    assert.equal(ghostOf(assembly).children.length, 0, "nothing to show, whatever the stored flag says");
+    assembly.hook.unmount();
+    source.geometry.dispose();
+});
+
+await test("hook: the block tooltip counts the run on screen from step 1 (V3)", async () => {
+    const column = STABILIZED.blocks.find((b) => b.role === "column");
+    const bracket = STABILIZED.blocks.find((b) => b.role === "bracket");
+    const plain = await hookStage({ analysis: STABILIZED });
+    assert.equal(plain.viewer.scene().info(column.index).added, "Column, added in step 1");
+    assert.equal(plain.viewer.scene().info(bracket.index).added, "Bracket, added in step 2");
+    plain.hook.unmount();
+    const again = await hookStage({ analysis: STABILIZED, stepOffset: 1 });
+    assert.equal(again.viewer.scene().info(column.index).added, "Column, added in an earlier version");
+    assert.equal(again.viewer.scene().info(bracket.index).added, "Bracket, added in step 1");
+    again.hook.unmount();
+});
+
+const compareStateModule = await viewer("compareState");
+
+await test("the Compare chip says what is on stage: Original asked for with the whole model still drawn is a wait, not a promise (V1)", () => {
+    const { compareState, hasAddedBlocks } = compareStateModule;
+    assert.equal(hasAddedBlocks(STABILIZED), true);
+    assert.equal(hasAddedBlocks(ONLY_ORIGINAL), false, "the original half has no added blocks");
+    assert.equal(hasAddedBlocks(makeAnalysis()), false, "a mesh has no roles at all");
+    assert.equal(hasAddedBlocks(null), false);
+    const on = { on: true, requested: "original", previewing: false, addedOnStage: true };
+    // The click: the store says Original at once, the stage still has the stabilized model.
+    assert.deepEqual(compareState({ ...on, status: "loading" }), { value: "stabilized", waiting: true, failed: false, unreported: false });
+    // The original half arrived and is on stage: the chip says Original.
+    assert.deepEqual(compareState({ ...on, addedOnStage: false, status: "idle" }), { value: "original", waiting: false, failed: false, unreported: false });
+    // It could not be analysed: the viewer has to put the chip (and the store) back on Stabilized.
+    assert.deepEqual(compareState({ ...on, status: "error" }), { value: "stabilized", waiting: true, failed: true, unreported: false });
+    // No word from the workspace: a wait that the viewer gives up after a while.
+    assert.equal(compareState(on).unreported, true);
+    assert.equal(compareState({ ...on, status: "idle" }).unreported, true, "nothing is loading, yet the stage never changed");
+    assert.equal(compareState({ ...on, status: "loading" }).unreported, false);
+    // The other modes are what they say; Overlay and Stabilized never wait.
+    for (const requested of ["stabilized", "overlay"]) assert.deepEqual(compareState({ ...on, requested, status: "idle" }), { value: requested, waiting: false, failed: false, unreported: false });
+    // The chip is off (the model view, or no added blocks): no wait.
+    assert.equal(compareState({ ...on, on: false }).waiting, false);
+    // The stabilizer's preview is on stage: none of the three is.
+    assert.deepEqual(compareState({ ...on, previewing: true, status: "loading" }), { value: null, waiting: false, failed: false, unreported: false });
+});
+
+await test("the chip stack's height is the measured one for the view on screen, else the estimate (V6, V8)", () => {
+    const { stackHeight } = compareStateModule;
+    assert.equal(stackHeight(null, true, 92, 8), 92, "not measured yet");
+    assert.equal(stackHeight({ blocks: true, px: 114 }, true, 92, 8), 114, "the legend wrapped: more than the estimate");
+    assert.equal(stackHeight({ blocks: true, px: 63 }, true, 92, 8), 63);
+    assert.equal(stackHeight({ blocks: false, px: 29 }, true, 92, 8), 92, "measured in the other view: no word on this one");
+    assert.equal(stackHeight({ blocks: true, px: 8 }, true, 92, 8), 92, "an element with no size (hidden): the estimate");
+    assert.equal(stackHeight({ blocks: true, px: 0 }, true, 92, 8), 92);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

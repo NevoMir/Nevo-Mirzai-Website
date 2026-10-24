@@ -11,13 +11,20 @@
 //   fingerprint of the triangles.
 // - The soup is COPIED into the worker unless `transfer: true` (then the caller's buffer is detached): the soup
 //   from the viewer may share memory with a live geometry.
+// - Every result carries the stress estimate (the worker's second stage, withStress.ts). The page-side fallback loads
+//   that module lazily, so the solver is not part of the page's own bundle.
+// - A stabilized model is a block assembly: pass `options.assembly` (the descriptor read from its GLB) and the cells are
+//   analysed exactly, never voxelised. The soup is then only used for its bounds, which tie the lattice to the frame the
+//   viewer draws in.
 // - A soup with no triangle at all is never remembered: a viewer that is not loaded (or was disposed) hands back
 //   an empty soup, and caching that as "No blocks" would stick to the model. With `rejectEmpty` it is an error
 //   the caller can retry instead.
 
 import type { AnalysisResult, AnalysisSettings, TriangleSoup } from "./types.ts";
+import { CELL_STRIDE, type AssemblyDescriptor } from "../shared/assembly.ts";
 import { analyzeGrid } from "./analyze.ts";
-import type { WorkerResponse } from "./protocol.ts";
+import { annotateRoles, boundsOf, gridFromAssembly, settingsForAssembly, type Bounds } from "./assembly.ts";
+import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 import { normalizeSettings } from "./settings.ts";
 import { voxelize } from "./voxelize.ts";
 import type { AnalysisStage, VoxelGrid } from "./voxelize.ts";
@@ -41,6 +48,13 @@ export interface RunOptions {
      * source that is a viewer: an empty soup means "not loaded (yet)", not "a model without geometry".
      */
     rejectEmpty?: boolean;
+    /**
+     * The block assembly the model is (a stabilized model's GLB declares it; LoadedModel.assembly), else leave it out
+     * and the triangles are voxelised. With it the triangles are only used for their bounds.
+     */
+    assembly?: AssemblyDescriptor | null;
+    /** The assembly the triangles belong to, when `assembly` is only a part of it (the compare view's original blocks). */
+    frame?: AssemblyDescriptor | null;
 }
 
 /** The triangle source returned no triangle: the model is not loaded (yet). Retrying later may work. */
@@ -58,7 +72,19 @@ const STAGE_LABELS: Record<AnalysisStage, string> = {
     voxelize: "Voxelising the model",
     flood: "Filling the inside",
     analyze: "Checking the structure",
+    stress: "Estimating stress",
 };
+
+/** The structural analysis ends at this share of the bar; the stress estimate fills the rest (as in the worker). */
+const STRESS_FROM = 0.96;
+
+/** What the structural analysis needs to know about the model, beyond the settings. */
+interface Job {
+    gridKey: string;
+    /** Set for a block assembly; the grid is then built from it. */
+    assembly: AssemblyDescriptor | null;
+    frame: AssemblyDescriptor | null;
+}
 
 export type SoupSource = TriangleSoup | (() => TriangleSoup);
 
@@ -86,6 +112,17 @@ function fingerprint(positions: Float32Array): string {
     return `fp:${words.length}:${(h >>> 0).toString(16)}`;
 }
 
+/** Identity of a descriptor: its block count and two 32-bit hashes of every number in it (cells, roles and steps). */
+function assemblyKey(d: AssemblyDescriptor): string {
+    let a = 2166136261;
+    let b = 5381;
+    for (const n of d.cells) {
+        a = Math.imul(a ^ n, 16777619);
+        b = Math.imul(b, 33) ^ n;
+    }
+    return `${d.cells.length / CELL_STRIDE}:${(a >>> 0).toString(16)}:${(b >>> 0).toString(16)}:${d.inset}`;
+}
+
 export function clearAnalysisCache(): void {
     results.clear();
     mainGrids.clear();
@@ -99,32 +136,45 @@ export function clearAnalysisCache(): void {
 
 const mainGrids = new Map<string, VoxelGrid>();
 
-async function runOnMainThread(
-    soupOf: () => TriangleSoup,
-    gridKey: string,
-    settings: AnalysisSettings,
-    options: RunOptions,
-): Promise<AnalysisResult> {
+/** The bounds the viewer's triangles have (null when there are none), which tie an assembly's lattice to the viewer's frame. */
+const soupBounds = (soup: TriangleSoup): Bounds | null => (isEmptySoup(soup) ? null : boundsOf(soup.positions));
+
+async function runOnMainThread(soupOf: () => TriangleSoup, job: Job, settings: AnalysisSettings, options: RunOptions): Promise<AnalysisResult> {
     // One tick so the caller can show "analysing" before the page freezes.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     throwIfAborted(options.signal);
-    const onProgress = (fraction: number, step: AnalysisStage) => options.onProgress?.({ stage: STAGE_LABELS[step], progress: fraction, step });
-    let grid = mainGrids.get(gridKey);
-    if (!grid) {
-        grid = voxelize(soupOf(), settings, onProgress);
-        // A grid built from nothing must not be reused for the real model that arrives later under the same key.
-        if (grid.triangles.used > 0) {
-            mainGrids.delete(gridKey);
-            mainGrids.set(gridKey, grid);
-            while (mainGrids.size > 2) {
-                const oldest = mainGrids.keys().next().value;
-                if (oldest === undefined) break;
-                mainGrids.delete(oldest);
+    const report = (fraction: number, step: AnalysisStage) => options.onProgress?.({ stage: STAGE_LABELS[step], progress: fraction, step });
+    // The bar must not reach 100 % before the stress stage has run.
+    const onProgress = (fraction: number, step: AnalysisStage) => report(Math.min(fraction, STRESS_FROM), step);
+    let result: AnalysisResult;
+    if (job.assembly) {
+        const grid = gridFromAssembly(job.assembly, soupBounds(soupOf()), settings, job.frame ?? job.assembly);
+        result = annotateRoles(analyzeGrid(grid, settings, { onProgress }), job.assembly);
+    } else {
+        let grid = mainGrids.get(job.gridKey);
+        if (!grid) {
+            grid = voxelize(soupOf(), settings, onProgress);
+            // A grid built from nothing must not be reused for the real model that arrives later under the same key.
+            if (grid.triangles.used > 0) {
+                mainGrids.delete(job.gridKey);
+                mainGrids.set(job.gridKey, grid);
+                while (mainGrids.size > 2) {
+                    const oldest = mainGrids.keys().next().value;
+                    if (oldest === undefined) break;
+                    mainGrids.delete(oldest);
+                }
             }
         }
+        throwIfAborted(options.signal);
+        result = analyzeGrid(grid, settings, { onProgress });
     }
     throwIfAborted(options.signal);
-    return analyzeGrid(grid, settings, { onProgress });
+    report(STRESS_FROM, "stress");
+    const { withStress } = await import("./withStress.ts");
+    const withStressResult = await withStress(result);
+    throwIfAborted(options.signal);
+    report(1, "stress");
+    return withStressResult;
 }
 
 // ---------- worker ----------
@@ -156,7 +206,8 @@ function releaseWorker(worker: Worker): void {
     else idle = worker;
 }
 
-function runInWorker(worker: Worker, soupOf: () => TriangleSoup, gridKey: string, settings: AnalysisSettings, options: RunOptions): Promise<AnalysisResult> {
+function runInWorker(worker: Worker, soupOf: () => TriangleSoup, job: Job, settings: AnalysisSettings, options: RunOptions): Promise<AnalysisResult> {
+    const { gridKey, assembly, frame } = job;
     return new Promise<AnalysisResult>((resolve, reject) => {
         const id = nextId++;
         let settled = false;
@@ -186,6 +237,12 @@ function runInWorker(worker: Worker, soupOf: () => TriangleSoup, gridKey: string
         let sentEmpty = false;
         const sendSoup = () => {
             const soup = soupOf();
+            if (assembly) {
+                // The cells are the blocks: only the triangles' bounds are needed, not the triangles.
+                const request: WorkerRequest = { kind: "run", id, gridKey, positions: null, settings, assembly, soupBounds: soupBounds(soup), frame };
+                worker.postMessage(request);
+                return;
+            }
             const positions = soup.positions;
             sentEmpty = isEmptySoup(soup);
             if (options.transfer) worker.postMessage({ kind: "run", id, gridKey, positions, settings }, [positions.buffer]);
@@ -209,10 +266,13 @@ function runInWorker(worker: Worker, soupOf: () => TriangleSoup, gridKey: string
                     break;
                 case "result":
                     finish(() => {
-                        const keys = (held.get(worker) ?? []).filter((key) => key !== gridKey);
-                        if (!sentEmpty) keys.push(gridKey);
-                        while (keys.length > 3) keys.shift();
-                        held.set(worker, keys);
+                        // An assembly leaves nothing in the worker: its grid is built from the request every time.
+                        if (!assembly) {
+                            const keys = (held.get(worker) ?? []).filter((key) => key !== gridKey);
+                            if (!sentEmpty) keys.push(gridKey);
+                            while (keys.length > 3) keys.shift();
+                            held.set(worker, keys);
+                        }
                         releaseWorker(worker);
                         resolve(message.result);
                     });
@@ -243,7 +303,7 @@ function runInWorker(worker: Worker, soupOf: () => TriangleSoup, gridKey: string
         }
 
         try {
-            if (held.get(worker)?.includes(gridKey)) {
+            if (!assembly && held.get(worker)?.includes(gridKey)) {
                 // The worker already has this model voxelised: no triangles needed.
                 worker.postMessage({ kind: "run", id, gridKey, positions: null, settings });
             } else {
@@ -263,7 +323,9 @@ function runInWorker(worker: Worker, soupOf: () => TriangleSoup, gridKey: string
  */
 export async function runAnalysis(source: SoupSource, settingsInput: Partial<AnalysisSettings> = {}, options: RunOptions = {}): Promise<AnalysisResult> {
     throwIfAborted(options.signal);
-    const settings = normalizeSettings(settingsInput);
+    const assembly = options.assembly ?? null;
+    // A lattice of 100 mm blocks is fixed by the assembly itself; the block size and target volume of a voxelisation do not apply.
+    const settings = assembly ? settingsForAssembly(normalizeSettings(settingsInput), assembly) : normalizeSettings(settingsInput);
     let soup: TriangleSoup | null = typeof source === "function" ? null : source;
     const soupOf = (): TriangleSoup => {
         if (soup === null) soup = (source as () => TriangleSoup)();
@@ -271,8 +333,14 @@ export async function runAnalysis(source: SoupSource, settingsInput: Partial<Ana
         return soup;
     };
     const modelKey = options.cacheKey ?? fingerprint(soupOf().positions);
-    const gridKey = `${modelKey}|${settings.targetSizeMm}|${settings.blockSizeMm}`;
-    const resultKey = `${gridKey}|${settings.fillThreshold}|${settings.cantileverLimit}|${settings.maxBlocks ?? "-"}`;
+    const frame = assembly ? (options.frame ?? null) : null;
+    // A voxel grid is identified by the model and the scale; an assembly by its cells (roles and steps included), plus
+    // the model for the frame its bounds give.
+    const gridKey = assembly
+        ? `asm:${assemblyKey(assembly)}${frame ? `+${assemblyKey(frame)}` : ""}|${modelKey}`
+        : `${modelKey}|${settings.targetSizeMm}|${settings.blockSizeMm}`;
+    const resultKey = `${gridKey}|${settings.fillThreshold}|${settings.cantileverLimit}|${settings.maxBlocks ?? "-"}|${settings.material}`;
+    const job: Job = { gridKey, assembly, frame };
 
     const cached = results.get(resultKey);
     if (cached) {
@@ -286,14 +354,14 @@ export async function runAnalysis(source: SoupSource, settingsInput: Partial<Ana
     const worker = takeWorker();
     if (worker) {
         try {
-            result = await runInWorker(worker, soupOf, gridKey, settings, options);
+            result = await runInWorker(worker, soupOf, job, settings, options);
         } catch (error) {
             if (!(error instanceof WorkerUnavailable)) throw error;
             // Fall through to the main thread. (A transferred soup would be gone; the default copies it.)
             if (options.transfer) throw error;
         }
     }
-    if (!result) result = await runOnMainThread(soupOf, gridKey, settings, options);
+    if (!result) result = await runOnMainThread(soupOf, job, settings, options);
 
     // "No blocks" for a soup that had no triangle is a statement about an extraction that failed, not about the
     // model: do not let it answer for the model from now on.

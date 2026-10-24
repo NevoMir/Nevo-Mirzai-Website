@@ -15,7 +15,9 @@ import { useJobPolling } from "@/assignment/store/jobs";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { useAutosave } from "@/assignment/store/persist";
 import { refreshProviders } from "@/assignment/store/providers";
-import { selectIsGenerating, useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
+import { selectIsGenerating, useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
+
+const WORKSPACE_TABS: readonly WorkspaceTab[] = ["3d", "analysis", "models"];
 
 /**
  * Shortcuts stay out of dialogs, menus and text fields other than the prompt box: a chord typed
@@ -38,7 +40,7 @@ function shortcutBlocked(target: EventTarget | null): boolean {
  */
 export default function Workspace() {
     const navigate = useNavigate();
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     // The hub's "New project" on a tag page lands here with ?tag=<id> so the project is filed there.
     const tagParam = searchParams.get("tag");
     const tagId = tagParam && isProjectId(tagParam) ? tagParam : null;
@@ -50,6 +52,40 @@ export default function Workspace() {
     useEffect(() => {
         void refreshProviders();
     }, []);
+
+    // ?tab=analysis|3d|models (an opened example lands on the verdict): read once, then removed from the URL so a
+    // reload or a shared link does not keep forcing the tab. Applied when the project has landed, because opening a
+    // project starts it on the 3D tab (store.setProject).
+    const tabParam = searchParams.get("tab");
+    const wantedTab = useRef<WorkspaceTab | null>(null);
+    useEffect(() => {
+        if (tabParam === null) return;
+        const tab = WORKSPACE_TABS.find((t) => t === tabParam);
+        // Only a project has tabs to choose from: on /app/new the parameter means nothing, and must not wait
+        // around to hijack the project the first send creates.
+        if (tab && routeProjectId) wantedTab.current = tab;
+        setSearchParams(
+            (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete("tab");
+                return next;
+            },
+            { replace: true },
+        );
+    }, [tabParam, routeProjectId, setSearchParams]);
+    const openedProjectId = useWorkspaceStore((s) => s.activeProjectId);
+    const loadingProjectId = useWorkspaceStore((s) => s.loadingProjectId);
+    const projectSession = useWorkspaceStore((s) => s.session);
+    useEffect(() => {
+        const tab = wantedTab.current;
+        if (!tab) return;
+        // The live store, not this render's copy: the route hook's effect (declared above) may have just started a
+        // read of the project, and that read's setProject would put the tab back on 3D.
+        const now = useWorkspaceStore.getState();
+        if (!routeProjectId || now.activeProjectId !== routeProjectId || now.loadingProjectId !== null) return;
+        wantedTab.current = null;
+        now.setWorkspaceTab(tab);
+    }, [tabParam, routeProjectId, openedProjectId, loadingProjectId, projectSession]);
 
     const isMobile = useMobileLayout();
     const chatSizes = useChatSizes();

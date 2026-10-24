@@ -1,0 +1,1221 @@
+{
+  "examples": [
+    {
+      "slug": "cantilever-house",
+      "title": "Cantilever house",
+      "prompt": "A modern two-storey house with a long cantilevered upper floor and a glass terrace",
+      "blurb": "The charcoal upper floor juts far past the small ground floor, so its weight pulls the house over. Stabilizing adds 3 blocks (2 in columns, 1 in a bracket) and it then passes every check.",
+      "tags": [
+        "building",
+        "cantilever",
+        "tipping"
+      ],
+      "cover_url": "/assignment_alex/examples/cantilever-house/cover.png",
+      "original": {
+        "size_bytes": 91472,
+        "part_count": 13,
+        "analysis": {
+          "version": 1,
+          "blocks": 136,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 73,
+          "longest_cantilever": 7,
+          "over_limit": 22,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            391.9,
+            514.7,
+            290.4
+          ],
+          "cog_inside": false,
+          "cog_margin_mm": -91.9,
+          "size_mm": [
+            1000,
+            465.9,
+            512.1
+          ],
+          "coverage": 0.944,
+          "fill_threshold": 0.1,
+          "errors": 2,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.642,
+            "max_at": [
+              2,
+              6,
+              2
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 136,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 96584,
+        "analysis": {
+          "version": 1,
+          "blocks": 139,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 72,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            404,
+            511.2,
+            288.1
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 199.2,
+          "size_mm": [
+            996,
+            496,
+            496
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.596,
+            "max_at": [
+              8,
+              3,
+              2
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 139,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 3,
+        "before": {
+          "blocks": 136,
+          "errors": 2,
+          "floating_blocks": 0,
+          "over_limit": 22,
+          "longest_cantilever": 7,
+          "cog_margin_mm": -91.9,
+          "max_utilisation": 0.642,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 139,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 199.2,
+          "max_utilisation": 0.596,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "2fdcf2e5"
+    },
+    {
+      "slug": "long-neck-dino",
+      "title": "Long-neck dinosaur",
+      "prompt": "A chunky cartoon brachiosaurus with a very long neck, standing on four sturdy legs",
+      "blurb": "The neck reaches far past the front legs, longer than the cantilever limit. Stabilizing adds 3 blocks (2 in columns, 1 in a bracket) and it then passes every check.",
+      "tags": [
+        "animal",
+        "cantilever",
+        "stress"
+      ],
+      "cover_url": "/assignment_alex/examples/long-neck-dino/cover.png",
+      "original": {
+        "size_bytes": 145596,
+        "part_count": 10,
+        "analysis": {
+          "version": 1,
+          "blocks": 85,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 34,
+          "longest_cantilever": 6,
+          "over_limit": 4,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            340.6,
+            498.2,
+            281.8
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 59.4,
+          "size_mm": [
+            1000,
+            283.7,
+            630.8
+          ],
+          "coverage": 0.962,
+          "fill_threshold": 0.1,
+          "errors": 1,
+          "warnings": 1,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.921,
+            "max_at": [
+              5,
+              5,
+              4
+            ],
+            "stressed_blocks": 4,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 85,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 62948,
+        "analysis": {
+          "version": 1,
+          "blocks": 88,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 32,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            348.9,
+            500,
+            278.4
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 177.6,
+          "size_mm": [
+            996,
+            396,
+            596
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.505,
+            "max_at": [
+              5,
+              4,
+              4
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 88,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 3,
+        "before": {
+          "blocks": 85,
+          "errors": 1,
+          "floating_blocks": 0,
+          "over_limit": 4,
+          "longest_cantilever": 6,
+          "cog_margin_mm": 59.4,
+          "max_utilisation": 0.921,
+          "warnings": 1,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 88,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 177.6,
+          "max_utilisation": 0.505,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "f865b477"
+    },
+    {
+      "slug": "harbour-crane",
+      "title": "Harbour jib crane",
+      "prompt": "A yellow harbour jib crane with a cab, a long boom and a container hanging from the hook",
+      "blurb": "A long jib, almost no counterweight and a container on a cable too thin to show on the block grid. Stabilizing adds 2 blocks (1 in a column, 1 in a footing) and it then passes every check.",
+      "tags": [
+        "machine",
+        "cantilever",
+        "floating",
+        "tipping"
+      ],
+      "cover_url": "/assignment_alex/examples/harbour-crane/cover.png",
+      "original": {
+        "size_bytes": 68696,
+        "part_count": 16,
+        "analysis": {
+          "version": 1,
+          "blocks": 63,
+          "bodies": 2,
+          "floating_blocks": 9,
+          "cantilevered": 27,
+          "longest_cantilever": 7,
+          "over_limit": 7,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            333.3,
+            511.1,
+            481.5
+          ],
+          "cog_inside": false,
+          "cog_margin_mm": -33.3,
+          "size_mm": [
+            1000,
+            259.6,
+            789.5
+          ],
+          "coverage": 0.948,
+          "fill_threshold": 0.1,
+          "errors": 4,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 1.374,
+            "max_at": [
+              1,
+              5,
+              3
+            ],
+            "stressed_blocks": 19,
+            "overstressed_blocks": 9,
+            "analysed_blocks": 54,
+            "unsupported_blocks": 9
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 47880,
+        "analysis": {
+          "version": 1,
+          "blocks": 65,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 35,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            431.5,
+            510,
+            437.7
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 110,
+          "size_mm": [
+            996,
+            396,
+            796
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.583,
+            "max_at": [
+              9,
+              4,
+              0
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 65,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 2,
+        "before": {
+          "blocks": 63,
+          "errors": 4,
+          "floating_blocks": 9,
+          "over_limit": 7,
+          "longest_cantilever": 7,
+          "cog_margin_mm": -33.3,
+          "max_utilisation": 1.374,
+          "warnings": 0,
+          "overstressed_blocks": 9
+        },
+        "after": {
+          "blocks": 65,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 110,
+          "max_utilisation": 0.583,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "0b3eaf4d"
+    },
+    {
+      "slug": "desk-lamp",
+      "title": "Articulated desk lamp",
+      "prompt": "An articulated desk lamp with a round base, two arms and a conical shade",
+      "blurb": "Nine separate parts: the arms and joints are slimmer than one block, so most of the lamp hangs in the air above its base. Stabilizing adds 16 blocks (9 in columns, 2 in footings, 3 in brackets, 2 in bridges) and it then passes every check.",
+      "tags": [
+        "furniture",
+        "floating",
+        "thin parts"
+      ],
+      "cover_url": "/assignment_alex/examples/desk-lamp/cover.png",
+      "original": {
+        "size_bytes": 69416,
+        "part_count": 9,
+        "analysis": {
+          "version": 1,
+          "blocks": 44,
+          "bodies": 5,
+          "floating_blocks": 26,
+          "cantilevered": 0,
+          "longest_cantilever": 0,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            250,
+            500,
+            61.1
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 200,
+          "size_mm": [
+            936.1,
+            427.9,
+            1000
+          ],
+          "coverage": 0.884,
+          "fill_threshold": 0.1,
+          "errors": 4,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0,
+            "max_at": [
+              2,
+              4,
+              0
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 18,
+            "unsupported_blocks": 26
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 48088,
+        "analysis": {
+          "version": 1,
+          "blocks": 60,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 22,
+          "longest_cantilever": 3,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            505,
+            491.7,
+            415
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 139.4,
+          "size_mm": [
+            896,
+            396,
+            996
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.518,
+            "max_at": [
+              7,
+              4,
+              6
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 60,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 16,
+        "before": {
+          "blocks": 44,
+          "errors": 4,
+          "floating_blocks": 26,
+          "over_limit": 0,
+          "longest_cantilever": 0,
+          "cog_margin_mm": 200,
+          "max_utilisation": null,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 60,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 3,
+          "cog_margin_mm": 139.4,
+          "max_utilisation": 0.518,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "cbabd0de"
+    },
+    {
+      "slug": "leaning-tower",
+      "title": "Leaning watchtower",
+      "prompt": "A crooked medieval stone watchtower with a heavy timber belfry and a conical roof",
+      "blurb": "No part reaches too far, but the lean carries the centre of gravity out of the footprint, so it would topple. Stabilizing adds 7 blocks (5 in columns, 2 in footings) and it then passes every check.",
+      "tags": [
+        "building",
+        "tipping",
+        "stress",
+        "stone"
+      ],
+      "cover_url": "/assignment_alex/examples/leaning-tower/cover.png",
+      "original": {
+        "size_bytes": 88180,
+        "part_count": 9,
+        "analysis": {
+          "version": 1,
+          "blocks": 66,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 56,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            519.7,
+            500,
+            583.3
+          ],
+          "cog_inside": false,
+          "cog_margin_mm": -119.7,
+          "size_mm": [
+            583.3,
+            403.7,
+            1000
+          ],
+          "coverage": 0.964,
+          "fill_threshold": 0.1,
+          "errors": 2,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 3.672,
+            "max_at": [
+              3,
+              4,
+              1
+            ],
+            "stressed_blocks": 18,
+            "overstressed_blocks": 16,
+            "analysed_blocks": 66,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 53084,
+        "analysis": {
+          "version": 1,
+          "blocks": 73,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 51,
+          "longest_cantilever": 2,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            521.2,
+            502.1,
+            545.9
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 102.1,
+          "size_mm": [
+            596,
+            496,
+            996
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.512,
+            "max_at": [
+              3,
+              5,
+              2
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 73,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 7,
+        "before": {
+          "blocks": 66,
+          "errors": 2,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": -119.7,
+          "max_utilisation": 3.672,
+          "warnings": 0,
+          "overstressed_blocks": 16
+        },
+        "after": {
+          "blocks": 73,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 2,
+          "cog_margin_mm": 102.1,
+          "max_utilisation": 0.512,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "0df2f6d0"
+    },
+    {
+      "slug": "oak-tree",
+      "title": "Oak with a long limb",
+      "prompt": "An old gnarled oak tree with a wide crown and one very long horizontal limb",
+      "blurb": "The whole crown stands on a thin trunk and one limb reaches far out, so the tree is top-heavy and lopsided. Stabilizing adds 3 blocks (2 in columns, 1 in a footing) and it then passes every check.",
+      "tags": [
+        "nature",
+        "cantilever",
+        "tipping",
+        "stress"
+      ],
+      "cover_url": "/assignment_alex/examples/oak-tree/cover.png",
+      "original": {
+        "size_bytes": 110560,
+        "part_count": 5,
+        "analysis": {
+          "version": 1,
+          "blocks": 88,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 80,
+          "longest_cantilever": 6,
+          "over_limit": 13,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            470.5,
+            543.2,
+            413.6
+          ],
+          "cog_inside": false,
+          "cog_margin_mm": -70.5,
+          "size_mm": [
+            1000,
+            465.5,
+            645.3
+          ],
+          "coverage": 0.966,
+          "fill_threshold": 0.1,
+          "errors": 3,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 6.978,
+            "max_at": [
+              3,
+              5,
+              1
+            ],
+            "stressed_blocks": 6,
+            "overstressed_blocks": 5,
+            "analysed_blocks": 88,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 64940,
+        "analysis": {
+          "version": 1,
+          "blocks": 91,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 77,
+          "longest_cantilever": 3,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            477.5,
+            542.3,
+            402.7
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 124.4,
+          "size_mm": [
+            996,
+            596,
+            696
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.447,
+            "max_at": [
+              2,
+              5,
+              3
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 91,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 3,
+        "before": {
+          "blocks": 88,
+          "errors": 3,
+          "floating_blocks": 0,
+          "over_limit": 13,
+          "longest_cantilever": 6,
+          "cog_margin_mm": -70.5,
+          "max_utilisation": 6.978,
+          "warnings": 0,
+          "overstressed_blocks": 5
+        },
+        "after": {
+          "blocks": 91,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 3,
+          "cog_margin_mm": 124.4,
+          "max_utilisation": 0.447,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "750665e7"
+    },
+    {
+      "slug": "mushroom-pavilion",
+      "title": "Mushroom pavilion",
+      "prompt": "A red toadstool garden pavilion with white spots on a slim cream stem",
+      "blurb": "A broad cap on a slim stem keeps within the reach rule, yet the joints under the cap are close to the most stress they can carry. Stabilizing adds 8 blocks (all in columns) and it then passes every check.",
+      "tags": [
+        "nature",
+        "stress",
+        "borderline"
+      ],
+      "cover_url": "/assignment_alex/examples/mushroom-pavilion/cover.png",
+      "original": {
+        "size_bytes": 103816,
+        "part_count": 4,
+        "analysis": {
+          "version": 1,
+          "blocks": 386,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 338,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            499,
+            500,
+            594.8
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 199,
+          "size_mm": [
+            1000,
+            1000,
+            979.4
+          ],
+          "coverage": 0.993,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 1,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.846,
+            "max_at": [
+              3,
+              4,
+              4
+            ],
+            "stressed_blocks": 12,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 386,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 263012,
+        "analysis": {
+          "version": 1,
+          "blocks": 394,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 329,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            499,
+            500,
+            586.8
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 211.4,
+          "size_mm": [
+            996,
+            996,
+            996
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.633,
+            "max_at": [
+              3,
+              4,
+              4
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 394,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 8,
+        "before": {
+          "blocks": 386,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 199,
+          "max_utilisation": 0.846,
+          "warnings": 1,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 394,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 211.4,
+          "max_utilisation": 0.633,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "5e51d5cb"
+    },
+    {
+      "slug": "pencil-leg-chair",
+      "title": "Pencil-leg chair",
+      "prompt": "A mid-century dining chair with slim splayed legs and a curved slatted back",
+      "blurb": "The legs are slimmer than one block, so none reaches the ground on the block grid: the whole chair floats. Stabilizing adds 17 blocks (15 in columns, 2 in bridges) and it then passes every check.",
+      "tags": [
+        "furniture",
+        "floating",
+        "thin parts"
+      ],
+      "cover_url": "/assignment_alex/examples/pencil-leg-chair/cover.png",
+      "original": {
+        "size_bytes": 51988,
+        "part_count": 5,
+        "analysis": {
+          "version": 1,
+          "blocks": 86,
+          "bodies": 4,
+          "floating_blocks": 86,
+          "cantilevered": 0,
+          "longest_cantilever": 0,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": null,
+          "cog_inside": false,
+          "cog_margin_mm": 0,
+          "size_mm": [
+            570.5,
+            625.2,
+            1000
+          ],
+          "coverage": 0.956,
+          "fill_threshold": 0.1,
+          "errors": 4,
+          "warnings": 0,
+          "stress": null,
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 73304,
+        "analysis": {
+          "version": 1,
+          "blocks": 103,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 85,
+          "longest_cantilever": 4,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            497.6,
+            535.4,
+            514.1
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 135.5,
+          "size_mm": [
+            596,
+            596,
+            996
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.689,
+            "max_at": [
+              6,
+              6,
+              5
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 103,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 17,
+        "before": {
+          "blocks": 86,
+          "errors": 4,
+          "floating_blocks": 86,
+          "over_limit": 0,
+          "longest_cantilever": 0,
+          "cog_margin_mm": null,
+          "max_utilisation": null,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 103,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 4,
+          "cog_margin_mm": 135.5,
+          "max_utilisation": 0.689,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "1c881d46"
+    },
+    {
+      "slug": "arch-footbridge",
+      "title": "Stone arch bridge",
+      "prompt": "A small old stone arch footbridge over a stream, with low parapet walls and a humped deck",
+      "blurb": "An arch carries the deck, so every block rests on a column or on the arch itself. It passes every check as it is, so there is nothing to stabilize.",
+      "tags": [
+        "building",
+        "arch",
+        "passes"
+      ],
+      "cover_url": "/assignment_alex/examples/arch-footbridge/cover.png",
+      "original": {
+        "size_bytes": 89600,
+        "part_count": 5,
+        "analysis": {
+          "version": 1,
+          "blocks": 156,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 64,
+          "longest_cantilever": 2,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            500,
+            500,
+            275.6
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 200,
+          "size_mm": [
+            1000,
+            243.9,
+            484
+          ],
+          "coverage": 0.986,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.116,
+            "max_at": [
+              2,
+              5,
+              2
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 156,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 105064,
+        "analysis": {
+          "version": 1,
+          "blocks": 156,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 64,
+          "longest_cantilever": 2,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            500,
+            500,
+            275.6
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 200,
+          "size_mm": [
+            996,
+            396,
+            496
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.116,
+            "max_at": [
+              2,
+              5,
+              2
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 156,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 0,
+        "before": {
+          "blocks": 156,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 2,
+          "cog_margin_mm": 200,
+          "max_utilisation": 0.116,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 156,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 2,
+          "cog_margin_mm": 200,
+          "max_utilisation": 0.116,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "2c181ab3"
+    },
+    {
+      "slug": "step-pyramid",
+      "title": "Stepped pyramid",
+      "prompt": "A stepped pyramid with a central staircase and a small temple at the summit",
+      "blurb": "A broad base under every tier: about as stable as a structure gets. It passes every check as it is, so there is nothing to stabilize.",
+      "tags": [
+        "building",
+        "stable",
+        "passes"
+      ],
+      "cover_url": "/assignment_alex/examples/step-pyramid/cover.png",
+      "original": {
+        "size_bytes": 86712,
+        "part_count": 9,
+        "analysis": {
+          "version": 1,
+          "blocks": 426,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 0,
+          "longest_cantilever": 0,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            500,
+            504,
+            283.8
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 496,
+          "size_mm": [
+            965.9,
+            1000,
+            953.2
+          ],
+          "coverage": 0.993,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.06,
+            "max_at": [
+              3,
+              6,
+              5
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 426,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        }
+      },
+      "stabilized": {
+        "size_bytes": 282732,
+        "analysis": {
+          "version": 1,
+          "blocks": 426,
+          "bodies": 1,
+          "floating_blocks": 0,
+          "cantilevered": 0,
+          "longest_cantilever": 0,
+          "over_limit": 0,
+          "cantilever_limit": 4,
+          "cog_mm": [
+            500,
+            504,
+            283.8
+          ],
+          "cog_inside": true,
+          "cog_margin_mm": 496,
+          "size_mm": [
+            996,
+            996,
+            996
+          ],
+          "coverage": 1,
+          "fill_threshold": 0.1,
+          "errors": 0,
+          "warnings": 0,
+          "stress": {
+            "material": "concrete",
+            "max_utilisation": 0.06,
+            "max_at": [
+              3,
+              6,
+              5
+            ],
+            "stressed_blocks": 0,
+            "overstressed_blocks": 0,
+            "analysed_blocks": 426,
+            "unsupported_blocks": 0
+          },
+          "analyzed_at": "2026-10-24T09:00:00.000Z"
+        },
+        "added_blocks": 0,
+        "before": {
+          "blocks": 426,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 0,
+          "cog_margin_mm": 496,
+          "max_utilisation": 0.06,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        },
+        "after": {
+          "blocks": 426,
+          "errors": 0,
+          "floating_blocks": 0,
+          "over_limit": 0,
+          "longest_cantilever": 0,
+          "cog_margin_mm": 496,
+          "max_utilisation": 0.06,
+          "warnings": 0,
+          "overstressed_blocks": 0
+        }
+      },
+      "version": "21070cc8"
+    }
+  ]
+}
