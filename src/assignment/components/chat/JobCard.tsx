@@ -1,0 +1,176 @@
+import { useState } from "react";
+import { Box, Check, Download, Eye, RotateCcw } from "lucide-react";
+
+import { VerdictLine } from "@/assignment/components/analysis/VerdictBadge";
+import { Markdown } from "@/assignment/components/chat/Markdown";
+import { ElapsedTime } from "@/assignment/components/chat/ElapsedTime";
+import { GenerationProgressBar } from "@/assignment/components/workspace/GenerationProgressBar";
+import { useShownProgress } from "@/assignment/components/workspace/useShownProgress";
+import { Button } from "@/assignment/components/ui/button";
+import { epochOf, formatBytes, modelFileName, partsLabel } from "@/assignment/components/workspace/format";
+import { cn } from "@/assignment/lib/utils";
+import type { Job, ModelAsset, ProviderInfo } from "@/assignment/shared/contract";
+import { providerInfo, providerLabel, viaLabel } from "@/assignment/store/providers";
+
+const chip = "rounded-full border border-border px-1.5 text-[10px] leading-4 text-muted-foreground";
+const small = "h-7 gap-1.5 px-2.5 text-xs";
+
+/** The model's provider still, or the Box icon when it gave none (or the image fails to load). */
+export function ModelThumb({ model, className }: { model: ModelAsset; className?: string }) {
+    const [failed, setFailed] = useState(false);
+    return (
+        <div
+            className={cn(
+                "flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/70 bg-muted text-muted-foreground",
+                className,
+            )}
+        >
+            {model.thumbnail_url && !failed ? (
+                <img
+                    src={model.thumbnail_url}
+                    alt=""
+                    loading="lazy"
+                    draggable={false}
+                    onError={() => setFailed(true)}
+                    className="h-full w-full object-cover"
+                />
+            ) : (
+                <Box className="h-1/2 w-1/2" strokeWidth={1.5} aria-hidden />
+            )}
+        </div>
+    );
+}
+
+/** The three pulsing dots of Cably's "thinking" state. */
+function ThinkingDots() {
+    return (
+        <span className="ml-1.5 inline-flex items-center gap-1 align-middle" aria-hidden>
+            <span className="thinking-dot h-1 w-1 rounded-full bg-muted-foreground" />
+            <span className="thinking-dot h-1 w-1 rounded-full bg-muted-foreground" />
+            <span className="thinking-dot h-1 w-1 rounded-full bg-muted-foreground" />
+        </span>
+    );
+}
+
+export interface JobCardProps {
+    job: Job;
+    providers: readonly ProviderInfo[] | undefined;
+    /** This job's model is the one in the viewer. */
+    active: boolean;
+    /** Retry is offered unless the same model has already been run again on this prompt. */
+    canRetry: boolean;
+    onView: (model: ModelAsset) => void;
+    onRetry: (job: Job) => void;
+}
+
+/** One model's result for a prompt: progress while it runs, then the model or the reason it failed. */
+export function JobCard({ job, providers, active, canRetry, onView, onRetry }: JobCardProps) {
+    const info = providerInfo(providers, job.provider);
+    const label = providerLabel(providers, job.provider);
+    const via = viaLabel(info?.via);
+    const running = job.status === "queued" || job.status === "running" || job.status === "finalizing";
+    const startedAt = epochOf(job.created_at);
+    const shown = useShownProgress({
+        active: running,
+        value: job.progress,
+        startedAt,
+        estimateSeconds: info?.approx_seconds,
+    });
+    const model = job.status === "succeeded" ? job.model : null;
+    // "1 part" says nothing a single mesh does not: only an assembly gets the count.
+    const parts = model && model.part_count !== null && model.part_count > 1 ? partsLabel(model) : null;
+
+    return (
+        <div
+            data-testid="job-card"
+            data-status={job.status}
+            className={cn(
+                "rounded-xl border bg-background/60 p-3 transition-colors",
+                active ? "border-primary/60 ring-1 ring-primary/30" : "border-border/70",
+                job.status === "canceled" && "opacity-70",
+            )}
+        >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-xs font-semibold text-foreground">{label}</span>
+                {via && <span className={chip}>{via}</span>}
+                {info?.parts && <span className={cn(chip, "border-accent/50 text-accent-hover dark:text-accent")}>parts</span>}
+            </div>
+
+            {running && (
+                <div className="mt-2">
+                    <span className="text-[13px] font-medium text-shimmer">{job.stage || "Queued"}</span>
+                    {startedAt !== undefined && (
+                        <ElapsedTime
+                            startedAt={startedAt}
+                            className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground"
+                        />
+                    )}
+                    <ThinkingDots />
+                    <GenerationProgressBar active value={shown} className="mt-2 w-full" />
+                </div>
+            )}
+
+            {model && (
+                <div className="mt-2">
+                    <div className="flex items-center gap-3">
+                        <ModelThumb model={model} className="h-14 w-14" />
+                        <p className="min-w-0 text-xs text-muted-foreground">
+                            {[parts, formatBytes(model.size_bytes)].filter(Boolean).join(" · ")}
+                        </p>
+                    </div>
+                    {/* The structural verdict: one line, and a way into the Analysis tab for this model. */}
+                    <div className="mt-2.5">
+                        <VerdictLine model={model} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant={active ? "secondary" : "default"}
+                            className={small}
+                            aria-pressed={active}
+                            onClick={() => onView(model)}
+                        >
+                            {active ? <Check /> : <Eye />}
+                            {active ? "Viewing" : "View in 3D"}
+                        </Button>
+                        <Button asChild size="sm" variant="outline" className={small}>
+                            <a href={model.glb_url} download={modelFileName(model)}>
+                                <Download />
+                                Download GLB
+                            </a>
+                        </Button>
+                    </div>
+                </div>
+            )}
+
+            {job.status === "succeeded" && !model && (
+                <p className="mt-2 text-xs text-muted-foreground">Finished, but the model file is not available.</p>
+            )}
+
+            {job.status === "failed" && (
+                <div className="mt-2 flex flex-col items-start gap-2">
+                    <Markdown className="text-xs text-destructive">{job.error || "The model could not be generated."}</Markdown>
+                    {canRetry && (
+                        <Button type="button" size="sm" variant="outline" className={small} onClick={() => onRetry(job)}>
+                            <RotateCcw />
+                            Retry
+                        </Button>
+                    )}
+                </div>
+            )}
+
+            {job.status === "canceled" && (
+                <div className="mt-2 flex flex-col items-start gap-2">
+                    <p className="text-xs text-muted-foreground">Canceled.</p>
+                    {canRetry && (
+                        <Button type="button" size="sm" variant="outline" className={small} onClick={() => onRetry(job)}>
+                            <RotateCcw />
+                            Run again
+                        </Button>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}

@@ -1,6 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@700&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
+/* The /assignment_alex app has its own stylesheet; keep its classes out of the site CSS. */
+@source not "../assignment";
+@source not "../../scripts/assignment";
+@source not "../../worker";
 
 @plugin "@tailwindcss/typography";
 

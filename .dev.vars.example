@@ -1,0 +1,16 @@
+# Local secrets for `wrangler dev` (copy to .dev.vars, which is gitignored). In production set them with
+# `wrangler secret put <NAME>`. A model is offered in the picker only when one of its API keys is set.
+
+# fal.ai queue API: Rodin Gen-2.5, Hunyuan 3D 3.1, and the fallback route for Tripo and Meshy.
+FAL_KEY=
+# Tripo direct API: "Tripo H3.1 Parts" (multi-part assembly) and Tripo H3.1.
+TRIPO_API_KEY=
+# Meshy direct API: Meshy 7.1.
+MESHY_API_KEY=
+# Tencent Cloud API key pair: Hunyuan 3D through Tencent's own API (HY 3D Global).
+TENCENTCLOUD_SECRET_ID=
+TENCENTCLOUD_SECRET_KEY=
+# Optional: when set, generating needs this code (sent as the x-access-code header). Leave empty for open access.
+ACCESS_CODE=
+# Set to 1 to enable the offline "Demo" provider, which replays a bundled desk-lamp assembly without any API call.
+MOCK_PROVIDER=

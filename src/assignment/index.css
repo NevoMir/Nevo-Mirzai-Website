@@ -1,0 +1,379 @@
+/* Assembly Studio (/assignment_alex): Tailwind 4 port of Cably's design system.
+   Tokens, scrollbars and motion are copied from Cably's src/index.css; the theme
+   wiring replaces its tailwind.config.ts. Fonts are loaded by assignment_alex/index.html. */
+
+/* `source(none)` + `@source` keep this stylesheet to src/assignment, so the main
+   site's CSS never grows with these classes (and the site's own file excludes this
+   folder in return). */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@source "./";
+
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Tailwind 3's shadow scale, which Cably's classes were written against
+       (v4 shifted `shadow-sm` up one step and renamed the old one `shadow-xs`). */
+    --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+/* Colours stay HSL triplets in the variables below, as in Cably, so `bg-sidebar/95`,
+   `border-border/70` and friends resolve through color-mix at build time. */
+@theme inline {
+    --color-border: hsl(var(--border));
+    --color-input: hsl(var(--input));
+    --color-ring: hsl(var(--ring));
+    --color-background: hsl(var(--background));
+    --color-foreground: hsl(var(--foreground));
+
+    --color-primary: hsl(var(--primary));
+    --color-primary-foreground: hsl(var(--primary-foreground));
+    --color-secondary: hsl(var(--secondary));
+    --color-secondary-foreground: hsl(var(--secondary-foreground));
+    --color-destructive: hsl(var(--destructive));
+    --color-destructive-foreground: hsl(var(--destructive-foreground));
+    --color-muted: hsl(var(--muted));
+    --color-muted-foreground: hsl(var(--muted-foreground));
+    --color-accent: hsl(var(--accent));
+    --color-accent-foreground: hsl(var(--accent-foreground));
+    --color-accent-hover: hsl(var(--accent-hover));
+    --color-popover: hsl(var(--popover));
+    --color-popover-foreground: hsl(var(--popover-foreground));
+    --color-card: hsl(var(--card));
+    --color-card-foreground: hsl(var(--card-foreground));
+
+    --color-success: hsl(var(--success));
+    --color-warning: hsl(var(--warning));
+    --color-info: hsl(var(--info));
+
+    /* The floor the floating panels sit on, and the panels themselves. */
+    --color-canvas: hsl(var(--canvas));
+    --color-sidebar: hsl(var(--sidebar-background));
+    --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+    --color-sidebar-primary: hsl(var(--sidebar-primary));
+    --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+    --color-sidebar-accent: hsl(var(--sidebar-accent));
+    --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+    --color-sidebar-border: hsl(var(--sidebar-border));
+    --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+    --radius-lg: var(--radius);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+    /* Light theme (default) */
+    :root {
+        --background: 0 0% 97%;
+        --foreground: 0 0% 15%;
+
+        --card: 0 0% 100%;
+        --card-foreground: 0 0% 15%;
+
+        --popover: 0 0% 100%;
+        --popover-foreground: 0 0% 15%;
+
+        --primary: 210 100% 45%;
+        --primary-foreground: 0 0% 100%;
+
+        --secondary: 0 0% 92%;
+        --secondary-foreground: 0 0% 30%;
+
+        --muted: 0 0% 92%;
+        --muted-foreground: 0 0% 45%;
+
+        /* The brand accent: a burnt orange #CE5222 in BOTH themes; hover/pressed
+           #AF461D. White on it is 4.33:1: UI shapes, icons and bold button labels
+           read well, a hair under AA's 4.5:1 for small regular text. Orange TEXT on
+           the light page uses the hover shade (`text-accent-hover dark:text-accent`). */
+        --accent: 17 72% 47%;
+        --accent-foreground: 0 0% 100%;
+        --accent-hover: 17 72% 40%;
+
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+
+        --border: 0 0% 85%;
+        --input: 0 0% 85%;
+        --ring: 210 100% 45%;
+
+        --radius: 0.375rem;
+
+        /* Panels a shade darker than the canvas they float on. */
+        --sidebar-background: 0 0% 94%;
+
+        /* The canvas floor the floating panels sit on: the brightest surface. */
+        --canvas: 0 0% 100%;
+        --sidebar-foreground: 0 0% 30%;
+        --sidebar-primary: 210 100% 45%;
+        --sidebar-primary-foreground: 0 0% 100%;
+        --sidebar-accent: 0 0% 90%;
+        --sidebar-accent-foreground: 0 0% 15%;
+        --sidebar-border: 0 0% 88%;
+        --sidebar-ring: 210 100% 45%;
+
+        --success: 142 71% 45%;
+        --warning: 38 92% 50%;
+        --info: 210 100% 45%;
+    }
+
+    /* Dark theme */
+    .dark {
+        --background: 0 0% 8%;
+        --foreground: 0 0% 90%;
+
+        --card: 0 0% 13%;
+        --card-foreground: 0 0% 90%;
+
+        --popover: 0 0% 13%;
+        --popover-foreground: 0 0% 90%;
+
+        --primary: 210 100% 56%;
+        --primary-foreground: 0 0% 100%;
+
+        --secondary: 0 0% 16%;
+        --secondary-foreground: 0 0% 80%;
+
+        --muted: 0 0% 16%;
+        --muted-foreground: 0 0% 55%;
+
+        --accent: 17 72% 47%;
+        --accent-foreground: 0 0% 100%;
+        --accent-hover: 17 72% 40%;
+
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+
+        --border: 0 0% 18%;
+        --input: 0 0% 18%;
+        --ring: 210 100% 56%;
+
+        /* Deliberate inversion: the canvas is the bright field and the floating
+           panels are the dark cards. */
+        --sidebar-background: 0 0% 8%;
+        --canvas: 0 0% 15%;
+        --sidebar-foreground: 0 0% 80%;
+        --sidebar-primary: 210 100% 56%;
+        --sidebar-primary-foreground: 0 0% 100%;
+        --sidebar-accent: 0 0% 20%;
+        --sidebar-accent-foreground: 0 0% 90%;
+        --sidebar-border: 0 0% 22%;
+        --sidebar-ring: 210 100% 56%;
+
+        --success: 142 71% 45%;
+        --warning: 38 92% 50%;
+        --info: 210 100% 56%;
+    }
+}
+
+@layer base {
+    /* Tailwind 4 defaults borders to currentColor; Cably relied on v3's themed one. */
+    *,
+    ::before,
+    ::after,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: hsl(var(--border));
+    }
+
+    body {
+        background-color: hsl(var(--background));
+        color: hsl(var(--foreground));
+        font-family: var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    code,
+    kbd,
+    samp,
+    pre,
+    .font-mono {
+        font-family: var(--font-mono);
+    }
+
+    /* v3's preflight gave buttons the pointer; v4's leaves the arrow. */
+    button:not(:disabled),
+    [role="button"]:not(:disabled) {
+        cursor: pointer;
+    }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* AI thinking animation */
+@keyframes pulse-dot {
+    0%,
+    80%,
+    100% {
+        opacity: 0.3;
+        transform: scale(0.8);
+    }
+    40% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.thinking-dot:nth-child(1) {
+    animation: pulse-dot 1.4s infinite 0s;
+}
+.thinking-dot:nth-child(2) {
+    animation: pulse-dot 1.4s infinite 0.2s;
+}
+.thinking-dot:nth-child(3) {
+    animation: pulse-dot 1.4s infinite 0.4s;
+}
+
+/* Loading text with a light band sweeping over it left -> right
+   (Claude-desktop style). The gradient is painted through the glyphs via
+   background-clip, so it adapts to light/dark themes automatically. */
+@keyframes text-shimmer {
+    0% {
+        background-position: 100% 0;
+    }
+    100% {
+        background-position: -100% 0;
+    }
+}
+
+.text-shimmer {
+    /* High-contrast band: dim base, bright narrow highlight sweeping through. */
+    background-image: linear-gradient(
+        90deg,
+        hsl(var(--foreground) / 0.35) 32%,
+        hsl(var(--foreground)) 50%,
+        hsl(var(--foreground) / 0.35) 68%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: text-shimmer 1.8s linear infinite;
+}
+
+/* Red left-to-right sweep for "look here" moments: the Stop button while a
+   generation runs. Strong dark<->light contrast so it reads at small sizes. */
+.sweep-red {
+    background-image: linear-gradient(90deg, hsl(0 74% 32%) 30%, hsl(0 96% 68%) 50%, hsl(0 74% 32%) 70%);
+    background-size: 200% 100%;
+    animation: text-shimmer 1.3s linear infinite;
+}
+
+/* New generation-activity lines slide up into the feed. */
+@keyframes generation-feed-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.generation-feed-line {
+    animation: generation-feed-in 0.35s ease-out both;
+}
+
+/* Generation progress bar: primary blue flowing into light blue through a
+   slim track while the job runs. */
+.cably-progress-fill {
+    background: linear-gradient(90deg, #1d7ef0, #4da8ff, #8fd0ff, #4da8ff, #1d7ef0);
+    background-size: 220% 100%;
+    animation: cably-progress-flow 2.4s linear infinite;
+    transition: width 0.25s ease-out;
+}
+@keyframes cably-progress-flow {
+    from {
+        background-position: 0% 0;
+    }
+    to {
+        background-position: 220% 0;
+    }
+}
+
+/* --- Chat panel reveal (first prompt of a new chat) -------------------------
+   Before the first prompt the chat panel is collapsed to 0 and the composer
+   sits over the canvas. When the first message lands the panel expands and
+   its content slides right into place while fading in. The width handoff
+   (canvas panel -> chat panel) is a flex-grow transition: the panel library
+   writes flexGrow inline, and a transition applies to inline-style changes
+   just the same. It is scoped by data-chat-revealing, which the workspace sets
+   for ~450ms around the reveal only, so a manual handle drag afterwards stays
+   instant (a persistent transition would lag the drag by 420ms). */
+@keyframes chat-panel-reveal {
+    from {
+        opacity: 0;
+        transform: translateX(-32px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+.chat-panel-reveal {
+    animation: chat-panel-reveal 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+#floating-panels[data-chat-revealing] > [data-panel] {
+    transition: flex-grow 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .generation-feed-line,
+    .chat-panel-reveal {
+        animation: none;
+    }
+    #floating-panels[data-chat-revealing] > [data-panel] {
+        transition: none;
+    }
+    /* No travelling band: the text just sits dimmed, the bar just sits full-colour. */
+    .text-shimmer {
+        animation: none;
+        background-image: none;
+        color: hsl(var(--foreground) / 0.6);
+    }
+    .sweep-red {
+        animation: none;
+        background-image: linear-gradient(hsl(0 74% 38%), hsl(0 74% 38%));
+    }
+    .cably-progress-fill {
+        animation: none;
+    }
+    .thinking-dot {
+        animation: none !important;
+    }
+}
+
+/* iOS Safari zooms the page when an input under 16px gets focus; touch devices get 16px fields. Unlayered, so it
+   wins over the text-sm utilities on the composer, search and rename fields. */
+@media (pointer: coarse) {
+    input,
+    textarea,
+    select {
+        font-size: 16px;
+    }
+}

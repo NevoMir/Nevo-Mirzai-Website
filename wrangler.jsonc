@@ -1,8 +1,37 @@
 {
   "name": "nevo-mirzai-website",
   "compatibility_date": "2026-03-28",
+  // The Worker only runs for the text-to-3D assignment (/assignment_alex and its API).
+  // Every other path is served straight from ./dist as before, without invoking it.
+  "main": "./worker/index.ts",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/assignment_alex/*", "/assignment_alex", "/assignment_alex/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "assignment-alex",
+      "database_id": "eef6ff34-a14d-4da9-b33f-ff0f9758d76d",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "assignment-alex-models"
+    }
+  ],
+  "vars": {
+    // Hunyuan's free pack is only ~8 runs, so keep a day's cap well below it.
+    "DAILY_GENERATION_LIMIT": "4",
+    // "Demo (offline)": replays the bundled desk-lamp assembly so the app and its analysis can be tried without
+    // spending API credits. Remove to hide it.
+    "MOCK_PROVIDER": "1"
+  },
+  "observability": {
+    "enabled": true
   }
 }
