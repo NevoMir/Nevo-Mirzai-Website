@@ -47,9 +47,8 @@
     "ALLOW_OPEN_GENERATION": "1",
     // Optional: DAILY_DERIVED_LIMIT caps the stabilized versions saved per UTC day (default 300; each is one R2 write
     // of at most 1 MiB, nothing is generated or paid for).
-    // "Demo (offline)": replays the bundled desk-lamp assembly so the app and its analysis can be tried without
-    // spending API credits. Remove to hide it.
-    "MOCK_PROVIDER": "1",
+    // The offline "Demo" model (MOCK_PROVIDER=1) is for local development and tests only (.dev.vars); production
+    // offers Hunyuan 3D and Muse Spark (worker/providers/index.ts OFFERED_PROVIDERS).
     // Optional: the OpenRouter model of the Muse designer (default "meta/muse-spark-1.3-contributor").
     // "OPENROUTER_MODEL": "meta/muse-spark-1.3-contributor"
   },

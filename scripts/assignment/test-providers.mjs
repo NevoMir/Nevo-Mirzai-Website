@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { falHunyuan, falMeshy, falRodin, falTripo } from "../../worker/providers/fal.ts";
-import { PROVIDER_SPECS, listProviders, resolveProvider } from "../../worker/providers/index.ts";
+import { OFFERED_PROVIDERS, PROVIDER_SPECS, listProviders, resolveProvider } from "../../worker/providers/index.ts";
 import { meshyDirect } from "../../worker/providers/meshy.ts";
 import { mockAdapter } from "../../worker/providers/mock.ts";
 import { openRouterDesigner } from "../../worker/providers/openrouter.ts";
@@ -908,66 +908,49 @@ const ids = (env) => listProviders(env).map((p) => p.id);
 const viaOf = (env) => Object.fromEntries(listProviders(env).map((p) => [p.id, p.via]));
 const availableOf = (env) => listProviders(env).filter((p) => p.available).map((p) => p.id);
 
-test("registry: no keys means nothing is available and the mock is hidden", () => {
+test("registry: only Hunyuan 3D and the Muse designer are offered; nothing is available without keys", () => {
+    assert.deepEqual([...OFFERED_PROVIDERS], ["hunyuan", "muse"]);
+    assert.deepEqual(ids({}), ["hunyuan", "muse"]);
     assert.deepEqual(availableOf({}), []);
     assert.ok(!ids({}).includes("mock"));
-    assert.deepEqual(ids({}), ["tripo-parts", "tripo", "meshy", "rodin", "hunyuan", "muse"]);
-    assert.equal(resolveProvider({}, "meshy"), null);
+    assert.equal(resolveProvider({}, "hunyuan"), null);
 });
 
-test("registry: FAL_KEY alone serves everything except the parts model", () => {
-    const env = { FAL_KEY: "k" };
-    assert.deepEqual(viaOf(env), { "tripo-parts": null, tripo: "fal", meshy: "fal", rodin: "fal", hunyuan: "fal", muse: null });
-    assert.equal(resolveProvider(env, "tripo-parts"), null);
-    assert.equal(resolveProvider(env, "tripo").adapter, falTripo);
-    assert.equal(resolveProvider(env, "meshy").adapter, falMeshy);
-    assert.equal(resolveProvider(env, "rodin").adapter, falRodin);
-    assert.equal(resolveProvider(env, "hunyuan").adapter, falHunyuan);
+test("registry: other vendors are neither listed nor accepted, whatever keys exist", () => {
+    const every = { FAL_KEY: "k", TRIPO_API_KEY: "k", MESHY_API_KEY: "k", TENCENTCLOUD_SECRET_ID: "i", TENCENTCLOUD_SECRET_KEY: "s", OPENROUTER_API_KEY: "k" };
+    assert.deepEqual(ids(every), ["hunyuan", "muse"]);
+    assert.deepEqual(availableOf(every), ["hunyuan", "muse"]);
+    for (const id of ["tripo-parts", "tripo", "meshy", "rodin", "mock"]) assert.equal(resolveProvider(every, id), null, id);
 });
 
-test("registry: TRIPO_API_KEY alone serves both Tripo models", () => {
-    const env = { TRIPO_API_KEY: "k" };
-    assert.deepEqual(availableOf(env), ["tripo-parts", "tripo"]);
-    assert.equal(resolveProvider(env, "tripo-parts").adapter, tripoParts);
-    assert.equal(resolveProvider(env, "tripo").adapter, tripoTextured);
-    assert.equal(resolveProvider(env, "tripo").via, "tripo");
+test("registry: Hunyuan runs through Tencent's own API, falling back to fal only without the Tencent key", () => {
+    const tencent = { TENCENTCLOUD_SECRET_ID: "i", TENCENTCLOUD_SECRET_KEY: "s", FAL_KEY: "k" };
+    assert.equal(resolveProvider(tencent, "hunyuan").adapter, tencentHunyuan);
+    assert.deepEqual(viaOf(tencent), { hunyuan: "tencent", muse: null });
+    assert.equal(resolveProvider({ FAL_KEY: "k" }, "hunyuan").adapter, falHunyuan);
+    // half a Tencent key pair is no key
+    assert.equal(resolveProvider({ TENCENTCLOUD_SECRET_ID: "i" }, "hunyuan"), null);
 });
 
-test("registry: MESHY_API_KEY alone serves Meshy only", () => {
-    const env = { MESHY_API_KEY: "k" };
-    assert.deepEqual(availableOf(env), ["meshy"]);
-    assert.equal(resolveProvider(env, "meshy").adapter, meshyDirect);
-    assert.equal(resolveProvider(env, "rodin"), null);
-});
-
-test("registry: the direct API wins over fal when both keys exist", () => {
-    const both = { FAL_KEY: "k", TRIPO_API_KEY: "k", MESHY_API_KEY: "k" };
-    assert.deepEqual(viaOf(both), { "tripo-parts": "tripo", tripo: "tripo", meshy: "meshy", rodin: "fal", hunyuan: "fal", muse: null });
-    assert.equal(resolveProvider(both, "tripo").adapter, tripoTextured);
-    assert.equal(resolveProvider(both, "meshy").adapter, meshyDirect);
-    assert.deepEqual(viaOf({ FAL_KEY: "k", TRIPO_API_KEY: "k" }), { "tripo-parts": "tripo", tripo: "tripo", meshy: "fal", rodin: "fal", hunyuan: "fal", muse: null });
-    assert.deepEqual(viaOf({ FAL_KEY: "k", MESHY_API_KEY: "k" }), { "tripo-parts": null, tripo: "fal", meshy: "meshy", rodin: "fal", hunyuan: "fal", muse: null });
-});
-
-test("registry: OPENROUTER_API_KEY alone serves the Muse designer only, through openrouter, after hunyuan", () => {
+test("registry: OPENROUTER_API_KEY serves the Muse designer through openrouter, listed after hunyuan", () => {
     const env = { OPENROUTER_API_KEY: "k" };
     assert.deepEqual(availableOf(env), ["muse"]);
-    assert.deepEqual(viaOf(env), { "tripo-parts": null, tripo: null, meshy: null, rodin: null, hunyuan: null, muse: "openrouter" });
+    assert.deepEqual(viaOf(env), { hunyuan: null, muse: "openrouter" });
     assert.equal(resolveProvider(env, "muse").adapter, openRouterDesigner);
     assert.equal(resolveProvider(env, "hunyuan"), null);
-    // with a Hunyuan route as well, hunyuan is listed (and so offered by default) before muse
-    const both = { FAL_KEY: "k", OPENROUTER_API_KEY: "k" };
-    assert.deepEqual(availableOf(both).filter((id) => id === "hunyuan" || id === "muse"), ["hunyuan", "muse"]);
-    assert.equal(availableOf(both).find((id) => id === "tripo-parts" || id === "hunyuan" || id === "muse"), "hunyuan");
+    // with a Hunyuan route as well, hunyuan comes first (and so is the default)
+    const both = { TENCENTCLOUD_SECRET_ID: "i", TENCENTCLOUD_SECRET_KEY: "s", OPENROUTER_API_KEY: "k" };
+    assert.deepEqual(availableOf(both), ["hunyuan", "muse"]);
     const muse = listProviders(env).find((p) => p.id === "muse");
     assert.deepEqual([muse.parts, muse.textured, muse.available, muse.via], [true, false, true, "openrouter"]);
 });
 
-test("registry: blank keys do not count; MOCK_PROVIDER=1 shows the mock", () => {
-    assert.deepEqual(availableOf({ FAL_KEY: "  ", TRIPO_API_KEY: "", OPENROUTER_API_KEY: "\n" }), []);
+test("registry: blank keys do not count; MOCK_PROVIDER=1 (local dev and tests only) adds the offline demo", () => {
+    assert.deepEqual(availableOf({ TENCENTCLOUD_SECRET_ID: " ", TENCENTCLOUD_SECRET_KEY: "", OPENROUTER_API_KEY: "\n" }), []);
     const env = { MOCK_PROVIDER: "1" };
+    assert.deepEqual(ids(env), ["hunyuan", "muse", "mock"]);
     assert.deepEqual(availableOf(env), ["mock"]);
-    assert.equal(resolveProvider(env, "mock").via, "mock");
+    assert.equal(resolveProvider(env, "mock").adapter, mockAdapter);
     assert.ok(!ids({ MOCK_PROVIDER: "0" }).includes("mock"));
 });
 

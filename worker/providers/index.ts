@@ -123,10 +123,21 @@ export const PROVIDER_SPECS: ProviderSpec[] = [
     },
 ];
 
+/**
+ * The models this deployment offers: Tencent Hunyuan 3D and the Muse Spark designer. The other adapters stay in the
+ * code base (they work with their own keys) but are neither listed nor accepted. The offline mock is a local-dev and
+ * test tool: it is offered only where MOCK_PROVIDER=1 (.dev.vars), never in production.
+ */
+export const OFFERED_PROVIDERS: readonly ProviderId[] = ["hunyuan", "muse"];
+
+const isOffered = (env: Env, id: ProviderId): boolean =>
+    OFFERED_PROVIDERS.includes(id) || (id === "mock" && env.MOCK_PROVIDER === "1");
+
 export function resolveProvider(
     env: Env,
     id: ProviderId,
 ): { spec: ProviderSpec; via: Via; adapter: ProviderAdapter } | null {
+    if (!isOffered(env, id)) return null;
     const spec = PROVIDER_SPECS.find((s) => s.id === id);
     const route = spec?.routes.find((r) => r.enabled(env));
     return spec && route ? { spec, via: route.via, adapter: route.adapter } : null;
@@ -134,9 +145,8 @@ export function resolveProvider(
 
 export function listProviders(env: Env): ProviderInfo[] {
     return PROVIDER_SPECS.flatMap((spec) => {
+        if (!isOffered(env, spec.id)) return [];
         const route = spec.routes.find((r) => r.enabled(env));
-        // The mock is a local-dev tool: hide it entirely unless it is switched on.
-        if (spec.id === "mock" && !route) return [];
         return [{ id: spec.id, ...spec.info, via: route?.via ?? null, available: Boolean(route) }];
     });
 }
