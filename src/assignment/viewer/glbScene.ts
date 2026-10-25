@@ -13,6 +13,8 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { GhostSource } from "./analysisLayer.ts";
 import { explodeFactor, explodeOffsets, unionCentre, worldDeltaToLocal } from "./explode.ts";
 import { countTriangles, extractParts, extractTriangleSoup, meshesOf } from "./glbParts.ts";
+import { rememberPartSoups } from "./partSoups.ts";
+import type { PartSoup } from "../analysis/partLabels.ts";
 import type { ViewerOverlayHit, ViewerScene } from "./orbitViewer.ts";
 import { splitGeometries, type SplitOptions } from "./splitComponents.ts";
 import type { LookPatch, PartRow, Vec3 } from "./types.ts";
@@ -163,6 +165,11 @@ export interface GlbScene extends ViewerScene {
      * or split offsets, hidden parts and every mesh included, world transforms baked. Empty once disposed.
      */
     extractTriangles(): Float32Array;
+    /**
+     * The model's triangles cut into the glTF's own parts (not the split pieces), each in the same frame as extractTriangles, named as the
+     * Parts list names them. For labelling the blocks by part (analysis/partLabels.ts). Empty once disposed.
+     */
+    partSoups(): PartSoup[];
     /** The glTF's meshes as loaded (geometry shared, not copied), for the block view's ghost of the model. */
     ghostSources(): GhostSource[];
     /**
@@ -579,7 +586,15 @@ export function buildGlbScene(gltfScene: THREE.Object3D, options: GlbSceneOption
             applyExplode();
         },
 
-        extractTriangles: () => (disposed ? new Float32Array(0) : asLoaded(() => extractTriangleSoup(gltfScene))),
+        extractTriangles: () => {
+            if (disposed) return new Float32Array(0);
+            const soup = asLoaded(() => extractTriangleSoup(gltfScene));
+            // Whoever holds this soup (the analysis' handle) can ask for the same model cut into parts (viewer/partSoups.ts).
+            rememberPartSoups(soup, () => handle.partSoups());
+            return soup;
+        },
+
+        partSoups: () => (disposed ? [] : asLoaded(() => specs.map((spec) => ({ name: spec.name, positions: extractTriangleSoup(spec.object) })))),
 
         ghostSources: () =>
             disposed

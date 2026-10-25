@@ -8,7 +8,7 @@ import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 
 /**
  * Names for a model the server no longer lists (a job made before a key was removed), and for the two makers that
- * are never listed: a bundled example and the stabilizer.
+ * are never listed: a bundled example and the makers that run in the browser (stabilizer, block editor, optimizer).
  */
 const FALLBACK_LABELS: Record<ModelProvider, string> = {
     "tripo-parts": "Tripo H3.1 · Parts",
@@ -20,6 +20,8 @@ const FALLBACK_LABELS: Record<ModelProvider, string> = {
     mock: "Demo (offline)",
     example: "Ready-made example",
     stabilizer: "Stabilizer",
+    editor: "Block editor",
+    optimizer: "Optimizer",
 };
 
 let inFlight: Promise<void> | null = null;

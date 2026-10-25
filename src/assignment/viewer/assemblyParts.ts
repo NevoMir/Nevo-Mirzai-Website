@@ -25,11 +25,18 @@ export function decorateAssemblyRows(rows: readonly PartRow[], assembly: Assembl
     });
 }
 
-/** Blocks of the model it started from, and blocks the stabilizer added. */
-export function assemblyCounts(assembly: AssemblyDescriptor): { original: number; added: number } {
+/** Blocks of the model it started from, blocks the stabilizer (or the optimizer) added, and blocks made by the person's own edits. */
+export function assemblyCounts(assembly: AssemblyDescriptor): { original: number; added: number; edited: number } {
     const counts = roleCounts(assembly);
     const total = counts.reduce((sum, n) => sum + n, 0);
-    return { original: counts[0], added: total - counts[0] };
+    const edited = counts[BLOCK_ROLES.indexOf("user")];
+    return { original: counts[0], added: total - counts[0] - edited, edited };
+}
+
+/** " (14 added, 6 from your edits)": what the stage's chip says after the block count, or "" when there is nothing but the original's blocks. */
+export function assemblyNote(counts: { added: number; edited: number }, format: (n: number) => string = String): string {
+    const parts = [counts.added > 0 ? `${format(counts.added)} added` : "", counts.edited > 0 ? `${format(counts.edited)} from your edits` : ""].filter(Boolean);
+    return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
 /** The highest stabilizer step in an assembly (0 when nothing was added). */

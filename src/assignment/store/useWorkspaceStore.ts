@@ -16,9 +16,18 @@ export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 /**
  * The top bar's views: the model in 3D, the same model as an assembly of 100 mm blocks with the structural
- * report (store/analysis.ts), or the list of every model the project made.
+ * report (store/analysis.ts), the optimizer (called Optimization; its id is "optimize"), or the list of every model the project made.
  */
-export type WorkspaceTab = "3d" | "analysis" | "models";
+export type WorkspaceTab = "3d" | "analysis" | "optimize" | "models";
+
+/** What a typed prompt does: make a new model, or change the one on screen. */
+export type ComposerMode = "new" | "edit";
+
+/** A prompt typed while a run was going: it waits for the run, and keeps the mode it was typed in. */
+export interface QueuedPrompt {
+    text: string;
+    mode: ComposerMode;
+}
 
 /**
  * The workspace's one source of truth for the project on screen. The URL says which
@@ -40,8 +49,16 @@ interface WorkspaceState {
     models: ModelAsset[];
     /** The model shown in the viewer. */
     activeModelId: string | null;
-    /** A prompt typed while a generation was running; sent when it finishes. */
-    queuedPrompt: string | null;
+    /** A prompt typed while a run was going; sent when it finishes, in the mode it was typed in. */
+    queuedPrompt: QueuedPrompt | null;
+    /**
+     * The mode the person picked in the composer's New | Edit toggle, or null while they have not: the composer then edits when a model is
+     * on screen and can be edited, and makes a new model otherwise (components/chat/composerLogic.ts composerModeOf). Reset by a
+     * new chat, by opening a project and when a generated model lands.
+     */
+    composerChoice: ComposerMode | null;
+    /** Bumped when something outside the composer wants the cursor in it (the Models tab's "Edit..."): the chat panel focuses the box, a phone leaves for the chat. */
+    composerFocusSerial: number;
     /**
      * The text in the composer. Held here (not in the panel) so it survives the panel remounting when
      * the layout flips between phone and desktop, and so a Stop can hand a queued prompt back to it.
@@ -110,7 +127,10 @@ interface WorkspaceState {
     setWorkspaceTab: (tab: WorkspaceTab) => void;
     setProviders: (providers: ProvidersResponse) => void;
     markUnstoppable: (provider: ProviderId) => void;
-    setQueuedPrompt: (prompt: string | null) => void;
+    setQueuedPrompt: (prompt: QueuedPrompt | null) => void;
+    setComposerChoice: (mode: ComposerMode | null) => void;
+    /** Ask for the cursor in the composer. */
+    requestComposerFocus: () => void;
     setChatHidden: (hidden: boolean) => void;
     toggleChat: () => void;
 }
@@ -124,6 +144,7 @@ const EMPTY = {
     models: [] as ModelAsset[],
     activeModelId: null,
     queuedPrompt: null,
+    composerChoice: null,
     saveStatus: "idle" as SaveStatus,
     chatHidden: false,
     sending: false,
@@ -132,24 +153,27 @@ const EMPTY = {
     savedRevision: 0,
 };
 
-/** Fill the ModelAsset fields a server from before the stabilizer does not send (kind then reads "generated"). */
+/** Fill the ModelAsset fields a server from before the stabilizer or the editor does not send (kind then reads "generated"). */
 export function normalizeModel(model: ModelAsset): ModelAsset {
     const m = model as Partial<ModelAsset> & ModelAsset;
-    if (m.kind && m.source_model_id !== undefined && m.example_slug !== undefined && m.derived !== undefined) return model;
+    if (m.kind && m.source_model_id !== undefined && m.example_slug !== undefined && m.derived !== undefined && m.edit !== undefined && m.optimization !== undefined) return model;
     return {
         ...model,
         kind: m.kind ?? "generated",
         source_model_id: m.source_model_id ?? null,
         example_slug: m.example_slug ?? null,
         derived: m.derived ?? null,
+        edit: m.edit ?? null,
+        optimization: m.optimization ?? null,
     };
 }
 
-/** The same for a job's model, so a card never reads `kind` off a bare row. */
+/** The same for a job and its model, so a card never reads `kind` off a bare row (a job from before edits is a "generate" job). */
 function normalizeJob(job: Job): Job {
-    if (!job.model) return job;
-    const model = normalizeModel(job.model);
-    return model === job.model ? job : { ...job, model };
+    const model = job.model ? normalizeModel(job.model) : null;
+    const j = job as Partial<Job> & Job;
+    if (model === job.model && j.kind !== undefined && j.edit !== undefined) return job;
+    return { ...job, model, kind: j.kind ?? "generate", edit: j.edit ?? null };
 }
 
 /** The model the project was last looking at, falling back to its newest. */
@@ -158,6 +182,18 @@ function initialActiveModel(detail: ProjectDetail): string | null {
     if (saved && detail.models.some((m) => m.id === saved)) return saved;
     return detail.models.length ? detail.models[detail.models.length - 1].id : null;
 }
+
+/**
+ * The two lines a change of a design or a mesh writes into the chat before its job exists (store/edit.ts says them from here, so the two
+ * cannot drift). The job is attached to the same message a moment later; a saved chat that still has one of them without a job lost the
+ * run on the way (the page was reloaded or the project left while the model was being looked at), and the line would say "working" forever.
+ */
+export const EDIT_START_LINES = { mesh: "Looking at the model to plan the edit.", design: "Starting the edit." } as const;
+
+/** What such a leftover line says once the chat is read back. */
+export const EDIT_INTERRUPTED_LINE = "This edit was interrupted.";
+
+const IS_EDIT_START_LINE = (content: string): boolean => content === EDIT_START_LINES.mesh || content === EDIT_START_LINES.design;
 
 /**
  * `messages` comes from the server and anyone can write it (PATCH /projects/:id is open), so it is
@@ -187,6 +223,8 @@ export function sanitizeMessages(raw: unknown): ChatMessage[] {
             const ids = (m.model_ids as unknown[]).filter((id): id is string => typeof id === "string" && id !== "").slice(0, 10);
             if (ids.length > 0) message.model_ids = ids;
         }
+        // A run that was cut off before it had a job (a change's first line): nothing will ever finish it.
+        if (message.role === "assistant" && !message.job_ids && !message.model_ids && IS_EDIT_START_LINE(message.content)) message.content = EDIT_INTERRUPTED_LINE;
         out.push(message);
     }
     return out;
@@ -194,6 +232,7 @@ export function sanitizeMessages(raw: unknown): ChatMessage[] {
 
 export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     ...EMPTY,
+    composerFocusSerial: 0,
     draft: "",
     sendTicket: 0,
     session: 0,
@@ -212,6 +251,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
             models: detail.models.map(normalizeModel),
             activeModelId: initialActiveModel(detail),
             queuedPrompt: null,
+            composerChoice: null,
             draft: "",
             saveStatus: "idle",
             sending: false,
@@ -290,6 +330,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     markUnstoppable: (provider) =>
         set((s) => (s.unstoppable.includes(provider) ? {} : { unstoppable: [...s.unstoppable, provider] })),
     setQueuedPrompt: (queuedPrompt) => set({ queuedPrompt }),
+    setComposerChoice: (composerChoice) => set((s) => (s.composerChoice === composerChoice ? s : { composerChoice })),
+    requestComposerFocus: () => set((s) => ({ composerFocusSerial: s.composerFocusSerial + 1 })),
     setChatHidden: (chatHidden) => set({ chatHidden }),
     toggleChat: () => set((s) => ({ chatHidden: !s.chatHidden })),
 }));
@@ -315,6 +357,14 @@ export const selectIsGenerating = (s: WorkspaceState): boolean =>
 export function useIsGenerating(): boolean {
     return useWorkspaceStore(selectIsGenerating);
 }
+
+/**
+ * Must a prompt that waits in the queue keep waiting? A job of the project is running, a send is under way, the project is being fetched, or
+ * (`meshBusy`: the page is still applying or saving a mesh edit, whose job has already ended) the change in the queue would be refused, and
+ * handed back to the box, the moment it was sent.
+ */
+export const queueMustWait = (s: WorkspaceState, now: { meshBusy: boolean; loading: boolean }): boolean =>
+    selectIsGenerating(s) || s.sending || now.loading || now.meshBusy;
 
 /** Jobs of the open project that are still running. */
 export function activeJobsOf(s: Pick<WorkspaceState, "jobs" | "activeProjectId">): Job[] {

@@ -13,35 +13,41 @@ import {
     Pencil,
     Pin,
     PinOff,
+    SlidersHorizontal,
     Trash2,
     TriangleAlert,
 } from "lucide-react";
 
 import { AnalysisDock, AnalysisSheet } from "@/assignment/components/analysis/AnalysisDock";
 import { ANALYSIS_PEEK_CARD_PX, AnalysisPeekCard } from "@/assignment/components/analysis/AnalysisPeekCard";
-import { ANALYSIS_DOCK_INSET_PX } from "@/assignment/components/analysis/AnalysisPanel";
+import { ANALYSIS_DOCK_INSET_PX, ANALYSIS_PANEL_PX } from "@/assignment/components/analysis/AnalysisPanel";
 import { SelectionPeek } from "@/assignment/components/analysis/SelectionPeek";
 import { useAnalysisSnapshot, type AnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
 import { useAnalysisRunner } from "@/assignment/components/analysis/useAnalysisRunner";
 import { GenerationOverlay } from "@/assignment/components/workspace/GenerationOverlay";
 import { InlineName } from "@/assignment/components/hub/InlineName";
 import { ModelsPanel } from "@/assignment/components/workspace/ModelsPanel";
+import { RunChip } from "@/assignment/components/workspace/RunChip";
 import { SupportsFailedNotice } from "@/assignment/components/workspace/SupportsFailedNotice";
 import { VersionSwitcher } from "@/assignment/components/workspace/VersionSwitcher";
+import { useRunActivity } from "@/assignment/components/workspace/useRunActivity";
 import { useVersionSwitcherState } from "@/assignment/components/workspace/useVersionSwitcherState";
 import { PhonePeekDock } from "@/assignment/components/workspace/PhonePeekDock";
 import { modelFileName, modelTitle } from "@/assignment/components/workspace/format";
 import {
+    OPTIMIZE_TAB_LABEL,
     PHONE_PEEK_MARGIN_PX,
     STABILITY_TAB_LABEL,
     applyViewPatch,
+    isBlockTab,
+    previewLabelOf,
     sheetOnTabTap,
     stabilityTabLabel,
     viewerInsetsFor,
     type ViewPatch,
 } from "@/assignment/components/workspace/shellLogic";
-import { handleVersionKey, openVersion, versionKeyEvent } from "@/assignment/components/workspace/versionActions";
-import { inTypingContext, stabilizedTarget, supportsFailure, switcherLayout } from "@/assignment/components/workspace/versionLogic";
+import { editVersion, handleVersionKey, openVersion, versionKeyEvent } from "@/assignment/components/workspace/versionActions";
+import { inTypingContext, isOptimizeKey, supportsFailure, switcherLayout } from "@/assignment/components/workspace/versionLogic";
 import { useShowSupports } from "@/assignment/components/workspace/useShowSupports";
 import { stageColorBy, useHeldStage } from "@/assignment/components/workspace/stageHold";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
@@ -70,15 +76,18 @@ import type { HubProject, ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { dockFits } from "@/assignment/store/analysisLogic";
 import { completedThisSession, isTerminalJob, latestJobIds } from "@/assignment/store/jobs";
-import { deleteStabilized } from "@/assignment/store/models";
+import { deleteVersion } from "@/assignment/store/models";
 import { saveNow, whenSaved } from "@/assignment/store/persist";
 import { savedStepOffset } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 import { clearMeshFailures, markMeshFailed, useAssemblyFor, useVersionFamily } from "@/assignment/store/versions";
+import { useCurrentWork } from "@/assignment/store/workGuard";
 
 // three.js is imported by the viewer on first use; lazy here keeps even its React shell out of the
 // first paint of the page.
 const GlbViewer = lazy(() => import("@/assignment/viewer/GlbViewer"));
+// The optimizer's panel is a chunk of its own: most visits never open the tab.
+const OptimizePanel = lazy(() => import("@/assignment/components/optimize/OptimizePanel"));
 
 export interface WorkspaceShellProps {
     /** Back to the projects hub: the bar's left end, on every layout. */
@@ -96,6 +105,8 @@ const TABS: { id: WorkspaceTab; label: string; icon: typeof Box }[] = [
     { id: "3d", label: "3D", icon: Box },
     // The report. Its id stays "analysis" (links, saved state, tests); the tab is called Stability.
     { id: "analysis", label: STABILITY_TAB_LABEL, icon: Blocks },
+    // The optimizer. Its id is "optimize"; the tab is called Optimization.
+    { id: "optimize", label: OPTIMIZE_TAB_LABEL, icon: SlidersHorizontal },
     { id: "models", label: "Models", icon: Layers },
 ];
 
@@ -124,12 +135,27 @@ function StabilityTabStatus({ snapshot }: { snapshot: AnalysisSnapshot }) {
 }
 
 /**
+ * The Optimization tab's status next to its name: a spinner while the optimizer works, a dot while a result waits for a decision (the work
+ * guard is held for both: the optimizer says which, if it says anything, by the label it gave the guard).
+ */
+function OptimizeTabStatus() {
+    const work = useCurrentWork();
+    if (!work || work.kind !== "optimize") return null;
+    if (work.waiting) {
+        return <span role="img" aria-label="A result is waiting" title="A result is waiting for you" className="ml-0.5 h-1.5 w-1.5 rounded-full bg-primary" />;
+    }
+    return <Loader2 className="ml-0.5 h-3 w-3 animate-spin text-muted-foreground motion-reduce:animate-none" aria-label="Optimizing" />;
+}
+
+/**
  * The workspace behind the panels: the 3D viewer filling the window, the floating top bar over it
  * (Home, the project's name and menu, the tab strip, save state, settings) and, on the Models tab,
  * the list of generated models in a box under the bar.
  */
 export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted }: WorkspaceShellProps) {
     const barRef = useRef<HTMLDivElement>(null);
+    // Something is running (a change, the stabilizer, the optimizer): a phone keeps a place for the run chip even where it has no other row.
+    const somethingRuns = useRunActivity() !== null;
     const { insets, side, width } = useViewerInsets(barRef);
 
     const project = useWorkspaceStore((s) => s.project);
@@ -154,11 +180,11 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     const family = useVersionFamily();
     const displayModel = family && activeModel && family.active.id === activeModel.id ? family.display : activeModel;
     const displayUrl = displayModel?.glb_url ?? null;
-    const onSource = Boolean(family?.isStabilized && activeModel && displayModel && displayModel.id !== activeModel.id);
+    const onSource = Boolean(family?.isVersion && activeModel && displayModel && displayModel.id !== activeModel.id);
     const [showSupports, setShowSupports] = useShowSupports();
     // Read the blocks of the version the switcher would open before it is asked for (a few KB, kept for the analysis run that needs
-    // them): the first flip to Stabilized then waits for the analysis only, not for a download and a parse as well.
-    useAssemblyFor(family ? stabilizedTarget(family) : null);
+    // them): the first flip to it then waits for the analysis only, not for a download and a parse as well.
+    useAssemblyFor(family ? family.head : null);
     /** The url the viewer was last given: a load error is about that mesh, not about the active model's own file. */
     const viewerUrl = useRef<string | null>(null);
     viewerUrl.current = displayUrl;
@@ -176,7 +202,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     useAnalysisRunner(activeModel);
     const snapshot = useAnalysisSnapshot(activeModel);
     const switcher = useVersionSwitcherState(tab);
-    // A stabilized model on its source mesh draws its added blocks from the analysis of the stabilized file. When that run fails the
+    // A version on its source mesh draws its added blocks from the analysis of the version's file. When that run fails the
     // stage is the bare mesh, which reads as "nothing was added": the viewer says so, with a way to try again.
     const supportsError = supportsFailure({ onSource, tab, phase: snapshot.phase, error: snapshot.run.error });
     const retryAnalysis = useCallback(() => useAnalysisStore.getState().retry(), []);
@@ -200,13 +226,17 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     // The last pick raised the layer cut to keep its blocks in view: the stage says so (its cut note).
     const layerRaised = useAnalysisStore((s) => s.layerRaised);
     const analysisPanelOpen = useAnalysisStore((s) => s.panelOpen);
+    const previewOwner = useAnalysisStore((s) => s.preview?.owner ?? null);
     const analysisOn = tab === "analysis";
+    // The Optimization tab shows the same stage: the blocks over the model, with a panel of its own beside them.
+    const optimizeOn = tab === "optimize";
+    const blocksOn = isBlockTab(tab);
     // The store settles the user's colouring against the result it has, which is the other version's while a picture is held (it has
     // no added blocks, say): the held picture is coloured as asked instead (the viewer still falls back where it cannot be drawn).
     const colorChoice = useAnalysisStore((s) => s.colorChoice);
     const viewerAnalysisView = useMemo<AnalysisViewState>(
-        () => ({ ...analysisView, colorBy: stageColorBy(analysisView.colorBy, colorChoice, stage.holding), mode: analysisOn ? "blocks" : "model" }),
-        [analysisView, analysisOn, colorChoice, stage.holding],
+        () => ({ ...analysisView, colorBy: stageColorBy(analysisView.colorBy, colorChoice, stage.holding), mode: blocksOn ? "blocks" : "model" }),
+        [analysisView, blocksOn, colorChoice, stage.holding],
     );
     const handleModelReady = useCallback((loaded: LoadedModel | null) => {
         useAnalysisStore.getState().setLoaded(loaded);
@@ -219,11 +249,20 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     }, [displayUrl, activeModelId]);
     // Leaving the workspace disposes the viewer with its scene; its handle must not outlive it.
     useEffect(() => () => useAnalysisStore.getState().setLoaded(null), []);
-    // "A" flips between the 3D view and the Stability tab, and "V" between the original and the stabilized version, like the
-    // viewer's own letter keys: only while the 3D view has focus (the version switch handles "V" itself), never as a bare key
-    // anywhere on the page (a single-letter shortcut that cannot be switched off). The tab was called Analysis; the key stays "A".
+    // "A" flips between the 3D view and the Stability tab, "O" between the 3D view and the Optimization tab, "V" between the original and the
+    // version you are working on, "[" and "]" walk the versions, like the viewer's own letter keys: only while the 3D view has focus (the
+    // version control handles V, [ and ] itself), never as a bare key anywhere on the page (a single-letter shortcut that cannot be
+    // switched off). The tab was called Analysis; the key stays "A".
     const handleViewerKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
-        if (handleVersionKey(versionKeyEvent(e))) return;
+        const keyEvent = versionKeyEvent(e);
+        if (handleVersionKey(keyEvent)) return;
+        if (isOptimizeKey(keyEvent)) {
+            if (inTypingContext(e.target)) return;
+            e.preventDefault();
+            const workspace = useWorkspaceStore.getState();
+            workspace.setWorkspaceTab(workspace.workspaceTab === "optimize" ? "3d" : "optimize");
+            return;
+        }
         if (e.key.toLowerCase() !== "a" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat || e.nativeEvent.isComposing) return;
         if (inTypingContext(e.target)) return;
         e.preventDefault();
@@ -242,8 +281,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     const handleBlockClick = useCallback((index: number | null) => useAnalysisStore.getState().clickBlock(index), []);
     // The viewer stops reporting hovers once the blocks leave the stage: a card must not stay lit.
     useEffect(() => {
-        if (!analysisOn) useAnalysisStore.getState().hoverBlock(null);
-    }, [analysisOn]);
+        if (!blocksOn) useAnalysisStore.getState().hoverBlock(null);
+    }, [blocksOn]);
 
     // ---- generation overlay: only while the first model is on its way and nothing is shown ----
     const running = useMemo(() => {
@@ -286,12 +325,12 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     }, []);
 
     const handleLoadError = useCallback((message: string) => {
-        // The mesh behind a stabilized version could not be loaded: the version still can, so it is shown as its own blocks
+        // The mesh behind a version could not be loaded: the version still can, so it is shown as its own blocks
         // (the stage, the analysis and the buttons all follow the same file) and the original stays one click away.
         const sourceId = sourceOnStage.current;
         if (sourceId) {
             markMeshFailed(sourceId);
-            toast.error("The original model could not be displayed", { id: "viewer-load-error", description: `Showing the stabilized model's blocks instead. ${message}` });
+            toast.error("The original model could not be displayed", { id: "viewer-load-error", description: `Showing this version's blocks instead. ${message}` });
             return;
         }
         toast.error("This model could not be displayed", { id: "viewer-load-error", description: message });
@@ -373,7 +412,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
         onOpenProjects();
     };
 
-    // The Models tab's View and its Original / Stabilized link: the same switch as the bar's, landing on the 3D tab.
+    // The Models tab's View: the same switch as the bar's, landing on the 3D tab.
     const viewModel = (model: ModelAsset) => openVersion(model, { tab: "3d" });
 
     // ---- layout ----
@@ -408,15 +447,16 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
         () =>
             viewerInsetsFor({
                 insets,
-                analysisOn,
+                analysisOn: blocksOn,
                 mobile: Boolean(mobile),
                 switcherRowPx,
-                panelOpen: analysisPanelOpen,
+                // The report folds into a pill; the optimizer's panel stays beside the model.
+                panelOpen: optimizeOn ? true : analysisPanelOpen,
                 freeWidth,
                 dockInsetPx: ANALYSIS_DOCK_INSET_PX,
                 peekPx,
             }),
-        [analysisOn, mobile, switcherRowPx, analysisPanelOpen, insets, freeWidth, peekPx],
+        [blocksOn, optimizeOn, mobile, switcherRowPx, analysisPanelOpen, insets, freeWidth, peekPx],
     );
     // Opening the Stability tab in a window too narrow to show the report beside the model starts it folded
     // into its pill (the user can still open it, over the stage).
@@ -479,6 +519,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                             analysis={stage.analysis}
                             analysisView={viewerAnalysisView}
                             previewResult={snapshot.previewResult}
+                            previewLabel={previewLabelOf(previewOwner)}
                             onViewChange={handleViewChange}
                             layerRaised={layerRaised}
                             analysisBusy={snapshot.phase === "running"}
@@ -609,7 +650,15 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                     type="button"
                                     ref={tab === id ? activeTabRef : undefined}
                                     onClick={() => selectTab(id)}
-                                    title={id === "analysis" ? `${label} (A while the 3D view has focus)` : mobile ? label : undefined}
+                                    title={
+                                        id === "analysis"
+                                            ? `${label} (A while the 3D view has focus)`
+                                            : id === "optimize"
+                                              ? `${label} (O while the 3D view has focus)`
+                                              : mobile
+                                                ? label
+                                                : undefined
+                                    }
                                     aria-label={id === "analysis" ? stabilityTabLabel(snapshot) : mobile ? label : undefined}
                                     data-testid={`tab-${id}`}
                                     aria-pressed={tab === id}
@@ -623,6 +672,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                     {/* Icons only on phones: labelled tabs would crowd the bar. */}
                                     {!mobile && label}
                                     {id === "analysis" && <StabilityTabStatus snapshot={snapshot} />}
+                                    {id === "optimize" && <OptimizeTabStatus />}
                                     {id === "models" && models.length > 0 && !mobile && (
                                         <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground">
                                             {models.length}
@@ -634,6 +684,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                         {/* The room between the tabs and the save state: the version switcher fills it on the 3D and the Stability tab, so
                             neither the tabs nor the controls on the right move when it comes and goes. */}
                         <div className="flex flex-1 items-center">
+                            {/* The work in progress is told here on every tab, beside the control (in its row when the bar has no room). */}
+                            {!switcherInRow && <RunChip className="ml-2" />}
                             {!switcherInRow && <VersionSwitcher state={switcher} compact={switcherCompact} embedded className="mx-2" />}
                         </div>
 
@@ -690,8 +742,15 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
 
                 {!mobile && switcherRowKept && (
                     // A window too narrow for the switcher in the bar: its row under the bar (kept empty while it may still appear).
-                    <div className="mt-2 flex min-h-9 items-center" style={barStyle}>
+                    <div className="mt-2 flex min-h-9 items-center gap-2" style={barStyle}>
                         <VersionSwitcher state={switcher} compact />
+                        <RunChip />
+                    </div>
+                )}
+                {!mobile && !switcherRowKept && switcherInRow && (
+                    // A narrow window with no control to show: the chip still has a place, so a run is never invisible.
+                    <div className="mt-2 flex items-center" style={barStyle}>
+                        <RunChip />
                     </div>
                 )}
 
@@ -702,11 +761,24 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                     </div>
                 )}
 
-                {mobile && (switcherRowKept || analysisOn) && (
+                {optimizeOn && !mobile && (
+                    // The optimizer's panel under the bar, at the left edge of the free area, like the report's.
+                    <div className="min-h-0 flex-1 py-3" style={{ marginLeft: side.left + 12, marginRight: side.right }}>
+                        <div className="pointer-events-auto h-full max-h-full" style={{ width: ANALYSIS_PANEL_PX }} data-testid="optimize-dock">
+                            <Suspense fallback={null}>
+                                <OptimizePanel />
+                            </Suspense>
+                        </div>
+                    </div>
+                )}
+
+                {mobile && (switcherRowKept || analysisOn || somethingRuns) && (
                     // On a phone the row holds the switcher and the issue being shown (tap x to clear it). The row keeps its height
-                    // (a 32 px chip under 8 px of air) with nothing picked, so the stage does not move when a pick comes and goes.
+                    // (a 32 px chip under 8 px of air) with nothing picked, so the stage does not move when a pick comes and goes. With
+                    // neither (a model with no versions, on the 3D tab) it exists only while something runs, for the run chip.
                     <div className={cn("mt-2 flex items-center gap-2", switcherRowKept && "min-h-10", analysisOn && !switcherRowKept && "min-h-8")} style={contentStyle}>
                         <VersionSwitcher state={switcher} row />
+                        <RunChip compact />
                         {analysisOn && (
                             <div className="min-w-0 flex-1">
                                 <SelectionPeek />
@@ -723,7 +795,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                 activeModelId={activeModelId}
                                 providers={providers}
                                 onView={viewModel}
-                                onDelete={deleteStabilized}
+                                onEdit={editVersion}
+                                onDelete={deleteVersion}
                             />
                         </div>
                     </div>
@@ -738,6 +811,16 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                 </PhonePeekDock>
             )}
             {mobile && analysisOn && <AnalysisSheet model={activeModel} snapshot={snapshot} />}
+            {mobile && optimizeOn && (
+                // The optimizer at rest on a phone: its panel docked at the foot of the stage, in the room the viewer leaves for it.
+                <PhonePeekDock onHeight={setPeekPx}>
+                    <div className="max-h-[60dvh] overflow-y-auto rounded-2xl border border-border/70 bg-sidebar/95 shadow-lg backdrop-blur" data-testid="optimize-peek">
+                        <Suspense fallback={null}>
+                            <OptimizePanel />
+                        </Suspense>
+                    </div>
+                </PhonePeekDock>
+            )}
         </div>
     );
 }

@@ -1,15 +1,19 @@
 // A block assembly as a GLB, and the strict reader the Worker uses to accept one.
 //
-//   writeAssemblyGlb(descriptor, meta?)  -> bytes. Deterministic: the same input gives the same bytes (the example
+//   writeAssemblyGlb(descriptor, meta?, edit?, optimization?)
+//                                        -> bytes. Deterministic: the same input gives the same bytes (the example
 //                                           build checks that), and nothing here touches the DOM or three.js, so the
 //                                           stabilizer's worker, the Node example script and the tests share it.
-//   readAssemblyGlb(bytes)               -> the descriptor and meta, or the first thing that is wrong.
+//                                           At most one of the three logs (meta = the stabilizer's, edit = a block edit's,
+//                                           optimization = the optimizer's).
+//   readAssemblyGlb(bytes)               -> the descriptor and the log, or the first thing that is wrong.
 //
 // The file is the glTF 2.0 container with one node + mesh per role present (named like ROLE_NODE_NAMES, so the viewer's
 // Parts list shows "Columns", "Footing", ...), one material per role, 24 vertices (flat normals) and 36 uint16 indices
 // per block, in metres, glTF Y-up (the same frame every provider's GLB has: the viewer rotates it to Z-up), origin at
-// the grid's minimum corner. scenes[0].extras carries the descriptor ("nevo:assembly") and the stabilizer's log
-// ("nevo:stabilization"): a downloaded file explains itself, and the Worker stores exactly what it validated.
+// the grid's minimum corner. scenes[0].extras carries the descriptor ("nevo:assembly") and the log of the version the file is:
+// the stabilizer's ("nevo:stabilization"), a block edit's ("nevo:edit") or the optimizer's ("nevo:optimization"), never two:
+// a downloaded file explains itself, and the Worker stores exactly what it validated.
 //
 // The reader accepts only what the writer produces: every vertex, normal and index is checked against the cell it
 // belongs to, the JSON chunk is compared with the one the writer would emit, and the padding must be zero. So an
@@ -21,6 +25,8 @@ import {
     ASSEMBLY_EXTRAS_KEY,
     ASSEMBLY_GRID,
     CELL_STRIDE,
+    EDIT_EXTRAS_KEY,
+    OPTIMIZATION_EXTRAS_KEY,
     ROLE_HEX,
     ROLE_NODE_NAMES,
     STABILIZATION_EXTRAS_KEY,
@@ -29,6 +35,15 @@ import {
     type AssemblyDescriptor,
 } from "./assembly.ts";
 import { checkDerivedMeta } from "./derivedMeta.ts";
+import { checkOptimizeMeta, type OptimizeMeta } from "./optimizeMeta.ts";
+import { checkVoxelEditLog, type VoxelEditLog } from "./voxelEdit/log.ts";
+
+/** The log of a version, as validated: at most one of the three is set. */
+interface AssemblyLog {
+    meta: DerivedMeta | null;
+    edit: VoxelEditLog | null;
+    optimization: OptimizeMeta | null;
+}
 
 export const GLB_GENERATOR = "Assembly Studio assembly 1";
 /** The JSON chunk of a valid file is about 60 KB (5 numbers per block plus the log); more is refused unread. */
@@ -129,7 +144,7 @@ function layoutOf(parts: RolePart[]): Layout {
 }
 
 /** The glTF JSON for a layout. Built the same way by the writer and by the reader's comparison. */
-function buildJson(d: AssemblyDescriptor, meta: DerivedMeta | null, layout: Layout, bounds: Array<{ min: number[]; max: number[] }>): Record<string, unknown> {
+function buildJson(d: AssemblyDescriptor, log: AssemblyLog, layout: Layout, bounds: Array<{ min: number[]; max: number[] }>): Record<string, unknown> {
     const nodes: unknown[] = [];
     const meshes: unknown[] = [];
     const materials: unknown[] = [];
@@ -154,7 +169,9 @@ function buildJson(d: AssemblyDescriptor, meta: DerivedMeta | null, layout: Layo
         nodes.push({ name: ROLE_NODE_NAMES[part.role], mesh: m });
     });
     const extras: Record<string, unknown> = { [ASSEMBLY_EXTRAS_KEY]: d };
-    if (meta) extras[STABILIZATION_EXTRAS_KEY] = meta;
+    if (log.meta) extras[STABILIZATION_EXTRAS_KEY] = log.meta;
+    if (log.edit) extras[EDIT_EXTRAS_KEY] = log.edit;
+    if (log.optimization) extras[OPTIMIZATION_EXTRAS_KEY] = log.optimization;
     return {
         asset: { version: "2.0", generator: GLB_GENERATOR },
         scene: 0,
@@ -218,17 +235,34 @@ function fillPart(d: AssemblyDescriptor, part: RolePart, pos: Float32Array, nrm:
 }
 
 /**
- * The assembly as GLB bytes. `meta` is the stabilizer's log (kind "stabilized"), absent for a plain assembly. The log is
+ * The assembly as GLB bytes. `metaIn` is the stabilizer's log (kind "stabilized"), `editIn` a block edit's (kind "edited", target
+ * "voxel"), `optimizationIn` the optimizer's (kind "optimized"); all absent for a plain assembly, and at most one set. The log is
  * rebuilt by the same validator the reader uses before it is written, so a file always carries its canonical form
  * (and a log that would be refused on upload throws here, in the browser, instead). Throws RangeError on a bad descriptor.
  */
-export function writeAssemblyGlb(descriptor: AssemblyDescriptor, metaIn: DerivedMeta | null = null): Uint8Array {
+export function writeAssemblyGlb(
+    descriptor: AssemblyDescriptor,
+    metaIn: DerivedMeta | null = null,
+    editIn: VoxelEditLog | null = null,
+    optimizationIn: OptimizeMeta | null = null,
+): Uint8Array {
     if (!parseAssemblyDescriptor(descriptor)) throw new RangeError("The assembly is not a valid canonical block list.");
-    let meta: DerivedMeta | null = null;
+    if ([metaIn, editIn, optimizationIn].filter(Boolean).length > 1) throw new RangeError("A file carries one log: the stabilizer's, an edit's or the optimizer's.");
+    const log: AssemblyLog = { meta: null, edit: null, optimization: null };
     if (metaIn) {
         const checked = checkDerivedMeta(metaIn, null);
         if (!checked.ok) throw new RangeError(`The stabilizer's log is invalid (${checked.error}).`);
-        meta = checked.value;
+        log.meta = checked.value;
+    }
+    if (editIn) {
+        const checked = checkVoxelEditLog(editIn, null);
+        if (!checked.ok) throw new RangeError(`The edit log is invalid (${checked.error}).`);
+        log.edit = checked.value;
+    }
+    if (optimizationIn) {
+        const checked = checkOptimizeMeta(optimizationIn, null);
+        if (!checked.ok) throw new RangeError(`The optimization log is invalid (${checked.error}).`);
+        log.optimization = checked.value;
     }
     const parts = partsOf(descriptor);
     const layout = layoutOf(parts);
@@ -240,7 +274,7 @@ export function writeAssemblyGlb(descriptor: AssemblyDescriptor, metaIn: Derived
         const idx = new Uint16Array(bin.buffer, o.idx, o.count * INDICES);
         return fillPart(descriptor, part, pos, nrm, idx);
     });
-    const jsonBytes = new TextEncoder().encode(JSON.stringify(buildJson(descriptor, meta, layout, bounds)));
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(buildJson(descriptor, log, layout, bounds)));
     const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
     const jsonLength = jsonBytes.length + jsonPad;
     const total = 12 + 8 + jsonLength + 8 + bin.length;
@@ -260,8 +294,9 @@ export function writeAssemblyGlb(descriptor: AssemblyDescriptor, metaIn: Derived
     return out;
 }
 
+/** `meta`, `edit` and `optimization` are the three possible logs: at most one is non-null (a file with more is refused). */
 export type ReadAssemblyResult =
-    | { ok: true; descriptor: AssemblyDescriptor; meta: DerivedMeta | null; blocks: number }
+    | { ok: true; descriptor: AssemblyDescriptor; meta: DerivedMeta | null; edit: VoxelEditLog | null; optimization: OptimizeMeta | null; blocks: number }
     | { ok: false; error: string };
 
 const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
@@ -289,12 +324,24 @@ export function readAssemblyGlb(bytes: Uint8Array, now: number | null = null): R
     const scene = (doc as { scenes?: Array<{ extras?: Record<string, unknown> }> } | null)?.scenes?.[0];
     const descriptor = parseAssemblyDescriptor(scene?.extras?.[ASSEMBLY_EXTRAS_KEY]);
     if (!descriptor) return bad("The GLB does not describe a valid block assembly.");
-    let meta: DerivedMeta | null = null;
-    const rawMeta = scene?.extras?.[STABILIZATION_EXTRAS_KEY];
+    const log: AssemblyLog = { meta: null, edit: null, optimization: null };
+    const extras = scene?.extras ?? {};
+    const rawMeta = extras[STABILIZATION_EXTRAS_KEY];
+    const rawEdit = extras[EDIT_EXTRAS_KEY];
+    const rawOptimization = extras[OPTIMIZATION_EXTRAS_KEY];
+    if ([rawMeta, rawEdit, rawOptimization].filter((raw) => raw !== undefined).length > 1) return bad("The GLB carries more than one log.");
     if (rawMeta !== undefined) {
         const checked = checkDerivedMeta(rawMeta, now);
         if (!checked.ok) return bad(`The stabilizer's log is invalid (${checked.error}).`);
-        meta = checked.value;
+        log.meta = checked.value;
+    } else if (rawEdit !== undefined) {
+        const checked = checkVoxelEditLog(rawEdit, now);
+        if (!checked.ok) return bad(`The edit log is invalid (${checked.error}).`);
+        log.edit = checked.value;
+    } else if (rawOptimization !== undefined) {
+        const checked = checkOptimizeMeta(rawOptimization, now);
+        if (!checked.ok) return bad(`The optimization log is invalid (${checked.error}).`);
+        log.optimization = checked.value;
     }
 
     // The binary chunk: exact size, then every number against the cell it belongs to.
@@ -358,9 +405,9 @@ export function readAssemblyGlb(bytes: Uint8Array, now: number | null = null): R
         });
     }
     // The JSON chunk must be exactly what the writer would emit for this content (trailing spaces are padding).
-    const expectedJson = new TextEncoder().encode(JSON.stringify(buildJson(descriptor, meta, layout, bounds)));
+    const expectedJson = new TextEncoder().encode(JSON.stringify(buildJson(descriptor, log, layout, bounds)));
     if (expectedJson.length > jsonRaw.length || jsonRaw.length - expectedJson.length > 3) return bad("The GLB's JSON chunk has unexpected content.");
     for (let q = 0; q < expectedJson.length; q++) if (jsonRaw[q] !== expectedJson[q]) return bad("The GLB's JSON chunk has unexpected content.");
     for (let q = expectedJson.length; q < jsonRaw.length; q++) if (jsonRaw[q] !== 0x20) return bad("The GLB's JSON chunk has unexpected content.");
-    return { ok: true, descriptor, meta, blocks: blockCount(descriptor) };
+    return { ok: true, descriptor, meta: log.meta, edit: log.edit, optimization: log.optimization, blocks: blockCount(descriptor) };
 }

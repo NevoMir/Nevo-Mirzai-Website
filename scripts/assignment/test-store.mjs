@@ -67,6 +67,10 @@ export { describeSupport } from "@/assignment/viewer/supports";
 export { addedWhen } from "@/assignment/viewer/analysisGeometry";
 export * from "@/assignment/store/versions";
 export * from "@/assignment/store/versionTree";
+export * from "@/assignment/store/workGuard";
+export * from "@/assignment/store/chatNotes";
+export * from "@/assignment/store/models";
+export * from "@/assignment/components/chat/composerLogic";
 export { applyStress, computeStress } from "@/assignment/analysis/stress";
 export { solveFrameTs } from "@/assignment/analysis/fem/index";
 export { descriptorFromBlocks } from "@/assignment/shared/assembly";
@@ -587,7 +591,7 @@ await test("Stop cancels the running job and sends the access code", async () =>
 
 await test("Stop hands a queued prompt back to the box instead of letting it start a second run", async () => {
     const { job } = runningProject();
-    S().setQueuedPrompt("next lamp");
+    S().setQueuedPrompt({ text: "next lamp", mode: "new" });
     fake.cancel = (id) => ({ status: 200, json: { job: { ...jobsById.get(id), status: "canceled", updated_at: iso(50) } } });
     await lib.stopGeneration(async () => true);
     assert.equal(S().queuedPrompt, null);
@@ -2453,7 +2457,7 @@ await test("the vocabulary: every term has a plain label, a technical term and a
     assert.deepEqual(Object.keys(lib.CHECK_TERMS), ["cog", "cantilevered", "long-cantilevers", "components", "floating", "stress"]);
     assert.deepEqual(lib.STATUS_WORDS, { supported: "Supported", cantilever: "Overhang", overreach: "Overhang too long", floating: "Floating" });
     assert.deepEqual(lib.COLOR_WORDS, { status: "Status", reach: "Overhang", stress: "Strength", layer: "Layers", role: "Added blocks" });
-    assert.deepEqual(lib.ROLE_WORDS, { original: "Original blocks", column: "Columns", footing: "Footings", bracket: "Brackets", bridge: "Bridges", reinforcement: "Thicker joints" });
+    assert.deepEqual(lib.ROLE_WORDS, { original: "Original blocks", column: "Columns", footing: "Footings", bracket: "Brackets", bridge: "Bridges", reinforcement: "Thicker joints", user: "Your edits" });
     assert.deepEqual(lib.STRESS_MODE_WORDS, { tension: "being pulled apart", compression: "being crushed", shear: "being sheared" });
     // The check for jargon itself.
     assert.deepEqual(lib.technicalWordsIn("A cantilever with a high Utilisation, in kPa, by FEM."), ["cantilever", "utilisation", "kPa", "FEM"]);
@@ -2568,9 +2572,9 @@ await test("the Stabilize card is offered for a model with something to fix, and
     const offer = lib.stabilizeOffer({ ...base, models: kids(2) });
     assert.equal(offer.child.id, "k1", "the newest version is the one to open");
     assert.equal(offer.blocked, null, "and a new run is still possible");
-    assert.match(lib.stabilizeOffer({ ...base, models: kids(5) }).blocked, /5 stabilized versions already/);
-    const many = range(20).map((i) => ({ id: `x${i}`, kind: "stabilized", source_model_id: `o${i % 7}`, created_at: iso(i) }));
-    assert.match(lib.stabilizeOffer({ ...base, models: many }).blocked, /20 stabilized versions/);
+    assert.match(lib.stabilizeOffer({ ...base, models: kids(10) }).blocked, /10 versions already/);
+    const many = range(40).map((i) => ({ id: `x${i}`, kind: "stabilized", source_model_id: `o${i % 7}`, created_at: iso(i) }));
+    assert.match(lib.stabilizeOffer({ ...base, models: many }).blocked, /40 versions already/);
 });
 
 await test("the card's 'Open stabilized version' is the bar's: through a chain of versions an original opens the family's, a version opens its own", () => {
@@ -3369,7 +3373,7 @@ await test("stabilizing a stabilized model shown over its source: the stabilizer
     // The family: both versions, the new one first; the viewer keeps showing the original mesh.
     const family = lib.versionFamily(S().models, saved.id);
     assert.equal(family.root.id, "ov-src");
-    assert.deepEqual(family.stabilized.map((m) => m.id), [saved.id, "ov-stab"]);
+    assert.deepEqual(family.versions.map((m) => m.id), ["ov-stab", saved.id], "oldest first");
     assert.equal(family.display.id, "ov-src");
     // Its file is served by the fake server; the runner reads it and analyses it under its own id, over the same mesh.
     fake.files[saved.glb_url] = { bytes: seen.uploads[0].glb, hits: 0 };
@@ -3404,6 +3408,215 @@ await test("a stopped run never records or tests against a target above the warn
     const built = await lib.buildStoppedResult({ source: result, moves: [{ step: stepLog(1, "column", 4), cells: TIP_COLUMN.map((c) => [...c]), roles: TIP_COLUMN.map(() => "column") }], sourceDepth: 0, options, elapsedMs: 5 });
     assert.equal(built.meta.target_utilisation, 0.75, "the target the run really aimed for");
     assert.ok(built.meta.complete === (built.after.errors === 0 && (built.after.max_utilisation === null || built.after.max_utilisation <= 0.75 + 1e-9)));
+});
+
+
+// ================= versions: the tree, the work guard, edits =================
+
+const asEdited = (base, over = {}) => ({
+    ...base, kind: "edited", provider: "editor", source_model_id: over.source ?? null,
+    edit: { version: 1, target: over.target ?? "voxel", label: over.label ?? "Shelf", summary: "x", entries: [], changes: null, ops: null, notes: [], stabilized_depth: over.depth ?? 0, depth: 1, base_steps: 0, engine: "", job_id: null, created_at: iso() },
+});
+const asOptimized = (base, over = {}) => ({
+    ...base, kind: "optimized", provider: "optimizer", source_model_id: over.source ?? null,
+    optimization: { version: 1, title: "Lightest", goal: "lightest", shape_changed: over.shapeChanged ?? false, stabilized_depth: over.depth ?? 1, before: {}, after: {} },
+});
+
+await test("an edit job that ends with a version puts it on screen at once (the Models tab has no stage, so it moves to 3D); a plan with no model leaves the plan on the job", () => {
+    const P = crypto.randomUUID();
+    const original = { ...modelFor(makeJob(P)), id: "o1" };
+    S().setProject(detail(P, { models: [original] }));
+    S().setActiveModel("o1");
+    S().setWorkspaceTab("models");
+    const edit = makeJob(P, { provider: "muse", kind: "edit", edit: { source_model_id: "o1", target: "design", result: null }, status: "running" });
+    lib.applyJob(edit);
+    const done = { ...edit, status: "succeeded", progress: 100, updated_at: iso(10), model: asEdited({ ...modelFor(edit), id: "e1" }, { source: "o1", target: "design" }) };
+    lib.applyJob(done);
+    assert.equal(S().activeModelId, "e1", "the change is what the person asked to see");
+    assert.equal(S().workspaceTab, "3d");
+    assert.ok(S().models.some((m) => m.id === "e1"));
+    // From the Stability tab it stays where it is; and a second edit job does not wait for "the first of its prompt".
+    S().setWorkspaceTab("analysis");
+    const second = makeJob(P, { provider: "muse", kind: "edit", edit: { source_model_id: "e1", target: "design", result: null }, status: "running" });
+    lib.applyJob(second);
+    lib.applyJob({ ...second, status: "succeeded", updated_at: iso(20), model: asEdited({ ...modelFor(second), id: "e2" }, { source: "e1", target: "design" }) });
+    assert.equal(S().activeModelId, "e2");
+    assert.equal(S().workspaceTab, "analysis");
+    // A plan and no model (a mesh edit whose page was closed): nothing is added, nothing is shown, the plan stays on the job.
+    const plan = makeJob(P, { provider: "hunyuan", kind: "edit", edit: { source_model_id: "e2", target: "mesh", result: null }, status: "running" });
+    lib.applyJob(plan);
+    const result = { target: "mesh", applied: true, summary: "Raise the back.", notes: [] };
+    lib.applyJob({ ...plan, status: "succeeded", updated_at: iso(30), edit: { source_model_id: "e2", target: "mesh", result } });
+    assert.equal(S().activeModelId, "e2");
+    assert.equal(S().models.length, 3);
+    assert.deepEqual(S().jobs[plan.id].edit.result, result);
+    assert.equal(lib.isTerminalJob(S().jobs[plan.id]), true);
+});
+
+await test("a generated model that lands makes the composer edit it again; a person's choice of New lasts until then", () => {
+    const P = crypto.randomUUID();
+    S().setProject(detail(P));
+    S().setComposerChoice("new");
+    const job = makeJob(P);
+    lib.applyJob(job);
+    assert.equal(S().composerChoice, "new", "still running: the choice stands");
+    lib.applyJob({ ...job, status: "succeeded", updated_at: iso(10), model: modelFor(job) });
+    assert.equal(S().composerChoice, null, "the new model is what the next words are about");
+    S().setComposerChoice("new");
+    S().startNewChat();
+    assert.equal(S().composerChoice, null, "a new chat starts fresh");
+    S().setComposerChoice("new");
+    S().setProject(detail(crypto.randomUUID()));
+    assert.equal(S().composerChoice, null, "so does an opened project");
+});
+
+await test("the reply line of a change says how the change went; a generation's is as it was", () => {
+    const info = [{ id: "muse", label: "Muse Spark 1.3", available: true }, { id: "hunyuan", label: "Hunyuan 3D 3.1", available: true }];
+    const P = "p";
+    const edit = (status, extra = {}) => makeJob(P, { provider: "muse", kind: "edit", edit: { source_model_id: "o", target: "design", result: null }, status, ...extra });
+    assert.equal(lib.replyLine("Editing with **Muse Spark**.", [edit("running")], info), "Editing with **Muse Spark**.", "while it runs the saved text stands");
+    assert.equal(lib.replyLine("x", [edit("succeeded", { model: modelFor({ id: "j", project_id: P, provider: "muse", prompt: "a" }) })], info), "Changed with **Muse Spark 1.3**.");
+    assert.equal(lib.replyLine("x", [edit("succeeded", { edit: { source_model_id: "o", target: "mesh", result: { target: "mesh", applied: false, summary: "no", notes: [] } } })], info), "**Muse Spark 1.3** could not make that change.");
+    assert.equal(lib.replyLine("x", [edit("succeeded", { edit: { source_model_id: "o", target: "mesh", result: { target: "mesh", applied: true, summary: "ok", notes: [] } } })], info), "**Muse Spark 1.3** planned the change.");
+    assert.equal(lib.replyLine("x", [edit("failed")], info), "**Muse Spark 1.3** could not make this change.");
+    assert.equal(lib.replyLine("x", [edit("canceled")], info), "Stopped **Muse Spark 1.3**.");
+    assert.equal(lib.replyLine("x", [makeJob(P, { status: "failed" })], info), "**Hunyuan 3D 3.1** could not generate this model.");
+});
+
+await test("the Stabilize card on an edited or optimized version: the stabilizations on its path count, the caps count versions of every kind, a stabilized child is the one it offers", () => {
+    const stats = { blockCount: 28 };
+    const base = { model: { id: "r", derived: null }, models: [], result: { stats, stress: null }, verdict: { kind: "fail" }, analysing: false };
+    const at = (id, kind, source, ms, extra = {}) => ({ id, kind, source_model_id: source, created_at: iso(ms), derived: null, edit: null, optimization: null, ...extra });
+    const R = at("r", "generated", null, 0);
+    // A block edit made from a stabilized version carries the count: stabilized twice already, once more is the limit.
+    const S1 = at("s1", "stabilized", "r", 10, { derived: { depth: 1 } });
+    const E1 = at("e1", "edited", "s1", 20, { edit: { target: "voxel", stabilized_depth: 2 } });
+    const E2 = at("e2", "edited", "s1", 25, { edit: { target: "voxel", stabilized_depth: 3 } });
+    const O1 = at("o1", "optimized", "s1", 30, { optimization: { shape_changed: false, stabilized_depth: 3 } });
+    assert.equal(lib.stabilizeOffer({ ...base, model: E1, models: [R, S1, E1] }).blocked, null, "two of three");
+    assert.match(lib.stabilizeOffer({ ...base, model: E2, models: [R, S1, E2] }).blocked, /maximum number of times/);
+    assert.match(lib.stabilizeOffer({ ...base, model: O1, models: [R, S1, O1] }).blocked, /maximum number of times/);
+    // An original with only an edited version: nothing to open, the button is offered; a stabilized child of the edit is opened, an optimized one is not "ready".
+    assert.equal(lib.stabilizeOffer({ ...base, models: [R, E1] }).child, null);
+    const SE = at("se", "stabilized", "e1", 40, { derived: { depth: 3 } });
+    assert.equal(lib.stabilizeOffer({ ...base, model: E1, models: [R, S1, E1, SE] }).child.id, "se");
+    assert.equal(lib.stabilizeOffer({ ...base, models: [R, S1, E1, SE, O1] }).child.id, "se", "the original opens the newest STABILIZED version of the family");
+    assert.equal(lib.stabilizeOffer({ ...base, model: S1, models: [R, S1, O1] }).child, null, "an optimized child is the bar's, not this card's");
+    // Ten versions of every kind made from one model are the limit, and the project's forty.
+    const kids = (n) => Array.from({ length: n }, (_, i) => at(`k${i}`, i % 3 === 0 ? "stabilized" : i % 3 === 1 ? "edited" : "optimized", "r", i));
+    assert.match(lib.stabilizeOffer({ ...base, models: [R, ...kids(10)] }).blocked, /10 versions already/);
+    assert.equal(lib.stabilizeOffer({ ...base, models: [R, ...kids(9)] }).blocked, null);
+    const many = Array.from({ length: 40 }, (_, i) => at(`x${i}`, "edited", `o${i % 7}`, i, { edit: { target: "voxel" } }));
+    assert.match(lib.stabilizeOffer({ ...base, models: [R, ...many] }).blocked, /40 versions already/);
+    // A chain twelve steps from the original is too deep to build on.
+    const chain = [R];
+    for (let n = 1; n <= 12; n++) chain.push(at(`c${n}`, "edited", n === 1 ? "r" : `c${n - 1}`, n, { edit: { target: "voxel", stabilized_depth: 0 } }));
+    assert.match(lib.stabilizeOffer({ ...base, model: chain[12], models: chain }).blocked, /too many steps/);
+    assert.equal(lib.stabilizeOffer({ ...base, model: chain[11], models: chain }).blocked, null);
+});
+
+await test("a preview is taken off only by the store that put it on: the stabilizer, a block edit and the optimizer each keep to their own", () => {
+    resetAnalysis();
+    const preview = lib.analyzeAssembly(lib.descriptorFromBlocks([[0, 0, 0], [1, 0, 0]].map((cell) => ({ cell }))), null, lib.sanitizeSettings(null));
+    AS().setPreview("m1", preview);
+    assert.equal(AS().preview.owner, "stabilize", "the stabilizer by default");
+    AS().setPreview("m1", null, "blocks");
+    assert.notEqual(AS().preview, null, "a block edit does not clear the stabilizer's picture");
+    AS().setPreview("m1", null, "optimize");
+    assert.notEqual(AS().preview, null);
+    AS().setPreview("m1", null, "stabilize");
+    assert.equal(AS().preview, null);
+    AS().setPreview("m1", preview, "blocks");
+    assert.deepEqual([AS().preview.owner, AS().preview.modelId], ["blocks", "m1"]);
+    AS().setPreview("m1", null);
+    assert.notEqual(AS().preview, null, "the default owner is not 'blocks'");
+    AS().setPreview("m1", preview, "optimize");
+    assert.equal(AS().preview.owner, "optimize", "a new picture replaces whatever was there");
+    AS().setPreview("m1", null, "optimize");
+    assert.equal(AS().preview, null);
+    AS().setPreview("m1", null, "blocks");
+    assert.equal(AS().preview, null, "nothing to clear is no change");
+});
+
+await test("a stabilizer run takes the work guard and gives it back when it is saved, discarded or has failed; a block edit in the way refuses it", async () => {
+    const desc = addedDesc(armCells(5), TIP_COLUMN);
+    const { pid, stab } = withSourceAndVersion(desc);
+    const mesh = loadedModel("/ov-src.glb");
+    AS().setLoaded(mesh);
+    const stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().resultModelId === "ov-stab");
+    const r = AS().result;
+    lib.resetWorkGuard();
+    const blocks = lib.acquireWork("blocks", pid);
+    assert.equal(ST().start(stab, r), false, "a block edit is in the way");
+    assert.equal(ST().status, "idle");
+    blocks();
+    const move = { step: stepLog(1, "bracket", 1), cells: [[3, 1, 4]], roles: ["bracket"] };
+    fakeStabilizer(pid, { moves: [move], answer: await answerFor(r, [move]), hold: {} });
+    assert.equal(ST().start(stab, r), true);
+    assert.equal(lib.currentWork().kind, "stabilize");
+    assert.equal(lib.currentWork().label, "Stabilizing");
+    assert.equal(typeof lib.currentWork().stop, "function", "the run chip's Stop");
+    assert.equal(lib.workBusyMessage("optimize", pid), "Finish or discard the stabilizing first.");
+    await until(() => ST().steps.length === 1);
+    ST().cancel();
+    assert.equal(lib.currentWork()?.kind, "stabilize", "stopped with a step: it waits for Save or Discard");
+    await ST().save();
+    assert.equal(ST().status, "saved");
+    assert.equal(lib.currentWork(), null, "saved: the work is over");
+    // Discard, and a run that fails.
+    resetAnalysis();
+    lib.resetWorkGuard();
+    stop();
+});
+
+await test("stabilizing an edited version counts the stabilizations along its path, not its own depth", async () => {
+    const desc = addedDesc(armCells(5), TIP_COLUMN);
+    const { pid, stab } = withSourceAndVersion(desc);
+    AS().setLoaded(loadedModel("/ov-src.glb"));
+    const stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().resultModelId === "ov-stab");
+    const r = AS().result;
+    stop();
+    const edited = asEdited({ ...modelFor(makeJob(pid)), id: "ov-edit", glb_url: "/ov-edit.glb", analysis: null }, { source: "ov-stab", depth: 2 });
+    S().addModel(edited);
+    assert.equal(lib.stabilizationsOfModel(S().models.find((m) => m.id === "ov-edit")), 2);
+    const move = { step: stepLog(1, "bracket", 1), cells: [[3, 1, 4]], roles: ["bracket"] };
+    const seen = fakeStabilizer(pid, { moves: [move], answer: await answerFor(r, [move]), hold: {} });
+    assert.equal(ST().start(S().models.find((m) => m.id === "ov-edit"), r), true);
+    await until(() => seen.sourceDepth !== null);
+    assert.equal(seen.sourceDepth, 2, "two stabilizations on the way here: the run is the third");
+    ST().leave();
+    assert.equal(lib.currentWork(), null, "left: the work is over");
+});
+
+await test("a block version sits on its mesh only while the mesh describes its blocks: the family's display follows the tree", () => {
+    const P = crypto.randomUUID();
+    S().setProject(detail(P));
+    const root = { ...modelFor(makeJob(P)), id: "r" };
+    const s1 = { ...modelFor(makeJob(P)), id: "s1", kind: "stabilized", source_model_id: "r", derived: { depth: 1 } };
+    const e1 = asEdited({ ...modelFor(makeJob(P)), id: "e1" }, { source: "s1", depth: 1 });
+    const o1 = asOptimized({ ...modelFor(makeJob(P)), id: "o1" }, { source: "s1", shapeChanged: false });
+    const o2 = asOptimized({ ...modelFor(makeJob(P)), id: "o2" }, { source: "s1", shapeChanged: true });
+    const d1 = asEdited({ ...modelFor(makeJob(P)), id: "d1" }, { source: "r", target: "design" });
+    const sd = { ...modelFor(makeJob(P)), id: "sd", kind: "stabilized", source_model_id: "d1", derived: { depth: 1 } };
+    for (const m of [root, s1, e1, o1, o2, d1, sd]) S().addModel(m);
+    const display = (id) => lib.versionFamily(S().models, id, lib.meshFailures())?.display.id;
+    assert.equal(display("s1"), "r", "stabilized: on the original's mesh");
+    assert.equal(display("e1"), "e1", "a block edit: its own blocks");
+    assert.equal(display("o1"), "r", "an optimization that kept the outside: on the mesh");
+    assert.equal(display("o2"), "o2", "one that thinned the outside: its own blocks");
+    assert.equal(display("d1"), "d1", "a design edit is its own mesh");
+    assert.equal(display("sd"), "d1", "the stabilizer worked on the edited mesh");
+    assert.equal(lib.versionFamily(S().models, "o1").onSource, true);
+    assert.equal(lib.versionFamily(S().models, "o2").onSource, false);
+    // A mesh that would not load: the version shows its own blocks until it is tried again.
+    lib.markMeshFailed("r");
+    assert.equal(display("s1"), "s1");
+    assert.equal(display("o1"), "o1");
+    lib.clearMeshFailures();
+    assert.equal(display("s1"), "r");
+    assert.deepEqual(lib.versionFamily(S().models, "o1").versions.map((m) => m.id).sort(), ["d1", "e1", "o1", "o2", "s1", "sd"], "every version below the original");
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

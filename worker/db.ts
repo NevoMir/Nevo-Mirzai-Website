@@ -7,9 +7,12 @@ import type {
     AnalysisSummary,
     BulkAction,
     DerivedMeta,
+    EditResult,
     HubProject,
     HubTag,
     Job,
+    JobEdit,
+    JobKind,
     JobStatus,
     ModelAsset,
     ModelKind,
@@ -18,6 +21,7 @@ import type {
     ProjectDetail,
     ProviderId,
 } from "../src/assignment/shared/contract.ts";
+import { readEditMeta, readOptimizeSummary } from "../src/assignment/shared/versionMeta.ts";
 import { readStoredAnalysis } from "./analysis.ts";
 import { stagingKeys } from "./providers/openrouter.ts";
 import type { Env } from "./providers/types.ts";
@@ -66,7 +70,7 @@ export interface ModelRow {
     source_model_id: string | null;
     example_slug: string | null;
     assembly_hash: string | null;
-    meta: string | null; // DerivedMeta as JSON (kind 'stabilized')
+    meta: string | null; // by kind: DerivedMeta ('stabilized'), EditMeta ('edited') or OptimizeSummary ('optimized') as JSON
 }
 
 export interface JobRow {
@@ -88,6 +92,10 @@ export interface JobRow {
     model_id: string | null;
     poll_errors: number;
     finalize_attempts: number;
+    kind: string; // JobKind: 'generate' | 'edit'
+    source_model_id: string | null; // the model an edit job works on
+    edit_target: string | null; // 'design' | 'mesh'
+    plan: string | null; // EditResult as JSON (edit jobs), <= 64 KB
 }
 
 const PROJECT_COLS =
@@ -103,7 +111,8 @@ export const STATIC_KEY_PREFIX = "static:";
 export const isStaticKey = (key: string): boolean => key.startsWith(STATIC_KEY_PREFIX);
 export const JOB_COLS =
     "id, project_id, provider, via, prompt, status, progress, stage, error, provider_task_id, provider_state, " +
-    "created_at, updated_at, polled_at, finished_at, model_id, poll_errors, finalize_attempts";
+    "created_at, updated_at, polled_at, finished_at, model_id, poll_errors, finalize_attempts, " +
+    "kind, source_model_id, edit_target, plan";
 
 // ---------- Mapping ----------
 
@@ -122,6 +131,23 @@ export function readStoredDerivedMeta(raw: string | null): DerivedMeta | null {
         }
     } catch {
         // damaged: the model then shows no log
+    }
+    return null;
+}
+
+/**
+ * The stored result of an edit job (jobs.plan). The consumer and the upload handler write it from their own validated objects, so this
+ * checks the shape only (it is on the read path of GET /jobs/:id and of the project payload).
+ */
+export function readStoredEditResult(raw: string | null): EditResult | null {
+    if (!raw) return null;
+    try {
+        const value: unknown = JSON.parse(raw);
+        if (isRecord(value) && (value.target === "design" || value.target === "mesh") && typeof value.applied === "boolean" && typeof value.summary === "string" && Array.isArray(value.notes)) {
+            return value as unknown as EditResult;
+        }
+    } catch {
+        // damaged: the job then shows no result
     }
     return null;
 }
@@ -165,10 +191,22 @@ export function toModelAsset(row: ModelRow): ModelAsset {
         source_model_id: row.source_model_id,
         example_slug: row.example_slug,
         derived: row.kind === "stabilized" ? readStoredDerivedMeta(row.meta) : null,
+        edit: row.kind === "edited" ? readEditMeta(row.meta) : null,
+        optimization: row.kind === "optimized" ? readOptimizeSummary(row.meta) : null,
     };
 }
 
-export function toJob(row: JobRow, model: ModelAsset | null): Job {
+/**
+ * `withPlan`: carry the edit job's stored result in `edit.result`. GET /jobs/:id always does; the project payload only for an edit job that
+ * succeeded and has no model: a mesh edit with a plan to apply ("Plan ready, apply?"), or a design edit that changed nothing (its reason must
+ * survive a reload). A long history of finished edits that made versions stays small.
+ */
+export function toJob(row: JobRow, model: ModelAsset | null, withPlan = true): Job {
+    const target = row.edit_target === "design" || row.edit_target === "mesh" ? row.edit_target : null;
+    const edit: JobEdit | null =
+        row.kind === "edit" && row.source_model_id && target
+            ? { source_model_id: row.source_model_id, target, result: withPlan ? readStoredEditResult(row.plan) : null }
+            : null;
     return {
         id: row.id,
         project_id: row.project_id,
@@ -182,6 +220,8 @@ export function toJob(row: JobRow, model: ModelAsset | null): Job {
         updated_at: row.updated_at,
         finished_at: row.finished_at,
         model,
+        kind: (row.kind as JobKind | undefined) === "edit" ? "edit" : "generate",
+        edit,
     };
 }
 
@@ -261,7 +301,7 @@ export async function getProjectDetail(env: Env, id: string): Promise<ProjectDet
         data: parseProjectData((data.results as Array<{ data: string }>)[0]?.data ?? ""),
         models: [...assets.values()],
         jobs: (jobs.results as unknown as JobRow[]).map((j) =>
-            toJob(j, j.model_id ? (assets.get(j.model_id) ?? null) : null),
+            toJob(j, j.model_id ? (assets.get(j.model_id) ?? null) : null, j.kind === "edit" && j.status === "succeeded" && !j.model_id),
         ),
     };
 }

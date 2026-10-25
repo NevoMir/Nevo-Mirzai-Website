@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Blocks, Box, Check, Download, Eye, RotateCcw } from "lucide-react";
+import { Box, Check, Download, Eye, RotateCcw } from "lucide-react";
 
+import { EditCard } from "@/assignment/components/chat/EditCard";
 import { Markdown } from "@/assignment/components/chat/Markdown";
 import { ElapsedTime } from "@/assignment/components/chat/ElapsedTime";
 import { StabilityLine } from "@/assignment/components/chat/StabilityLine";
@@ -8,6 +9,7 @@ import { GenerationProgressBar } from "@/assignment/components/workspace/Generat
 import { useShownProgress } from "@/assignment/components/workspace/useShownProgress";
 import { Button } from "@/assignment/components/ui/button";
 import { epochOf, exampleCoverUrl, formatBytes, modelFileName, partsLabel } from "@/assignment/components/workspace/format";
+import { KindIcon } from "@/assignment/components/workspace/KindIcon";
 import { cn } from "@/assignment/lib/utils";
 import type { Job, ModelAsset, ProviderInfo } from "@/assignment/shared/contract";
 import { designerNote, providerInfo, providerLabel, stageText, viaLabel } from "@/assignment/store/providers";
@@ -16,14 +18,14 @@ const chip = "rounded-full border border-border px-1.5 text-[10px] leading-4 tex
 const small = "h-7 gap-1.5 px-2.5 text-xs";
 
 /**
- * The model's picture: the provider's still, or for a bundled example its cover. A stabilized version has no image
- * of its own (it is made in the browser), so it gets a Blocks glyph on a tile tinted like its chip; the Box icon
+ * The model's picture: the provider's still, or for a bundled example its cover. A block version (stabilized, optimized, a change of the
+ * blocks) has no image of its own (it is made in the browser), so it gets its kind's glyph on a tile tinted like its chip; the Box icon
  * stands in for everything else (and for an image that fails to load).
  */
 export function ModelThumb({ model, className }: { model: ModelAsset; className?: string }) {
     const [failed, setFailed] = useState(false);
     const src = model.thumbnail_url ?? (model.kind === "example" && model.example_slug ? exampleCoverUrl(model.example_slug) : null);
-    const derived = model.kind === "stabilized";
+    const derived = model.kind === "stabilized" || model.kind === "optimized" || (model.kind === "edited" && model.edit?.target === "voxel");
     return (
         <div
             className={cn(
@@ -42,7 +44,7 @@ export function ModelThumb({ model, className }: { model: ModelAsset; className?
                     className="h-full w-full object-cover"
                 />
             ) : derived ? (
-                <Blocks className="h-1/2 w-1/2" strokeWidth={1.5} aria-hidden />
+                <KindIcon kind={model.kind} className="h-1/2 w-1/2" />
             ) : (
                 <Box className="h-1/2 w-1/2" strokeWidth={1.5} aria-hidden />
             )}
@@ -77,8 +79,15 @@ export interface JobCardProps {
     onRetry: (job: Job) => void;
 }
 
-/** One model's result for a prompt: progress while it runs, then the model or the reason it failed. */
-export function JobCard({ job, providers, active, canRetry, showPrompt = false, onView, onRetry }: JobCardProps) {
+/**
+ * One job's result for a prompt. A change of a design or a mesh (an "edit" job) has its own card (EditCard: what changed, Undo, Compare);
+ * a generation shows progress while it runs, then the model or the reason it failed.
+ */
+export function JobCard(props: JobCardProps) {
+    return props.job.kind === "edit" ? <EditCard job={props.job} /> : <GenerationCard {...props} />;
+}
+
+function GenerationCard({ job, providers, active, canRetry, showPrompt = false, onView, onRetry }: JobCardProps) {
     const info = providerInfo(providers, job.provider);
     const label = providerLabel(providers, job.provider);
     const via = viaLabel(info?.via);

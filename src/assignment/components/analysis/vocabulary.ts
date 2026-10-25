@@ -190,6 +190,7 @@ export const ROLE_WORDS: Record<BlockRole, string> = {
     bracket: "Brackets",
     bridge: "Bridges",
     reinforcement: "Thicker joints",
+    user: "Your edits",
 };
 
 /** One of them, as a tooltip or a card says it ("Thicker joint, added in step 3"). The GLB's node names (shared/assembly.ts) keep their own, older words. */
@@ -200,6 +201,7 @@ export const ROLE_WORD: Record<BlockRole, string> = {
     bracket: "Bracket",
     bridge: "Bridge",
     reinforcement: "Thicker joint",
+    user: "Your edit",
 };
 
 /** What a joint is going through at a stress point: "being pulled apart". */

@@ -12,8 +12,8 @@ export interface VersionSwitcherState {
 }
 
 /**
- * Whether the bar shows a switcher for the model in the viewer: "switch" when it has a stabilized version, "offer" when it
- * has problems and none yet, else "none". Read by the shell (layout) and by the switcher itself.
+ * Whether the bar shows a version control for the model in the viewer: "switch" when it has a version (stabilized, edited, optimized),
+ * "offer" when it has problems and none yet, else "none". Read by the shell (layout) and by the control itself.
  */
 export function useVersionSwitcherState(tab: WorkspaceTab): VersionSwitcherState {
     const family = useVersionFamily();

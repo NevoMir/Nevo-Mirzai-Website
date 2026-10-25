@@ -1,5 +1,5 @@
 // Tests for the projects side of stabilized models and examples: how the Models tab files and names models
-// (components/workspace/format.ts, modelGroups.ts), the example gallery's state and opening flow
+// (components/workspace/format.ts, shared/versionTree.ts), the example gallery's state and opening flow
 // (store/examples.ts), the model actions (store/models.ts) and the API client calls behind them (lib/api.ts).
 //
 //   node scripts/assignment/test-projects.mjs
@@ -40,7 +40,7 @@ export * from "@/assignment/store/examples";
 export * from "@/assignment/store/models";
 export * from "@/assignment/store/providers";
 export * from "@/assignment/components/workspace/format";
-export * from "@/assignment/components/workspace/modelGroups";
+export * from "@/assignment/shared/versionTree";
 export * from "@/assignment/lib/api";
 export { toasts } from "@/assignment/components/ui/sonner";
 `;
@@ -144,7 +144,7 @@ function model(over = {}) {
     return {
         id: uuid(), project_id: "p1", job_id: "", provider: "meshy", prompt: "a lamp", glb_url: "/x.glb", thumbnail_url: null,
         size_bytes: 1000, part_count: 1, created_at: iso(), analysis: null, kind: "generated", source_model_id: null,
-        example_slug: null, derived: null, ...over,
+        example_slug: null, derived: null, edit: null, optimization: null, ...over,
     };
 }
 const stabilizedOf = (source, over = {}) =>
@@ -241,6 +241,14 @@ await test("modelTitle marks a stabilized version and leaves every other model's
     assert.equal(lib.modelTitle({ prompt: "from an old server" }), "from an old server", "no kind reads as generated");
 });
 
+await test("modelTitle names an edited and an optimized version by what they did", () => {
+    assert.equal(lib.modelTitle(model({ prompt: "a lamp", kind: "edited", edit: { label: "Taller shade" } })), "Edited · Taller shade");
+    assert.equal(lib.modelTitle(model({ prompt: "a lamp", kind: "edited", edit: null })), "Edited · a lamp", "a version whose meta is unreadable still has a name");
+    assert.equal(lib.modelTitle(model({ prompt: "a lamp", kind: "optimized", optimization: { title: "Lightest" } })), "Optimized · Lightest");
+    assert.equal(lib.modelFileName(model({ prompt: "A lamp", provider: "editor", kind: "edited" })), "a-lamp-edited.glb");
+    assert.equal(lib.modelFileName(model({ prompt: "A lamp", provider: "optimizer", kind: "optimized" })), "a-lamp-optimized.glb");
+});
+
 await test("modelFileName ends in -stabilized / -example for those kinds and in the provider otherwise", () => {
     assert.equal(lib.modelFileName(model({ prompt: "A wooden rocking chair", provider: "meshy" })), "a-wooden-rocking-chair-meshy.glb");
     assert.equal(lib.modelFileName(model({ prompt: "A wooden rocking chair", provider: "stabilizer", kind: "stabilized" })), "a-wooden-rocking-chair-stabilized.glb");
@@ -263,7 +271,7 @@ await test("providerLabel names the two makers no provider list carries", () => 
 
 // ================= grouping =================
 
-await test("groupModels files a stabilized version under its source, newest source first", () => {
+await test("forestOf files a version under the model it was made from, newest root first", () => {
     const a = model({ prompt: "A" });
     const a1 = stabilizedOf(a);
     const a2 = stabilizedOf(a1);
@@ -271,18 +279,19 @@ await test("groupModels files a stabilized version under its source, newest sour
     const c = model({ prompt: "C", kind: "example", provider: "example" });
     const c1 = stabilizedOf(c);
     const a1b = stabilizedOf(a); // a second version of A
-    const groups = lib.groupModels([a, a1, b, a2, c, c1, a1b]);
-    assert.deepEqual(groups.map((g) => g.source.prompt), ["C", "B", "A"], "newest source first");
-    assert.deepEqual(groups[0].versions.map((v) => [v.model.id, v.depth]), [[c1.id, 1]]);
-    assert.deepEqual(groups[1].versions, []);
+    const edit = model({ prompt: "A", kind: "edited", provider: "editor", source_model_id: a1.id, edit: { target: "voxel" } }); // a change of the blocks, made from a1
+    const groups = lib.forestOf([a, a1, b, a2, c, c1, a1b, edit]);
+    assert.deepEqual(groups.map((g) => g.root.prompt), ["C", "B", "A"], "newest root first");
+    assert.deepEqual(groups[0].rows.map((r) => [r.model.id, r.depth]), [[c.id, 0], [c1.id, 1]]);
+    assert.deepEqual(groups[1].rows.map((r) => r.depth), [0]);
     assert.deepEqual(
-        groups[2].versions.map((v) => [v.model.id, v.depth]),
-        [[a1.id, 1], [a2.id, 2], [a1b.id, 1]],
-        "depth first: a version is followed by the versions made from it",
+        groups[2].rows.map((r) => [r.model.id, r.depth]),
+        [[a.id, 0], [a1.id, 1], [a2.id, 2], [edit.id, 2], [a1b.id, 1]],
+        "depth first: a version is followed by the versions made from it, edits of every kind alike",
     );
 });
 
-await test("groupModels never hides a model: orphans, self references and cycles stand as sources", () => {
+await test("forestOf never hides a model: orphans, self references and cycles stand as roots", () => {
     const gone = model();
     const orphan = stabilizedOf(gone); // its source is not in the list
     const lonely = model({ kind: "stabilized", provider: "stabilizer" });
@@ -292,45 +301,38 @@ await test("groupModels never hides a model: orphans, self references and cycles
     x.source_model_id = y.id; // x <-> y
     const plain = model();
     const list = [plain, orphan, lonely, x, y];
-    const groups = lib.groupModels(list);
-    const seen = groups.flatMap((g) => [g.source.id, ...g.versions.map((v) => v.model.id)]);
+    const groups = lib.forestOf(list);
+    const seen = groups.flatMap((g) => g.rows.map((r) => r.model.id));
     assert.equal(seen.length, list.length, "each model appears exactly once");
     assert.deepEqual([...seen].sort(), list.map((m) => m.id).sort());
-    assert.equal(groups.find((g) => g.source.id === orphan.id)?.versions.length, 0);
-    assert.deepEqual(lib.groupModels([]), []);
+    assert.equal(groups.find((g) => g.root.id === orphan.id)?.rows.length, 1);
+    assert.deepEqual(lib.forestOf([]), []);
 });
 
-await test("a generated model with a source_model_id is still a source (only stabilized versions nest)", () => {
+await test("a generated model with a source_model_id is still a root (only versions nest)", () => {
     const a = model();
     const odd = model({ source_model_id: a.id }); // kind generated
-    assert.equal(lib.groupModels([a, odd]).length, 2);
+    assert.equal(lib.forestOf([a, odd]).length, 2);
 });
 
-await test("descendantsOf takes the whole family, sourceOf and pairOf point the right way", () => {
+await test("subtreeIds takes the whole family; parentOf and stepTarget point the right way", () => {
     const a = model();
     const a1 = stabilizedOf(a);
     const a2 = stabilizedOf(a1);
     const a1b = stabilizedOf(a);
     const other = model();
     const list = [a, a1, a2, a1b, other];
-    assert.deepEqual(lib.descendantsOf(list, a1.id).map((m) => m.id), [a2.id]);
-    assert.deepEqual(lib.descendantsOf(list, a.id).map((m) => m.id).sort(), [a1.id, a1b.id, a2.id].sort());
-    assert.deepEqual(lib.descendantsOf(list, other.id), []);
+    assert.deepEqual(lib.subtreeIds(list, a1.id), [a1.id, a2.id]);
+    assert.deepEqual([...lib.subtreeIds(list, a.id)].sort(), [a.id, a1.id, a1b.id, a2.id].sort());
+    assert.deepEqual(lib.subtreeIds(list, other.id), [other.id]);
 
-    assert.equal(lib.sourceOf(a1, list)?.id, a.id);
-    assert.equal(lib.sourceOf(a, list), null);
-    assert.equal(lib.sourceOf(stabilizedOf(model()), list), null, "source not in the list");
-
-    assert.deepEqual(lib.pairOf(a1, list) && { id: lib.pairOf(a1, list).model.id, label: lib.pairOf(a1, list).label }, { id: a.id, label: "Original" });
-    assert.deepEqual(
-        lib.pairOf(a, list) && { id: lib.pairOf(a, list).model.id, label: lib.pairOf(a, list).label },
-        { id: a1b.id, label: "Stabilized" },
-        "an original points at its newest version",
-    );
-    assert.equal(lib.pairOf(a2, list)?.model.id, a1.id, "a version of a version points at the one before it");
-    assert.equal(lib.pairOf(a2, list)?.label, "Previous");
-    assert.equal(lib.pairOf(other, list), null, "nothing to flip to");
-    assert.equal(lib.pairOf(stabilizedOf(model()), list), null, "a version whose source is gone has no pair");
+    assert.equal(lib.parentOf(list, a1)?.id, a.id);
+    assert.equal(lib.parentOf(list, a), null);
+    assert.equal(lib.parentOf(list, stabilizedOf(model())), null, "source not in the list");
+    assert.equal(lib.stepTarget(list, a, "child")?.id, a1b.id, "an original points at its newest child");
+    assert.equal(lib.stepTarget(list, a2, "parent")?.id, a1.id, "a version of a version points at the one before it");
+    assert.equal(lib.stepTarget(list, other, "child"), null, "nothing to step to");
+    assert.equal(lib.ordinalOf(list, a2) >= 2, true);
 });
 
 // ================= the store =================
@@ -350,7 +352,7 @@ await test("sanitizeMessages keeps model_ids (strings only, at most 10) next to 
     assert.deepEqual(out[3].job_ids, ["j"]);
 });
 
-await test("setProject fills kind and the source fields a server from before the stabilizer does not send", () => {
+await test("setProject fills kind and the source, edit and optimization fields a server from before them does not send", () => {
     const old = { id: "m", project_id: "p", job_id: "j", provider: "meshy", prompt: "p", glb_url: "/g", thumbnail_url: null, size_bytes: 1, part_count: 1, created_at: iso(), analysis: null };
     const fresh = model({ kind: "stabilized", source_model_id: "m", example_slug: "s" });
     S().setProject({ ...exampleProject().detail, models: [old, fresh] });
@@ -359,6 +361,8 @@ await test("setProject fills kind and the source fields a server from before the
     assert.equal(a.source_model_id, null);
     assert.equal(a.example_slug, null);
     assert.equal(a.derived, null);
+    assert.equal(a.edit, null, "a server from before edits sends no edit record");
+    assert.equal(a.optimization, null);
     assert.equal(b, fresh, "a complete row is passed through untouched");
     S().addModel({ ...old, id: "n" });
     assert.equal(S().models.find((m) => m.id === "n").kind, "generated");
@@ -722,35 +726,41 @@ await test("a second click while one example is opening does nothing (one projec
 
 // ================= model actions =================
 
-await test("deleteStabilized deletes the version and its family, and the viewer goes back to the source", async () => {
+await test("deleteVersion deletes the version and its family, and the viewer goes back to the source", async () => {
     const a = model();
     const a1 = stabilizedOf(a, { derived: null });
     const a2 = stabilizedOf(a1);
     const other = model();
     S().setProject({ ...exampleProject().detail, models: [a, a1, a2, other], data: { messages: [], active_model_id: a2.id } });
-    const result = await lib.deleteStabilized(a1);
+    const result = await lib.deleteVersion(a1);
     assert.deepEqual(result, { ok: true, removed: [a1.id, a2.id] });
     assert.deepEqual(calls.map((c) => [c.method, c.path]), [["DELETE", `/models/${a1.id}`]], "one request: the server removes the rest");
     assert.deepEqual(S().models.map((m) => m.id), [a.id, other.id]);
     assert.equal(S().activeModelId, a.id, "back on the model the version was made from");
-    assert.equal(lib.toasts.at(-1).title, "Deleted 2 stabilized versions");
+    assert.equal(lib.toasts.at(-1).title, "Deleted 2 versions");
 });
 
-await test("deleteStabilized refuses anything that is not a stabilized version, without a request", async () => {
+await test("deleteVersion deletes an edited or optimized version too, and refuses a root, without a request", async () => {
     const a = model();
-    S().setProject({ ...exampleProject().detail, models: [a], data: { messages: [], active_model_id: a.id } });
-    const result = await lib.deleteStabilized(a);
+    const e = model({ kind: "edited", provider: "editor", source_model_id: a.id, edit: { target: "voxel" } });
+    const o = model({ kind: "optimized", provider: "optimizer", source_model_id: e.id, optimization: { title: "Lightest" } });
+    S().setProject({ ...exampleProject().detail, models: [a, e, o], data: { messages: [], active_model_id: o.id } });
+    assert.deepEqual(await lib.deleteVersion(e), { ok: true, removed: [e.id, o.id] });
+    assert.deepEqual(S().models.map((m) => m.id), [a.id]);
+    assert.equal(S().activeModelId, a.id);
+    calls.length = 0;
+    const result = await lib.deleteVersion(a);
     assert.equal(result.ok, false);
     assert.equal(calls.length, 0);
     assert.equal(S().models.length, 1);
 });
 
-await test("deleteStabilized keeps everything when the server says no", async () => {
+await test("deleteVersion keeps everything when the server says no", async () => {
     const a = model();
     const a1 = stabilizedOf(a);
     S().setProject({ ...exampleProject().detail, models: [a, a1], data: { messages: [], active_model_id: a1.id } });
     fake.del = () => ({ status: 409, json: { error: "Source is in the bin." } });
-    const result = await lib.deleteStabilized(a1);
+    const result = await lib.deleteVersion(a1);
     assert.deepEqual(result, { ok: false, error: "Source is in the bin." });
     assert.equal(S().models.length, 2);
     assert.equal(S().activeModelId, a1.id);

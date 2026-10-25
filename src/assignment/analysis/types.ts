@@ -233,6 +233,19 @@ export interface AnalysisResult {
 
 export type AnalysisColorBy = "status" | "reach" | "layer" | "stress" | "role";
 
+/**
+ * What changed between two versions of the blocks, for the block view to draw over the result on stage (the optimizer's "what changed"):
+ * the blocks that are gone as faint red ghost cubes, the blocks that are new with a green ring, and the others dimmed. Grid cells [i, j, k].
+ */
+export interface AnalysisDiff {
+    /** Blocks that were there and are not any more. */
+    removed: ReadonlyArray<readonly [number, number, number]>;
+    /** Blocks that were not there and are now (they are blocks of the result on stage). */
+    added: ReadonlyArray<readonly [number, number, number]>;
+    /** Dim every block of the result so the changes stand out. */
+    dimRest: boolean;
+}
+
 /** How the viewer shows an analysis. Owned by the workspace, passed to <GlbViewer analysisView>. */
 export interface AnalysisViewState {
     mode: "model" | "blocks"; // "blocks" = the analysis view (block assembly + overlays)
@@ -243,6 +256,8 @@ export interface AnalysisViewState {
     highlight: number[]; // block indices to emphasise (others dimmed); [] = none
     /** Bumped to ask the viewer to frame `focusMm` (an issue was clicked); the viewer animates the camera to it. */
     focus: { mm: Vec3; token: number; label?: string } | null;
+    /** What changed against another version of the blocks (store/optimize.ts sets it on a result); absent or null: nothing is marked. */
+    diff?: AnalysisDiff | null;
 }
 
 export const DEFAULT_ANALYSIS_VIEW: AnalysisViewState = {

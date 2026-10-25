@@ -24,8 +24,11 @@
 
 import type { AnalysisResult, AnalysisSettings, AnalysisTransform, TriangleSoup, Vec3 } from "./types.ts";
 import { CELL_STRIDE, type AssemblyDescriptor } from "../shared/assembly.ts";
+import type { PartLabels } from "../shared/voxelEdit/grid.ts";
+import { noLabels } from "../shared/voxelEdit/labels.ts";
 import { analyzeGrid } from "./analyze.ts";
 import { annotateRoles, boundsOf, gridFromAssembly, settingsForAssembly, type Bounds } from "./assembly.ts";
+import type { PartSoup } from "./partLabels.ts";
 import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 import { normalizeSettings } from "./settings.ts";
 import { voxelize } from "./voxelize.ts";
@@ -406,4 +409,95 @@ export async function runAnalysis(source: SoupSource, settingsInput: Partial<Ana
         results.delete(oldest);
     }
     return result;
+}
+
+// ---------- which part each block belongs to ----------
+
+export interface LabelOptions {
+    signal?: AbortSignal;
+}
+
+function labelInWorker(worker: Worker, parts: readonly PartSoup[], usedCells: readonly number[], settings: AnalysisSettings, options: LabelOptions): Promise<PartLabels> {
+    return new Promise<PartLabels>((resolve, reject) => {
+        const id = nextId++;
+        let settled = false;
+        const finish = (action: () => void) => {
+            if (settled) return;
+            settled = true;
+            worker.onmessage = null;
+            worker.onerror = null;
+            worker.onmessageerror = null;
+            options.signal?.removeEventListener("abort", onAbort);
+            action();
+        };
+        const onAbort = () =>
+            finish(() => {
+                worker.terminate();
+                reject(abortError());
+            });
+        worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+            const message = event.data;
+            if (message.id !== id) return;
+            if (message.kind === "labels") {
+                finish(() => {
+                    releaseWorker(worker);
+                    resolve(message.labels);
+                });
+            } else if (message.kind === "error") {
+                finish(() => {
+                    releaseWorker(worker);
+                    reject(new Error(message.message));
+                });
+            }
+        };
+        worker.onerror = (event: ErrorEvent) =>
+            finish(() => {
+                worker.terminate();
+                reject(new WorkerUnavailable(event.message || "The analysis worker failed."));
+            });
+        worker.onmessageerror = () =>
+            finish(() => {
+                worker.terminate();
+                reject(new WorkerUnavailable("The analysis worker sent a message that could not be read."));
+            });
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        if (options.signal?.aborted) {
+            onAbort();
+            return;
+        }
+        try {
+            // Copied, not moved: the page may need the soups again if this worker cannot do it.
+            const request: WorkerRequest = { kind: "labels", id, parts: parts.map((p) => ({ name: p.name, positions: p.positions })), usedCells: [...usedCells], settings };
+            worker.postMessage(request);
+        } catch (error) {
+            finish(() => {
+                worker.terminate();
+                reject(error);
+            });
+        }
+    });
+}
+
+/**
+ * Which part of the mesh each block belongs to: `parts` is one triangle soup per glTF part (viewer/glbScene.ts partSoups) in the viewer's
+ * frame, `usedCells` the codes of the blocks of the model's analysis (cell code = (k * 10 + j) * 10 + i). A model with fewer than two parts
+ * has no labels (nothing is computed). Runs in the analysis worker, else on the page. Rejects with an AbortError when cancelled.
+ */
+export async function labelModel(parts: readonly PartSoup[], usedCells: readonly number[], settingsInput: Partial<AnalysisSettings> = {}, options: LabelOptions = {}): Promise<PartLabels> {
+    throwIfAborted(options.signal);
+    if (parts.length < 2 || usedCells.length === 0) return noLabels();
+    const settings = normalizeSettings(settingsInput);
+    const worker = takeWorker();
+    if (worker) {
+        try {
+            return await labelInWorker(worker, parts, usedCells, settings, options);
+        } catch (error) {
+            if (!(error instanceof WorkerUnavailable)) throw error;
+        }
+    }
+    // One tick so the caller can show "reading the model" before the page freezes for a moment.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    throwIfAborted(options.signal);
+    const { labelParts } = await import("./partLabels.ts");
+    return labelParts(parts, usedCells, settings);
 }

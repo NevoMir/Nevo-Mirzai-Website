@@ -3,8 +3,11 @@
 // queue consumer, the Node tests and the browser share it.
 //
 //   MUSE_SCHEMA / MUSE_SYSTEM_PROMPT   the request: a strict JSON schema and the instructions the model gets
-//   repairDesign(raw)                  an untrusted model answer -> a clean, normalised PartsDesign (or null: nothing usable)
+//   repairDesign(raw, opts?)           an untrusted model answer -> a clean, normalised PartsDesign (or null: nothing usable)
+//   cleanParts(raw, max?)              the per-part cleaning of repairDesign alone (no centring, no grounding): for parts that are placed on
+//                                      something else (an edit's new parts, add_parts on a mesh)
 //   normalizeParts(parts)              scale to fit the 1000 mm cube, centre on X/Y, put the lowest point on z = 0
+//   PARTS_FORMAT_PROMPT                the units / size / rotation paragraph of the system prompt, reused by the edit prompts
 //
 // Frame: millimetres, Z up, ground at z = 0 (the frame of the analysis engine). rotation = degrees about the world X, Y and
 // Z axes, applied in that order around the part's own centre (matrix Rz Ry Rx). The GLB writer converts to glTF's Y-up.
@@ -81,6 +84,9 @@ export const MUSE_SYSTEM_PROMPT =
     "around the part's centre (to lay a cylinder along X use [0, 90, 0], along Y use [90, 0, 0]). " +
     "The object fits a 1000 mm cube and rests on the ground. Parts must touch or overlap so the assembly is one connected " +
     "object that can stand on its own. Use realistic proportions, 6-40 parts, short descriptive names and #rrggbb colours.";
+
+/** The units, size and rotation paragraph of the prompt above (what a part looks like), reused by the edit prompts (shared/partsEdit.ts). */
+export const PARTS_FORMAT_PROMPT = MUSE_SYSTEM_PROMPT.split(" The object fits")[0].replace(/^You design[^.]*\. /, "");
 
 // ---------- cleaning ----------
 
@@ -333,6 +339,45 @@ export function normalizeParts(parts: readonly DesignPart[]): { parts: DesignPar
 
 // ---------- the whole repair ----------
 
+export interface CleanedParts {
+    /** The parts that survived, names made unique. Not moved, centred or scaled. */
+    parts: DesignPart[];
+    /** Parts of the answer that were dropped (invalid) or cut (beyond `max`). */
+    dropped: number;
+    notes: string[];
+}
+
+/**
+ * The per-part half of repairDesign: drops parts that cannot be built (unknown shape, missing or non-finite size or position), clamps what
+ * can be clamped (sizes 5-1000 mm, positions, angles), replaces bad colours, keeps at most `max` parts and makes the names unique. It does
+ * not move anything: use it where the parts' positions mean something (new parts of an edit, parts added to a scanned mesh). Never throws.
+ */
+export function cleanParts(rawParts: unknown, max: number = MAX_PARTS): CleanedParts {
+    if (!Array.isArray(rawParts)) return { parts: [], dropped: 0, notes: [] };
+    const considered = rawParts.slice(0, MAX_CONSIDERED);
+    const valid: DesignPart[] = [];
+    const limited: string[] = []; // parts whose size or place was brought inside what the app can build
+    let invalid = 0;
+    considered.forEach((item, index) => {
+        const part = cleanPart(item, index);
+        if (part) {
+            valid.push(part);
+            const size = isRecord(item) ? cleanVec3(item.size) : null;
+            const position = isRecord(item) ? cleanVec3(item.position) : null;
+            if ((size && size.some((n) => Math.abs(n) > MAX_PART_MM || Math.abs(n) < MIN_PART_MM)) || (position && position.some((n) => Math.abs(n) > MAX_POSITION_MM))) limited.push(part.name);
+        } else invalid += 1;
+    });
+    const notes: string[] = [];
+    if (limited.length > 0) notes.push(`limited the size or place of ${limited.slice(0, 3).join(", ")}${limited.length > 3 ? ` and ${limited.length - 3} more` : ""} to what can be built (parts are 5 to 1000 mm)`);
+    if (invalid > 0) notes.push(`dropped ${invalid} part${invalid === 1 ? "" : "s"} that could not be built`);
+    const beyond = valid.length > max ? valid.length - max : 0;
+    const cut = beyond + Math.max(0, rawParts.length - MAX_CONSIDERED);
+    if (cut > 0) notes.push(`kept the first ${max} parts, dropped ${cut}`);
+    const kept = valid.slice(0, max);
+    const names = uniqueNames(kept.map((p) => p.name));
+    return { parts: kept.map((part, i) => ({ ...part, name: names[i] })), dropped: invalid + cut, notes };
+}
+
 export interface RepairResult {
     /** The clean design, or null when no part survived. */
     design: PartsDesign | null;
@@ -343,35 +388,24 @@ export interface RepairResult {
     info: Normalization | null;
 }
 
+export interface RepairOptions {
+    /** Most parts to keep (default MAX_PARTS = 60; an edited design may have more, MAX_EDIT_PARTS = 120 in contract.ts). */
+    maxParts?: number;
+}
+
 /**
  * An untrusted model answer -> a clean design. Drops parts that cannot be built (unknown shape, missing or non-finite
  * size or position), clamps what can be clamped (sizes 5-1000 mm, positions, angles), replaces bad colours, makes names
- * unique, keeps at most 60 parts, then normalises the assembly (see normalizeParts).
+ * unique, keeps at most 60 parts (`opts.maxParts`), then normalises the assembly (see normalizeParts).
  */
-export function repairDesign(raw: unknown): RepairResult {
+export function repairDesign(raw: unknown, opts: RepairOptions = {}): RepairResult {
     const empty: RepairResult = { design: null, dropped: 0, notes: [], info: null };
     if (!isRecord(raw) || !Array.isArray(raw.parts)) return { ...empty, notes: ["the answer has no parts list"] };
 
-    const considered = raw.parts.slice(0, MAX_CONSIDERED);
-    const valid: DesignPart[] = [];
-    let invalid = 0;
-    considered.forEach((item, index) => {
-        const part = cleanPart(item, index);
-        if (part) valid.push(part);
-        else invalid += 1;
-    });
-    const notes: string[] = [];
-    if (invalid > 0) notes.push(`dropped ${invalid} part${invalid === 1 ? "" : "s"} that could not be built`);
-    const beyond = valid.length > MAX_PARTS ? valid.length - MAX_PARTS : 0;
-    const cut = beyond + Math.max(0, raw.parts.length - MAX_CONSIDERED);
-    if (cut > 0) notes.push(`kept the first ${MAX_PARTS} parts, dropped ${cut}`);
-    const kept = valid.slice(0, MAX_PARTS);
-    if (kept.length === 0) return { design: null, dropped: invalid + cut, notes, info: null };
-
-    const names = uniqueNames(kept.map((p) => p.name));
-    const named = kept.map((part, i) => ({ ...part, name: names[i] }));
+    const { parts: named, dropped, notes } = cleanParts(raw.parts, opts.maxParts ?? MAX_PARTS);
+    if (named.length === 0) return { design: null, dropped, notes, info: null };
     const normalized = normalizeParts(named);
-    if (!normalized) return { design: null, dropped: invalid + cut, notes, info: null };
+    if (!normalized) return { design: null, dropped, notes, info: null };
     const { parts, info } = normalized;
     if (info.scale < 1) notes.push(`scaled to ${Math.round(info.scale * 100)}% to fit the 1000 mm cube`);
     if (Math.abs(info.lifted_mm) >= 1) {
@@ -379,7 +413,7 @@ export function repairDesign(raw: unknown): RepairResult {
     }
     return {
         design: { name: cleanTitle(raw.name), parts },
-        dropped: invalid + cut,
+        dropped,
         notes,
         info,
     };

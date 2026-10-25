@@ -1379,7 +1379,7 @@ await test("runAnalysis of a block assembly (main thread): the cells are the blo
     const r = await runAnalysis(source, {}, { assembly: desc, cacheKey: "asm", onProgress: (p) => { stages.push(p.step); if (p.progress < last - 1e-9) monotone = false; last = p.progress; } });
     assert.equal(r.blocks.length, assemblyBlockCount(desc));
     assert.equal(r.timingsMs.voxelize, 0, "nothing was voxelised");
-    assert.deepEqual(r.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0]);
+    assert.deepEqual(r.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0, 0]);
     assert.deepEqual(r.blocks.filter((b) => b.role === "column").map((b) => b.step), [1, 1, 1, 1]);
     assert.ok(r.blocks.filter((b) => b.role === "original").every((b) => b.step === 0));
     assert.equal(r.stress.solver.backend, "wasm");
@@ -1667,7 +1667,7 @@ await test("runAnalysis with a sourceTransform (main thread): the blocks are pla
     assert.equal(extracted, 0, "the placement is given: nothing is read from the viewer");
     assert.deepEqual(placed.transform, T);
     assert.equal(placed.blocks.length, assemblyBlockCount(desc));
-    assert.deepEqual(placed.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0]);
+    assert.deepEqual(placed.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0, 0]);
     assert.ok(placed.stress, "the stress stage ran");
     // The numbers are the assembly's whatever the placement.
     const own = await runAnalysis(assemblySoup(desc), {}, { assembly: desc, cacheKey: "stab@own" });

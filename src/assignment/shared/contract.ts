@@ -2,6 +2,13 @@
 // Pure types and constants only: this file is compiled by both the browser and the Worker tsconfig.
 // All JSON is snake_case; every timestamp is an ISO-8601 UTC string.
 
+// Type-only imports from the feature modules (erased at build time, so this file stays free of runtime imports and cycles).
+import type { MeshProgram } from "./meshProgram.ts";
+import type { Brief, OptimizationSpec } from "./optimizeSpec.ts";
+import type { OptimizeMetrics } from "./optimizeMeta.ts";
+
+export type { OptimizeMetrics };
+
 export const APP_BASE = "/assignment_alex";
 export const API_BASE = "/api/assignment_alex";
 export const ACCESS_HEADER = "x-access-code";
@@ -42,6 +49,15 @@ export interface ProvidersResponse {
     access_required: boolean; // POST /generate needs the ACCESS_HEADER
     daily_limit: number | null; // null = no daily cap
     used_today: number;
+    /** The AI editor (natural-language edits and optimization goals, Muse Spark via OpenRouter). Absent on a server from before it. */
+    assist?: {
+        available: boolean; // the OpenRouter key is set: block edits and optimization goals work
+        queued: boolean; // the queue binding exists: design and mesh edits work
+        images: boolean; // the model reads pictures (mesh edits)
+        model: string; // OpenRouter model id
+        daily_limit: number | null; // AI calls per UTC day, null = no cap
+        used_today: number;
+    };
 }
 
 // ---------- Jobs and models ----------
@@ -53,11 +69,23 @@ export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed
  * Where a model came from. "generated": a text-to-3D provider made it (every model before the stabilizer existed).
  * "example": the original model of a bundled example (src/assignment examples manifest), shared by every project
  * made from it. "stabilized": the corrected block assembly the browser built from another model of the project.
+ * "edited": a version made from another one by words (EditMeta.target says how: a changed parts design, a changed mesh,
+ * or changed blocks). "optimized": a block assembly the optimizer made from a block version (OptimizeSummary).
+ * Every kind except the two roots (generated, example) has a `source_model_id`: the project's versions form a tree.
  */
-export type ModelKind = "generated" | "example" | "stabilized";
+export type ModelKind = "generated" | "example" | "stabilized" | "edited" | "optimized";
 
-/** `provider` of a model: a text-to-3D model, "example" (bundled) or "stabilizer" (made in the browser). */
-export type ModelProvider = ProviderId | "example" | "stabilizer";
+/**
+ * `provider` of a model: a text-to-3D model, "example" (bundled) or one of the browser-side makers: "stabilizer",
+ * "editor" (block edits), "optimizer". A design or mesh edit keeps the provider of the model it was made from.
+ */
+export type ModelProvider = ProviderId | "example" | "stabilizer" | "editor" | "optimizer";
+
+/** What an edit changes: the parts of a Muse design, the mesh of a fused model, or the blocks of a block version. */
+export type EditTarget = "design" | "mesh" | "voxel";
+/** Jobs on the queue: generating a model, or an edit of target "design" or "mesh". */
+export type JobKind = "generate" | "edit";
+export type MeshOpName = "stretch" | "move" | "scale" | "rotate" | "delete" | "recolor" | "add_parts" | "mirror_copy";
 
 /**
  * A model stored in our own R2 (provider URLs expire and lack CORS), or shipped with the site (kind "example").
@@ -66,7 +94,7 @@ export type ModelProvider = ProviderId | "example" | "stabilizer";
 export interface ModelAsset {
     id: string;
     project_id: string;
-    job_id: string; // "" for a model that no job made (examples); a stabilized model carries its source's job id
+    job_id: string; // "" for a model that no job made (examples); a block version carries its source's job id; a design/mesh edit its edit job
     provider: ModelProvider;
     prompt: string;
     glb_url: string; // same-origin: `${API_BASE}/files/models/${id}.glb`, or `${APP_BASE}/examples/<slug>/<file>.glb` for examples
@@ -76,12 +104,16 @@ export interface ModelAsset {
     created_at: string;
     analysis: AnalysisSummary | null; // the latest block analysis, saved by the client after it runs
     kind: ModelKind;
-    /** The model this one was made from (stabilized only; same project). */
+    /** The model this one was made from (every kind but generated and example; same project). */
     source_model_id: string | null;
     /** The bundled example this model belongs to (kind "example", and the stabilized twin made from it). */
     example_slug: string | null;
     /** What the stabilizer did (kind "stabilized"), else null. */
     derived: DerivedMeta | null;
+    /** What an edited version records (kind "edited"), else null. The full log of a block edit is inside the GLB. */
+    edit: EditMeta | null;
+    /** The optimizer's goal and result figures (kind "optimized"), else null. The full log is inside the GLB. */
+    optimization: OptimizeSummary | null;
 }
 
 /**
@@ -113,11 +145,14 @@ export interface AnalysisSummary {
 
 // ---------- Stress, block roles, stabilized models ----------
 
-/** What a block of an assembly is for. "original" blocks were in the analysed model; the others were added to it. */
-export type BlockRole = "original" | "column" | "footing" | "bracket" | "bridge" | "reinforcement";
-export const BLOCK_ROLES: readonly BlockRole[] = ["original", "column", "footing", "bracket", "bridge", "reinforcement"];
-/** The roles the stabilizer adds (every role except "original"). */
-export type AddedRole = Exclude<BlockRole, "original">;
+/**
+ * What a block of an assembly is for. "original" blocks were in the analysed model; "user" blocks were made or moved by a
+ * natural-language edit; the others were added by the stabilizer ("reinforcement" also by the optimizer).
+ */
+export type BlockRole = "original" | "column" | "footing" | "bracket" | "bridge" | "reinforcement" | "user";
+export const BLOCK_ROLES: readonly BlockRole[] = ["original", "column", "footing", "bracket", "bridge", "reinforcement", "user"];
+/** The roles the stabilizer adds (every role except "original" and "user"). */
+export type AddedRole = Exclude<BlockRole, "original" | "user">;
 
 /** Block material of the stress estimate (src/assignment/analysis/materials.ts has the numbers). */
 export type MaterialId = "concrete" | "timber";
@@ -196,15 +231,121 @@ export interface DerivedMeta {
 export const DERIVED_GLB_LIMIT = 1024 * 1024; // a 1000-block assembly is 650 KB
 export const DERIVED_META_LIMIT = 32 * 1024;
 export const MAX_STABILIZE_STEPS = 60;
-export const MAX_DERIVED_PER_SOURCE = 5;
-export const MAX_DERIVED_PER_PROJECT = 20;
-export const MAX_DERIVED_DEPTH = 3;
+
+// ---------- Versions: limits (one set for stabilized, edited and optimized versions together) ----------
+
+export const EDIT_INSTRUCTION_MAX = 500; // all three edit targets
+export const EDITED_GLB_LIMIT = 48 * 1024 * 1024; // mesh edit upload
+export const EDIT_PACKAGE_LIMIT = 400 * 1024; // mesh picture package (JSON)
+export const MAX_EDIT_PARTS = 120; // design parts after an edit (generation keeps MAX_PARTS = 60)
+export const MAX_MESH_OPS = 12;
+export const MAX_ADDED_PARTS = 40; // parts added by add_parts ops in one program
+export const MAX_EDIT_TRIANGLES = 1_200_000;
+export const MAX_VOXEL_OPS = 8; // per instruction
+export const MAX_VOXEL_EDITS_PER_VERSION = 12; // instructions in one saved block version
+export const EDIT_META_LIMIT = 8 * 1024; // models.meta of an edited row (slim entries truncate the instruction to 160 chars)
+export const OPTIMIZE_SUMMARY_LIMIT = 4 * 1024; // models.meta of an optimized row
+export const MAX_VERSIONS_PER_SOURCE = 10; // all derived kinds together (was MAX_DERIVED_PER_SOURCE = 5)
+export const MAX_VERSIONS_PER_PROJECT = 40; // (was MAX_DERIVED_PER_PROJECT = 20)
+export const MAX_MESH_EDITS_PER_PROJECT = 6; // edited rows with target "mesh" (15 to 28 MB each)
+export const MAX_VERSION_DEPTH = 12; // ancestors of any kind above a version
+export const MAX_DERIVED_DEPTH = 3; // UNCHANGED: stabilizations on one chain
+export const MAX_DERIVED_PER_SOURCE = MAX_VERSIONS_PER_SOURCE; // aliases, so old imports compile
+export const MAX_DERIVED_PER_PROJECT = MAX_VERSIONS_PER_PROJECT;
+// The second pass (zoomed pictures of the first selection) stays OFF. Live check on 5 delete cases of the Hunyuan chair (scripts/assignment/
+// live-mesh-delete-score.mjs, reference regions): 2 improved, 1 same, 2 worse; the rule was 4 of 5. Turn on ["delete", "mirror_copy"] only after a
+// run that reaches it.
+export const MESH_REFINE_OPS: readonly MeshOpName[] = [];
+
+// ---------- What an edited row records (models.meta; built by the SERVER, <= EDIT_META_LIMIT) ----------
+
+/** Part names of a design edit, each list at most 60. */
+export interface EditChanges {
+    added: string[];
+    changed: string[];
+    removed: string[];
+}
+
+/** One instruction and what became of it. */
+export interface EditEntry {
+    n: number; // 1-based
+    instruction: string; // <= 160 in this slim copy (full text: VoxelEditLog in the GLB, or jobs.prompt)
+    summary: string; // the model's one sentence, <= 200
+    /** Blocks (voxel) or parts (design: added / removed / changed). */
+    added: number;
+    removed: number;
+    moved: number;
+}
+
+export interface EditMeta {
+    version: 1;
+    target: EditTarget;
+    depth: number; // server-computed: ancestors above this version, 1 = made from a root
+    label: string; // <= 40, the version's name ("Taller back")
+    summary: string; // <= 240, the last entry's sentence
+    entries: EditEntry[]; // 1..12; design and mesh: exactly 1
+    engine: string; // OpenRouter model id, "" when none
+    changes: EditChanges | null; // design only
+    ops: { op: MeshOpName; label: string }[] | null; // mesh only, <= 12
+    notes: string[]; // <= 8 lines, each <= 160 ("scaled to 98% to fit the 1000 mm cube")
+    stabilized_depth: number; // stabilizations on the path root to here (0 for design/mesh edits of a root)
+    base_steps: number; // voxel: highest step of the source; 0 otherwise
+    job_id: string | null; // design/mesh: the edit job
+    created_at: string;
+}
+
+// ---------- What an optimized row records (models.meta; the full log is in the GLB) ----------
+
+export type OptimizeMetricKey = "blocks" | "peak_stress" | "cog_margin" | "deflection";
+
+export interface OptimizeSummary {
+    version: 1;
+    title: string; // spec.title, <= 48
+    goal: string; // the person's words, or the chip's label, <= 300
+    objective: OptimizeMetricKey[]; // 1..3
+    stop: "converged" | "target-reached" | "budget-used" | "max-iterations" | "max-solves" | "time-budget" | "canceled" | "infeasible";
+    shape_changed: boolean; // true iff a visible-surface block of the source was removed
+    stabilized_depth: number;
+    removed: number;
+    added: number;
+    before: OptimizeMetrics;
+    after: OptimizeMetrics; // OptimizeMetrics is declared in shared/optimizeMeta.ts and re-exported here
+    iterations: number;
+    solves: number;
+    duration_ms: number;
+    solver: "awatif-wasm" | "awatif-ts";
+    material: MaterialId;
+    created_at: string;
+}
+
+// ---------- Edit jobs (design and mesh only) ----------
+
+/** jobs.plan JSON, <= 64 KB. */
+export interface EditResult {
+    target: "design" | "mesh";
+    applied: boolean; // false: the model said the request cannot be done; no new version
+    summary: string;
+    notes: string[];
+    changes?: EditChanges; // design
+    program?: MeshProgram; // mesh (type in shared/meshProgram.ts)
+    regen_prompt?: string; // mesh: the original prompt rewritten with the edit, <= 1024 chars
+}
+
+/**
+ * The project payload carries `result` only for a mesh job that succeeded and has no model yet ("Plan ready, apply?");
+ * GET /jobs/:id always carries it.
+ */
+export interface JobEdit {
+    source_model_id: string;
+    target: "design" | "mesh";
+    result: EditResult | null;
+}
 
 export interface Job {
     id: string;
     project_id: string;
     provider: ProviderId;
-    prompt: string;
+    prompt: string; // an edit job: the instruction
     status: JobStatus;
     progress: number; // 0-100
     stage: string; // short human text: "Queued", "Generating mesh", "Texturing", "Saving model"
@@ -213,6 +354,9 @@ export interface Job {
     updated_at: string;
     finished_at: string | null;
     model: ModelAsset | null; // set once status = "succeeded"
+    /** "generate" for every job before edits existed (read a missing value as "generate"). */
+    kind: JobKind;
+    edit: JobEdit | null; // kind "edit" only
 }
 
 // ---------- Projects, tags, chat ----------
@@ -290,8 +434,9 @@ export type BulkAction = "trash" | "restore" | "archive" | "unarchive" | "purge"
 //
 // PUT    /models/:id/analysis   {summary: AnalysisSummary}  -> {model: ModelAsset}   400 {error} on a malformed summary
 //
-// POST   /models/:sourceId/derived  (raw GLB, Content-Type model/gltf-binary, <= DERIVED_GLB_LIMIT; the stabilizer's
-//                                    metadata travels inside the GLB, see shared/assemblyGlb.ts)
+// POST   /models/:sourceId/derived  (raw GLB, Content-Type model/gltf-binary, <= DERIVED_GLB_LIMIT; the log of a stabilized,
+//                                    voxel-edited or optimized version travels inside the GLB, exactly one of them, see
+//                                    shared/assemblyGlb.ts)
 //                                                 -> 201 {model: ModelAsset}  (200 with the existing model when the same
 //                                                    assembly was stored before, whatever log it came with)
 //                                                    400 {error} invalid file, or a log that disagrees with the blocks
@@ -300,7 +445,22 @@ export type BulkAction = "trash" | "restore" | "archive" | "unarchive" | "purge"
 //                                                    415 wrong content type, 429 per-source / per-project / daily limit
 //                                                    (the first two are checked inside the INSERT, so parallel requests
 //                                                    cannot pass them)
-// DELETE /models/:id                              -> {ok: true}   only models of kind "stabilized"; 409 for the others
+// DELETE /models/:id                              -> {ok: true}   any version (stabilized, edited, optimized) and every
+//                                                    version made from it; 409 for a root (generated, example)
+//
+// POST   /models/:sourceId/edits  StartEditBody (+ ACCESS_HEADER)
+//                                                 -> 201 {job: Job}   a design or mesh edit on the queue (worker/edit.ts).
+//                                                    400 invalid, 401 code, 404 model, 409 project in the bin / another edit is
+//                                                    running / source not editable / chain deeper than MAX_VERSION_DEPTH,
+//                                                    413, 422 design not recoverable, 429 daily cap, 503 key or queue missing
+// POST   /models/:sourceId/edited?job=<jobId>  (raw GLB, Content-Type model/gltf-binary, <= EDITED_GLB_LIMIT)
+//                                                 -> 201 {model: ModelAsset}, or 200 with the existing one (idempotent):
+//                                                    the browser-made GLB of a finished mesh edit (worker/editUpload.ts)
+//
+// POST   /llm/voxel-edit      VoxelEditBody (+ ACCESS_HEADER)
+//                                                 -> 200 VoxelEditResponse   400 / 401 / 429 / 502 / 503 (worker/voxelEdit.ts)
+// POST   /llm/optimize-spec   OptimizeSpecBody (+ ACCESS_HEADER)
+//                                                 -> 200 OptimizeSpecResponse   400 / 401 / 429 / 503 / 504 (worker/optimizeSpec.ts)
 //
 // GET    /examples                                -> ExamplesResponse   (cacheable for 5 minutes)
 // POST   /projects/from-example  CreateProjectFromExampleBody
@@ -357,6 +517,62 @@ export interface PatchProjectBody {
 export interface GenerateBody {
     prompt: string; // 1..1000 chars
     providers: ProviderId[]; // 1..5, each must be available
+}
+
+// ---------- Edits and the AI editor ----------
+
+/** POST /models/:sourceId/edits: a design edit (the server rebuilds the parts) or the plan of a mesh edit (the browser then applies it). */
+export interface StartEditBody {
+    instruction: string; // 1..EDIT_INSTRUCTION_MAX
+    target: "design" | "mesh";
+    mesh?: MeshPackage; // target "mesh": <= EDIT_PACKAGE_LIMIT as JSON
+    refine?: { of_job_id: string; program: MeshProgram; views: MeshView[] }; // only while MESH_REFINE_OPS is non-empty
+}
+
+export interface MeshView {
+    id: "FRONT" | "SIDE" | "TOP" | string;
+    caption: string;
+    image: string; // data:image/png;base64 or jpeg
+}
+
+export interface MeshPackage {
+    version: 1;
+    frame: { size_mm: [number, number, number]; facing: "-Y" };
+    facts: string;
+    views: MeshView[];
+    pieces: string | null;
+    extras: string | null;
+    original_prompt: string | null;
+}
+
+/** POST /llm/voxel-edit: the person's instruction and the model description (shared/voxelEdit/scene.ts). The prompts live on the server. */
+export interface VoxelEditBody {
+    instruction: string; // 1..EDIT_INSTRUCTION_MAX
+    scene: string; // starts "MODEL: ", <= 9000 chars
+}
+
+/** The model's answer as the Worker returns it: untrusted JSON of the schema, which the browser cleans before it applies anything. */
+export interface VoxelEditResponse {
+    answer: { summary: string; notes: string; clarification: string; ops: unknown[] };
+    model: string;
+    cost_usd: number | null;
+    prompt_tokens: number | null;
+    completion_tokens: number | null;
+    ms: number;
+}
+
+/** POST /llm/optimize-spec: the person's goal and the facts about their model (shared/optimizeSpec.ts). */
+export interface OptimizeSpecBody {
+    goal: string; // 1..600
+    brief: Brief;
+}
+
+export interface OptimizeSpecResponse {
+    spec: OptimizationSpec;
+    changes: string[]; // plain-words notes of what the cleaner changed in the model's answer
+    model: string;
+    cost_usd: number | null;
+    ms: number;
 }
 
 export interface ApiError {

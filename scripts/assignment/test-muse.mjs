@@ -34,6 +34,9 @@ import {
     uniqueNames,
 } from "../../src/assignment/shared/partsDesign.ts";
 import { buildPartMesh, buildPartsGlb, partPrimitive } from "../../src/assignment/shared/partsGlb.ts";
+import { EDIT_PATCH_SCHEMA, EDIT_SYSTEM_PROMPT, designFromGlb, designHash } from "../../src/assignment/shared/partsEdit.ts";
+import { MESH_PROGRAM_SCHEMA, MESH_SYSTEM_PROMPT, meshUserText } from "../../src/assignment/shared/meshProgram.ts";
+import { readFileSync as readFile } from "node:fs";
 
 const KEY = "sk-or-v1-test-0123456789abcdef0123456789abcdef";
 const TASK = "764cabcf-b745-4b3e-ae38-1200304cf45b";
@@ -833,7 +836,7 @@ test("cleanup: removes the staged record and file; the cancel marker only once t
     };
     await openRouterDesigner.cleanup(env, TASK, null);
     assert.throws(() => llmKey("../../models/x", "json"));
-    assert.deepEqual(stagingKeys(TASK), [`llm/${TASK}.json`, `llm/${TASK}.glb`, `llm/${TASK}.cancel`]);
+    assert.deepEqual(stagingKeys(TASK), [`llm/${TASK}.json`, `llm/${TASK}.glb`, `llm/${TASK}.cancel`, `llm/${TASK}.in.json`]);
     assert.deepEqual(stagingKeys("../../models/x"), [], "only task ids name staging files");
 });
 
@@ -1349,6 +1352,461 @@ test("end to end: submit -> consume -> poll -> storeGlb -> cleanup leaves nothin
     assert.deepEqual([...env.FILES.store.keys()], ["models/final.glb"]);
 });
 
+// ---------- edits: the design edit and the mesh plan on the same queue ----------
+
+/** A D1 stand-in for the tests that only need to see the day's AI-call slot handed back (the real D1 is used by the engine group below). */
+function fakeDb() {
+    const statements = [];
+    return {
+        statements,
+        prepare(sql) {
+            return {
+                bind(...args) {
+                    statements.push({ sql, args });
+                    return { run: async () => ({ meta: { changes: 1 } }), first: async () => null };
+                },
+            };
+        },
+    };
+}
+const slotsHandedBack = (env) => env.DB.statements.filter((s) => /UPDATE usage SET llm = MAX/.test(s.sql)).length;
+
+const SOURCE_ID = "5a4c4a6e-0000-4000-8000-000000000001";
+const SOURCE_KEY = `models/${SOURCE_ID}.glb`;
+const SOURCE = repairDesign(STOOL).design;
+const DESIGN_EDIT = { target: "design", source_glb_key: SOURCE_KEY };
+const editJob = (extra = {}) => job({ prompt: "make the seat red", edit: DESIGN_EDIT, ...extra });
+
+/** An env for an edit: the source model is in the bucket, a stand-in D1 counts slots handed back. */
+async function editEnv(extra = {}) {
+    const env = makeEnv({ DB: fakeDb(), ...extra });
+    await env.FILES.put(SOURCE_KEY, buildPartsGlb(SOURCE), { httpMetadata: { contentType: "model/gltf-binary" } });
+    return env;
+}
+const patch = (extra = {}) => ({ summary: "Painted the seat red.", applied: true, remove: [], recolor: [], parts: [], ...extra });
+const seatRed = () => patch({ parts: [{ ...SOURCE.parts[0], color: "#cc0000" }] });
+
+test("design edit: the request has the edit prompt, the schema, the design and the instruction as a JSON string", async () => {
+    const env = await editEnv();
+    const calls = stubFetch([modelReply(seatRed())]);
+    const message = await consume(env, editJob({ edit: { ...DESIGN_EDIT, original_prompt: "a wooden stool" } }));
+    assert.equal(message.acked, true);
+    assert.equal(calls.length, 1);
+    const { body } = calls[0];
+    assert.equal(body.model, "meta/muse-spark-1.3-contributor");
+    assert.equal(body.messages.length, 2);
+    assert.deepEqual(body.messages[0], { role: "system", content: EDIT_SYSTEM_PROMPT });
+    assert.equal(body.messages[1].role, "user");
+    const text = body.messages[1].content;
+    assert.match(text, /^Original description: "a wooden stool"\nDesign "Wooden stool" \(6 parts\), bounding box mm: /);
+    assert.ok(text.includes(JSON.stringify(SOURCE.parts[0])), "the design as JSON lines");
+    assert.ok(text.endsWith('\n\nEdit instruction: "make the seat red"'));
+    assert.deepEqual(body.response_format, { type: "json_schema", json_schema: EDIT_PATCH_SCHEMA });
+    assert.deepEqual(body.reasoning, { effort: "low" });
+    assert.equal(body.max_tokens, 8000);
+});
+
+test("design edit: the patch is applied, the new GLB embeds the new design and the record says what changed", async () => {
+    const env = await editEnv();
+    stubFetch([modelReply(seatRed(), { cost: 0.0004 })]);
+    await consume(env, editJob());
+    const record = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(record.status, "done");
+    assert.equal(record.cost_usd, 0.0004);
+    assert.equal(record.plan, undefined);
+    assert.equal(record.edit.summary, "Painted the seat red.");
+    assert.deepEqual(record.edit.changes, { added: [], changed: ["Seat"], removed: [] });
+    assert.match(record.edit.hash, /^[0-9a-f]{64}$/);
+    assert.equal(record.edit.hash, await designHash(record.design));
+    const glb = env.FILES.store.get(llmKey(TASK, "glb")).bytes;
+    assert.deepEqual(designFromGlb(glb), record.design, "the file carries the design it was built from");
+    assert.equal(record.design.parts.find((p) => p.name === "Seat").color, "#cc0000");
+    assert.deepEqual(record.design.parts.find((p) => p.name === "Ring brace"), SOURCE.parts.find((p) => p.name === "Ring brace"), "a part the patch did not name is untouched");
+    assert.equal(record.size_bytes, glb.byteLength);
+    assert.equal(slotsHandedBack(env), 0, "the model was paid: the slot stays used");
+    // what the job engine sees
+    const state = { queued_at: Date.now(), edit: "design" };
+    const verdict = await openRouterDesigner.poll(env, TASK, state);
+    assert.equal(verdict.status, "succeeded");
+    assert.equal(verdict.glbUrl, `r2:${llmKey(TASK, "glb")}`);
+    assert.deepEqual(verdict.edit, { summary: "Painted the seat red.", changes: record.edit.changes, notes: [], hash: record.edit.hash, engine: "meta/muse-spark-1.3-contributor" });
+    const parsed = await parse(glb);
+    assert.equal(parsed.getRoot().listNodes().length, 6);
+});
+
+test("design edit: the answer is saved first; a delivery that finds it builds without asking again", async () => {
+    const env = await editEnv();
+    const calls = stubFetch([modelReply(seatRed())]);
+    env.FILES.put = ((real) => async (key, value, options) => {
+        if (key === llmKey(TASK, "glb") && !env.FILES.failedOnce) {
+            env.FILES.failedOnce = true;
+            throw new Error("R2 is down");
+        }
+        return real(key, value, options);
+    })(env.FILES.put.bind(env.FILES));
+    const first = await consume(env, editJob(), 1);
+    assert.equal(first.retried?.delaySeconds, 5, "the build failed: another delivery");
+    const building = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(building.status, "building");
+    assert.equal(building.edit.summary, "Painted the seat red.");
+    const second = await consume(env, editJob(), 2);
+    assert.equal(second.acked, true);
+    assert.equal(calls.length, 1, "OpenRouter was asked once");
+    const done = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(done.status, "done");
+    assert.equal(done.edit.summary, "Painted the seat red.");
+    assert.ok(env.FILES.has(llmKey(TASK, "glb")));
+});
+
+test("design edit: 'cannot be done' and 'nothing changed' end as a result without a file", async () => {
+    for (const [answer, applied, summary] of [
+        [patch({ applied: false, summary: "That is not about this object." }), false, /not about this object/],
+        [patch({ parts: [SOURCE.parts[0]], summary: "Left it as it is." }), false, /Nothing changed/],
+        [patch({ remove: SOURCE.parts.map((p) => p.name), summary: "Removed everything." }), false, /remove every part/],
+    ]) {
+        const env = await editEnv();
+        stubFetch([modelReply(answer)]);
+        const message = await consume(env, editJob());
+        assert.equal(message.acked, true);
+        const record = env.FILES.json(llmKey(TASK, "json"));
+        assert.equal(record.status, "done");
+        assert.equal(record.plan.target, "design");
+        assert.equal(record.plan.applied, applied);
+        assert.match(record.plan.summary, summary);
+        assert.deepEqual(record.plan.changes, { added: [], changed: [], removed: [] });
+        assert.ok(!env.FILES.has(llmKey(TASK, "glb")), "no file");
+        const verdict = await openRouterDesigner.poll(env, TASK, { queued_at: Date.now() });
+        assert.equal(verdict.status, "succeeded");
+        assert.equal(verdict.glbUrl, undefined);
+        assert.deepEqual(verdict.plan, record.plan);
+    }
+});
+
+test("design edit: a 429 is retried with the vendor's delay, a cut-off answer asks for less, an unreadable answer is tried once more", async () => {
+    let env = await editEnv();
+    stubFetch([{ ...errorReply(429, "slow down"), headers: { "retry-after": "17" } }]);
+    let message = await consume(env, editJob(), 1);
+    assert.equal(message.retried?.delaySeconds, 17);
+    assert.equal(slotsHandedBack(env), 0, "still going: the slot is kept");
+    stubFetch([modelReply(seatRed())]);
+    message = await consume(env, editJob(), 2);
+    assert.equal(message.acked, true);
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).status, "done");
+
+    env = await editEnv();
+    stubFetch([{ json: { choices: [{ finish_reason: "length", message: { role: "assistant", content: '{"summary":"x","ap' } }], usage: { cost: 0.001, completion_tokens: 8000 } } }]);
+    message = await consume(env, editJob(), 1);
+    assert.ok(message.retried);
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).simplify, true);
+    const again = stubFetch([modelReply(seatRed())]);
+    await consume(env, editJob(), 2);
+    assert.match(again[0].body.messages[0].content, /change as few parts as you can/, "the second try asks for less");
+    assert.ok(again[0].body.messages[0].content.startsWith(EDIT_SYSTEM_PROMPT));
+
+    env = await editEnv();
+    stubFetch([textReply("I would love to help but here is prose, no JSON."), textReply("still prose")]);
+    message = await consume(env, editJob(), 1);
+    assert.ok(message.retried);
+    message = await consume(env, editJob(), 2);
+    assert.equal(message.acked, true);
+    const failed = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(failed.status, "failed");
+    assert.match(failed.error, /edit the app could not read/);
+    assert.equal(slotsHandedBack(env), 0, "the model answered (and billed): the slot is spent");
+});
+
+test("design edit: a refused call gives the day's slot back; a refused call that was billed does not", async () => {
+    let env = await editEnv();
+    stubFetch([errorReply(403, "flagged by moderation", { metadata: { reasons: ["violence"] } })]);
+    let message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /content policy/);
+    assert.equal(slotsHandedBack(env), 1);
+
+    env = await editEnv();
+    stubFetch([errorReply(401, "bad key")]);
+    await consume(env, editJob());
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /key was rejected/);
+    assert.equal(slotsHandedBack(env), 1);
+
+    env = await editEnv();
+    stubFetch([{ json: { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "", refusal: "I can't help with that." } }], usage: { prompt_tokens: 900, completion_tokens: 12, cost: 0.0002 } } }]);
+    message = await consume(env, editJob());
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /declined/);
+    assert.equal(slotsHandedBack(env), 0, "the call was billed");
+
+    // gave up after 429s: nothing was billed
+    env = await editEnv();
+    stubFetch([errorReply(429, "slow")]);
+    message = await consume(env, editJob(), 3);
+    assert.equal(message.acked, true);
+    assert.equal(slotsHandedBack(env), 1);
+
+    // the connection dropped: it may have been billed, so the slot is kept
+    env = await editEnv();
+    stubFetch([new TypeError("fetch failed"), new TypeError("fetch failed")]);
+    await consume(env, editJob(), 1);
+    await consume(env, editJob(), 2);
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).status, "failed");
+    assert.equal(slotsHandedBack(env), 0);
+});
+
+test("design edit: a source that is gone or is not a parts design fails the task without calling the model, and gives the slot back", async () => {
+    let env = makeEnv({ DB: fakeDb() });
+    let calls = stubFetch([]);
+    let message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /no longer available/);
+    assert.equal(calls.length, 0);
+    assert.equal(slotsHandedBack(env), 1);
+
+    env = makeEnv({ DB: fakeDb() });
+    await env.FILES.put(SOURCE_KEY, readFile(new URL("../../public/assignment_alex/fixtures/demo-assembly.glb", import.meta.url)));
+    calls = stubFetch([]);
+    await consume(env, editJob());
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /parts can't be read/);
+    assert.equal(calls.length, 0);
+    assert.equal(slotsHandedBack(env), 1);
+});
+
+test("design edit: no key is a clear failure that gives the slot back; Stop before the call does too and removes every staging file", async () => {
+    let env = await editEnv({ OPENROUTER_API_KEY: undefined });
+    let calls = stubFetch([]);
+    let message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /AI editor is not configured/);
+    assert.equal(calls.length, 0);
+    assert.equal(slotsHandedBack(env), 1);
+
+    env = await editEnv();
+    await env.FILES.put(llmKey(TASK, "in"), "{}");
+    await env.FILES.put(llmKey(TASK, "cancel"), "canceled");
+    calls = stubFetch([]);
+    message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.equal(calls.length, 0);
+    assert.equal(slotsHandedBack(env), 1);
+    assert.deepEqual(stagingKeys(TASK).filter((k) => env.FILES.has(k)), [], "record, file, marker and pictures are all gone");
+
+    // Stop after the model answered: the money is spent, the slot is not handed back
+    env = await editEnv();
+    stubFetch(() => {
+        env.FILES.store.set(llmKey(TASK, "cancel"), { bytes: new Uint8Array([1]), contentType: null });
+        return modelReply(seatRed());
+    });
+    message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.equal(slotsHandedBack(env), 0);
+    assert.ok(!env.FILES.has(llmKey(TASK, "glb")));
+});
+
+test("design edit: with MOCK_PROVIDER=1 the answer is canned, nothing is sent and no key is needed; MOCK_LLM=0 turns that off", async () => {
+    let env = await editEnv({ MOCK_PROVIDER: "1", OPENROUTER_API_KEY: undefined });
+    const calls = stubFetch([]);
+    let message = await consume(env, editJob());
+    assert.equal(message.acked, true);
+    assert.equal(calls.length, 0, "no network");
+    let record = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(record.status, "done");
+    assert.equal(record.cost_usd, 0);
+    assert.ok(record.design.parts.every((p) => p.color === "#d9534f"), "every part repainted");
+    assert.equal(record.edit.changes.changed.length, 6);
+    // a second edit of the repainted model gives the other colour: two edits in a row differ
+    env.FILES.store.set(SOURCE_KEY, { bytes: env.FILES.store.get(llmKey(TASK, "glb")).bytes, contentType: null });
+    await env.FILES.delete([llmKey(TASK, "json"), llmKey(TASK, "glb")]);
+    await consume(env, editJob());
+    record = env.FILES.json(llmKey(TASK, "json"));
+    assert.ok(record.design.parts.every((p) => p.color === "#5cb85c"));
+
+    env = await editEnv({ MOCK_PROVIDER: "1", MOCK_LLM: "0" });
+    const live = stubFetch([modelReply(seatRed())]);
+    await consume(env, editJob());
+    assert.equal(live.length, 1, "MOCK_LLM=0 asks the real model");
+});
+
+test("edit messages that name anything but the task's own files are dropped, and a generation is not affected by the edit code", async () => {
+    for (const edit of [
+        { target: "design", source_glb_key: "../../models/x.glb" },
+        { target: "design", source_glb_key: "llm/764cabcf-b745-4b3e-ae38-1200304cf45b.json" },
+        { target: "design", source_glb_key: "static:/assignment_alex/examples/x/original.glb" },
+        { target: "design" },
+        { target: "mesh", package_key: `llm/${TASK2}.in.json` },
+        { target: "mesh", package_key: "models/x.glb" },
+        { target: "voxel", source_glb_key: SOURCE_KEY },
+        "design",
+        7,
+    ]) {
+        const env = await editEnv();
+        const calls = stubFetch([]);
+        const message = await consume(env, editJob({ edit }));
+        assert.equal(message.acked, true, JSON.stringify(edit));
+        assert.equal(calls.length, 0);
+        assert.ok(!env.FILES.has(llmKey(TASK, "json")), "nothing written for a message the consumer does not know");
+        assert.equal(slotsHandedBack(env), 0);
+    }
+    const env = makeEnv();
+    stubFetch([modelReply(STOOL)]);
+    await consume(env, job());
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).edit, undefined);
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).charged, undefined, "a generation record is what it was before edits existed");
+});
+
+test("adapter: an edit job puts the source key on the queue; a mesh job stores its pictures first and names them", async () => {
+    const env = await editEnv();
+    const submitted = await openRouterDesigner.submit(env, "make the seat red", {
+        edit: { target: "design", sourceGlbKey: SOURCE_KEY, originalPrompt: "a wooden stool" },
+        model: "meta/muse-spark-1.3-contributor",
+    });
+    const [message] = env.LLM_QUEUE.sent;
+    assert.deepEqual(message, { taskId: submitted.taskId, prompt: "make the seat red", model: "meta/muse-spark-1.3-contributor", edit: { target: "design", source_glb_key: SOURCE_KEY, original_prompt: "a wooden stool" } });
+    assert.equal(submitted.state.edit, "design");
+    assert.equal((await openRouterDesigner.poll(env, submitted.taskId, submitted.state)).stage, "Designing the change");
+
+    const pictures = JSON.stringify({ package: { facts: "x", views: [] }, refine: null });
+    const mesh = await openRouterDesigner.submit(env, "make the back taller", { edit: { target: "mesh", request: pictures, refine: false } });
+    const sent = env.LLM_QUEUE.sent[1];
+    assert.deepEqual(sent.edit, { target: "mesh", package_key: llmKey(mesh.taskId, "in") });
+    assert.equal(env.FILES.text(llmKey(mesh.taskId, "in")), pictures);
+    assert.equal(env.FILES.store.get(llmKey(mesh.taskId, "in")).contentType, "application/json");
+    assert.equal(llmKey(mesh.taskId, "in"), `llm/${mesh.taskId}.in.json`);
+    assert.equal((await openRouterDesigner.poll(env, mesh.taskId, mesh.state)).stage, "Planning the edit");
+    assert.equal(sent.prompt.length < 1000 && JSON.stringify(sent).length < 600, true, "the message stays small: the pictures are in the bucket");
+
+    // the queue refuses: nothing stays behind and the slot can go back (a non-retryable error)
+    env.LLM_QUEUE.failNext = true;
+    await assert.rejects(() => openRouterDesigner.submit(env, "again", { edit: { target: "mesh", request: pictures, refine: false } }), (err) => err instanceof ProviderError && !err.retryable);
+    assert.equal([...env.FILES.store.keys()].filter((k) => k.endsWith(".in.json")).length, 1, "only the first job's pictures remain");
+    env.LLM_QUEUE.failNext = false;
+
+    // no key: refused, except in the offline demo
+    await assert.rejects(() => openRouterDesigner.submit({ ...env, OPENROUTER_API_KEY: undefined }, "x", { edit: { target: "design", sourceGlbKey: SOURCE_KEY, originalPrompt: null } }), /OPENROUTER_API_KEY/);
+    const demo = await openRouterDesigner.submit({ ...env, OPENROUTER_API_KEY: undefined, MOCK_PROVIDER: "1" }, "x", { edit: { target: "design", sourceGlbKey: SOURCE_KEY, originalPrompt: null } });
+    assert.ok(demo.taskId);
+    await assert.rejects(() => openRouterDesigner.submit({ ...env, OPENROUTER_API_KEY: undefined, MOCK_PROVIDER: "1" }, "plain generation"), /OPENROUTER_API_KEY/, "the demo never stands in for a generation");
+});
+
+test("adapter: Stop and clean-up remove the pictures of a mesh job too", async () => {
+    const env = await editEnv();
+    for (const file of ["json", "glb", "in"]) await env.FILES.put(llmKey(TASK, file), "x");
+    await env.FILES.put(llmKey(TASK, "json"), JSON.stringify({ status: "done", plan: { target: "mesh", applied: true, summary: "s", notes: [] } }));
+    await openRouterDesigner.cancel(env, TASK, null);
+    assert.deepEqual(stagingKeys(TASK).filter((k) => env.FILES.has(k)), [], "a finished task: everything goes");
+    for (const file of ["json", "glb", "in", "cancel"]) await env.FILES.put(llmKey(TASK, file), "x");
+    await env.FILES.put(llmKey(TASK, "json"), JSON.stringify({ status: "designing" }));
+    await openRouterDesigner.cleanup(env, TASK, null);
+    assert.deepEqual(stagingKeys(TASK).filter((k) => env.FILES.has(k)), [llmKey(TASK, "cancel")], "the Stop marker outlives clean-up while the consumer may still come");
+});
+
+// ---- the plan of a mesh edit ----
+
+const PICTURE = `data:image/jpeg;base64,${Buffer.from("not really a jpeg but base64").toString("base64")}`;
+const MESH_REQUEST = {
+    package: {
+        version: 1,
+        frame: { size_mm: [643, 851, 1000], facing: "-Y" },
+        facts: "Model facts: size X 643 mm, Y 851 mm, Z 1000 mm; 499,808 triangles; textured.",
+        views: ["FRONT", "SIDE", "TOP"].map((id) => ({ id, caption: `${id} view caption`, image: PICTURE })),
+        pieces: null,
+        extras: null,
+        original_prompt: "a rocking chair",
+    },
+    refine: null,
+};
+const MESH_EDIT = { target: "mesh", package_key: llmKey(TASK, "in") };
+const meshJob = (extra = {}) => job({ prompt: "make the backrest taller", edit: MESH_EDIT, ...extra });
+const FLAT_OP = { op: "stretch", label: "backrest", boxes: [{ min: [-300, 0, 600], max: [300, 300, 1000] }], exclude: [], feather_mm: 40, axis: "z", from_mm: 700, to_mm: 900, amount_mm: 150, vector_mm: [0, 0, 0], factors: [1, 1, 1], pivot_mm: [0, 0, 0], degrees: 0, mirror_at_mm: 0, color: "#000000", strength: 0, parts: [] };
+const programAnswer = (extra = {}) => ({ summary: "Made the backrest 150 mm taller.", applied: true, regen_prompt: "", ops: [FLAT_OP], ...extra });
+
+async function meshEnv(extra = {}) {
+    const env = makeEnv({ DB: fakeDb(), ...extra });
+    await env.FILES.put(llmKey(TASK, "in"), JSON.stringify(MESH_REQUEST), { httpMetadata: { contentType: "application/json" } });
+    return env;
+}
+
+test("mesh plan: the model gets the pictures and the facts, the cleaned program is left in the record (no file)", async () => {
+    const env = await meshEnv();
+    const calls = stubFetch([modelReply(programAnswer(), { cost: 0.0006 })]);
+    const message = await consume(env, meshJob());
+    assert.equal(message.acked, true);
+    const { body } = calls[0];
+    assert.deepEqual(body.messages[0], { role: "system", content: MESH_SYSTEM_PROMPT });
+    assert.deepEqual(body.response_format, { type: "json_schema", json_schema: MESH_PROGRAM_SCHEMA });
+    const user = body.messages[1].content;
+    assert.equal(user[0].type, "text");
+    assert.equal(user[0].text, meshUserText(MESH_REQUEST.package, "make the backrest taller"));
+    assert.match(user[0].text, /^Model facts: size X 643 mm[\s\S]*Original description: "a rocking chair"\nFRONT view caption\nSIDE view caption\nTOP view caption\n\nEdit instruction: make the backrest taller$/);
+    assert.deepEqual(user.slice(1), [PICTURE, PICTURE, PICTURE].map((url) => ({ type: "image_url", image_url: { url } })));
+    assert.equal(body.max_tokens, 8000);
+    const record = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(record.status, "done");
+    assert.equal(record.plan.target, "mesh");
+    assert.equal(record.plan.applied, true);
+    assert.equal(record.plan.summary, "Made the backrest 150 mm taller.");
+    assert.equal(record.plan.program.ops.length, 1);
+    assert.equal(record.plan.program.ops[0].op, "stretch");
+    assert.ok(!env.FILES.has(llmKey(TASK, "glb")));
+    const verdict = await openRouterDesigner.poll(env, TASK, { queued_at: Date.now(), edit: "mesh" });
+    assert.deepEqual(verdict, { status: "succeeded", plan: record.plan });
+    assert.equal(slotsHandedBack(env), 0);
+});
+
+test("mesh plan: 'cannot be done' is a result; an answer with nothing to run is tried once more; unreadable pictures fail early", async () => {
+    let env = await meshEnv();
+    stubFetch([modelReply({ summary: "Not about this model.", applied: false, regen_prompt: "", ops: [] })]);
+    await consume(env, meshJob());
+    let record = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(record.status, "done");
+    assert.equal(record.plan.applied, false);
+    assert.deepEqual(record.plan.program.ops, []);
+
+    env = await meshEnv();
+    stubFetch([modelReply({ summary: "x", applied: true, ops: [] })]);
+    let message = await consume(env, meshJob(), 1);
+    assert.ok(message.retried, "no usable operation: one more try");
+    assert.match(env.FILES.json(llmKey(TASK, "json")).status, /designing/);
+
+    env = makeEnv({ DB: fakeDb() });
+    await env.FILES.put(llmKey(TASK, "in"), "{not json");
+    const calls = stubFetch([]);
+    message = await consume(env, meshJob());
+    assert.equal(message.acked, true);
+    assert.equal(calls.length, 0);
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /pictures of the model could not be read/);
+    assert.equal(slotsHandedBack(env), 1);
+    env = makeEnv({ DB: fakeDb() });
+    message = await consume(env, meshJob());
+    assert.match(env.FILES.json(llmKey(TASK, "json")).error, /no longer available/);
+});
+
+test("mesh plan: the second pass (off in the product) sends the first program back with the zoomed pictures", async () => {
+    const env = makeEnv({ DB: fakeDb() });
+    const first = programAnswer();
+    await env.FILES.put(llmKey(TASK, "in"), JSON.stringify({ ...MESH_REQUEST, refine: { program: first, views: [{ id: "FRONT", caption: "FRONT zoom", image: PICTURE }] } }));
+    const calls = stubFetch([modelReply(programAnswer({ summary: "Second pass." }))]);
+    await consume(env, meshJob({ edit: { ...MESH_EDIT, refine: true } }));
+    const { messages } = calls[0].body;
+    assert.deepEqual(messages.map((m) => m.role), ["system", "user", "assistant", "user"]);
+    assert.match(messages[1].content, /pictures omitted in this history/);
+    assert.deepEqual(JSON.parse(messages[2].content), first);
+    assert.match(messages[3].content[0].text, /^Second pass\. Below are ZOOMED pictures/);
+    assert.match(messages[3].content[0].text, /FRONT zoom$/);
+    assert.equal(messages[3].content[1].image_url.url, PICTURE);
+    assert.equal(env.FILES.json(llmKey(TASK, "json")).plan.summary, "Second pass.");
+});
+
+test("mesh plan: with MOCK_PROVIDER=1 the plan is one whole-model recolor, offline", async () => {
+    const env = await meshEnv({ MOCK_PROVIDER: "1", OPENROUTER_API_KEY: undefined });
+    const calls = stubFetch([]);
+    const message = await consume(env, meshJob());
+    assert.equal(message.acked, true);
+    assert.equal(calls.length, 0);
+    const record = env.FILES.json(llmKey(TASK, "json"));
+    assert.equal(record.status, "done");
+    assert.equal(record.plan.program.ops.length, 1);
+    assert.equal(record.plan.program.ops[0].op, "recolor");
+    assert.deepEqual(record.plan.program.ops[0].boxes, [], "the whole model");
+});
+
 // ---------- the job engine and the purge, on a real local D1 ----------
 
 const ROOT = new URL("../../", import.meta.url);
@@ -1367,7 +1825,8 @@ async function openEngine() {
         const proxy = await getPlatformProxy({ configPath: new URL("wrangler.jsonc", ROOT).pathname, persist: { path: join(dir, "state") }, remoteBindings: false });
         const migrations = new URL("migrations/", ROOT).pathname;
         for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
-            const sql = readFileSync(join(migrations, file), "utf8").split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+            // line comments are cut (a whole line, or the tail of a statement line: no migration has "--" inside a string)
+            const sql = readFileSync(join(migrations, file), "utf8").split("\n").map((line) => line.replace(/--.*$/, "")).join("\n");
             for (const statement of sql.split(";").map((x) => x.trim()).filter(Boolean)) await proxy.env.DB.prepare(statement).run();
         }
         engineState = {
@@ -1513,7 +1972,7 @@ engineTest("purging projects removes the staging files of their Muse jobs, and o
     const odd = await seedJob(env, gone, { taskId: "../models/precious" });
     await seedJob(env, gone, { provider: "tripo", via: "fal", taskId: "fal-task-1" });
     const c = await seedJob(env, kept);
-    for (const task of [a.taskId, c.taskId]) for (const file of ["json", "glb", "cancel"]) await env.FILES.put(llmKey(task, file), "x");
+    for (const task of [a.taskId, c.taskId]) for (const file of ["json", "glb", "cancel", "in"]) await env.FILES.put(llmKey(task, file), "x");
     await env.FILES.put("models/precious.glb", "x");
     assert.equal(await purgeProjects(env, [gone]), 1);
     assert.deepEqual(stagedKeys(env), stagingKeys(c.taskId).sort(), "the other project's files stay");

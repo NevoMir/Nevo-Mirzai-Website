@@ -1,0 +1,19 @@
+{
+ "id": "T4",
+ "variant": "hybrid",
+ "rec": {
+  "tag": "T4a",
+  "status": 200,
+  "ms": 6702,
+  "finish": "stop",
+  "prompt_tokens": 2508,
+  "completion_tokens": 878,
+  "reasoning_tokens": 718,
+  "cost": 0.0004264,
+  "system_chars": 4331,
+  "user_chars": 2569
+ },
+ "content": "{\"clarification\": \"\", \"notes\": \"Left side has no room, so widened to the right only.\", \"ops\": [{\"amount\": 1, \"at\": null, \"axis\": null, \"box\": null, \"dirs\": [\"+i\"], \"include_added\": false, \"offset\": null, \"op\": \"extrude\", \"plane\": null, \"region\": \"A\", \"wall\": null}], \"summary\": \"Widened base A by 1 block to the right.\"}",
+ "user": "MODEL: desk-lamp (stabilized). GRID 10x10x10, one block = 100 mm. A cell is (i,j,k).\nAXES (as seen in the app's Front view): i = left->right (i=0 is the LEFT side, i=9 the RIGHT). j = depth (j=0 is the FRONT, nearest the viewer; j=9 is the BACK). k = height (k=0 rests on the ground, k=9 is the top).\nCURRENT STATE: blocks 60, separate structures 1, floating blocks 0, longest cantilever 3 blocks (limit 4), over the limit 0; centre of gravity inside the base, margin 139 mm; peak joint stress 52% of allowable (0 blocks over 100%).\nISSUES: none.\nROOM (empty blocks the model can still grow into): left(-i) 0, right(+i) 1, front(-j) 3, back(+j) 3, up(+k) 0 (it already reaches the top of the grid).\nPARTS (names come from the model; letter = region id; trust the cell ranges, not the words left/right in a name):\nA \"Base\": 16 blocks, i0-4 j3-6 k0\nC \"Base joint\": 2 blocks, i2 j4-5 k1\nD \"Lower arm\": 6 blocks, i3-4 j4-5 k3-5\nE \"Elbow joint\": 2 blocks, i4 j4-5 k6\nF \"Upper arm\": 6 blocks, i5-6 j4-5 k7-9\nG \"Head joint\": 2 blocks, i7 j4-5 k9\nH \"Shade\": 6 blocks, i7-8 j3-6 k7-8\nI \"Bulb\": 4 blocks, i7-8 j4-5 k7\nPIECES (region ids for blocks that are not in a named part):\nc1 column box: i7 j4 k0-6 (7)\nc2 column box: i3 j4 k1-2 (2)\nf1 footing box: i5-6 j4 k0 (2)\nb1 bracket box: i3 j5 k1-2 (2)\nb2 bracket box: i4 j5 k4 (1)\ng1 bridge box: i4 j4 k4 (1)\ng2 bridge box: i5 j4 k6 (1)\nTOP HEIGHT of each (i,j) column = highest occupied k ('.' = empty column). Rows: back (high j) at the top, front (low j) at the bottom; columns i=0..8 left to right.\n   i012345678\nj6|.000....7\nj5|001467998\nj4|001467998\nj3|.000....7\nLAYERS, one map per height k (empty layers above the top are not listed). Rows: back (high j) at the top, front (low j) at the bottom; columns i=0..8 left to right; the digits in the header are i. Letters A-Z = named parts. # = model block without a part, c = column, f = footing, b = bracket, g = bridge, r = reinforcement, u = user-added, . = empty.\n   i012345678\nk=0\nj6|.AAA.....\nj5|AAAAA....\nj4|AAAAAffc.\nj3|.AAA.....\nk=1\nj6|.........\nj5|..Cb.....\nj4|..Cc...c.\nj3|.........\nk=2\nj6|.........\nj5|...b.....\nj4|...c...c.\nj3|.........\nk=3\nj6|.........\nj5|...D.....\nj4|...D...c.\nj3|.........\nk=4\nj6|.........\nj5|...Db....\nj4|...Dg..c.\nj3|.........\nk=5\nj6|.........\nj5|....D....\nj4|....D..c.\nj3|.........\nk=6\nj6|.........\nj5|....E....\nj4|....Eg.c.\nj3|.........\nk=7\nj6|........H\nj5|.....F.II\nj4|.....F.II\nj3|........H\nk=8\nj6|.........\nj5|......FHH\nj4|......FHH\nj3|.........\nk=9\nj6|.........\nj5|......FG.\nj4|......FG.\nj3|.........\n\nINSTRUCTION: \"make the base wider\"",
+ "err": null
+}

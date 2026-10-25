@@ -319,10 +319,10 @@ await test("versionFamily: a generated model on its own is its own family and di
     const g = model("generated");
     const f = V.versionFamily([g], g.id);
     assert.equal(f.root, g);
-    assert.deepEqual(f.stabilized, []);
+    assert.deepEqual(f.versions, []);
     assert.equal(f.active, g);
     assert.equal(f.display, g);
-    assert.equal(f.isStabilized, false);
+    assert.equal(f.isVersion, false);
     assert.equal(V.versionFamily([g], null), null);
     assert.equal(V.versionFamily([g], "nope"), null);
     assert.equal(V.versionFamily([], g.id), null);
@@ -336,21 +336,22 @@ await test("versionFamily: generated -> stabilized -> stabilized again is one fa
     for (const active of models) {
         const f = V.versionFamily(models, active.id);
         assert.equal(f.root, g, `root from ${active.id}`);
-        assert.deepEqual(ofIds(f.stabilized), [s2.id, s1.id], "newest first");
+        assert.deepEqual(ofIds(f.versions), [s1.id, s2.id], "oldest first (v2, v3)");
         assert.equal(f.active, active);
         assert.equal(f.display, g, "the viewer loads the original mesh");
-        assert.equal(f.isStabilized, active !== g);
+        assert.equal(f.isVersion, active !== g);
+        assert.equal(f.onSource, active !== g, "a version is drawn over the original's mesh");
     }
     // A second version made straight from the root joins the family and is the newest.
     const s3 = model("stabilized", { source_model_id: g.id });
     const f = V.versionFamily([g, s1, s2, s3], s1.id);
-    assert.deepEqual(ofIds(f.stabilized), [s3.id, s2.id, s1.id]);
+    assert.deepEqual(ofIds(f.versions), [s1.id, s2.id, s3.id]);
     assert.equal(f.display, g);
     // Another project's family is not part of it.
     const other = model("generated");
     const otherVersion = model("stabilized", { source_model_id: other.id });
     const both = V.versionFamily([g, s1, other, otherVersion], s1.id);
-    assert.deepEqual(ofIds(both.stabilized), [s1.id]);
+    assert.deepEqual(ofIds(both.versions), [s1.id]);
     assert.equal(V.versionFamily([g, s1, other, otherVersion], otherVersion.id).root, other);
 });
 
@@ -361,7 +362,9 @@ await test("versionFamily: an example and its stabilized twin (same instant) are
     const again = model("stabilized", { created_at: stamp, example_slug: "desk-lamp", source_model_id: twin.id });
     const f = V.versionFamily([ex, twin, again], twin.id);
     assert.equal(f.root, ex);
-    assert.deepEqual(ofIds(f.stabilized), [again.id, twin.id], "later in the list is newer when the stamps agree");
+    assert.deepEqual(ofIds(f.versions), [twin.id, again.id], "later in the list is newer when the stamps agree");
+    assert.equal(f.head, twin, "the right half of the bar is the version on screen");
+    assert.equal(V.versionFamily([ex, twin, again], ex.id).head, again, "and from the original, the newest");
     assert.equal(f.display, ex);
     assert.equal(V.displayModelOf([ex, twin, again], again.id), ex);
     assert.equal(V.displayModelOf([ex, twin, again], ex.id), ex);
@@ -375,10 +378,11 @@ await test("versionFamily: a deleted source falls back to showing the stabilized
     // The original is gone: both versions are left without a root.
     const f = V.versionFamily([s1, s2], s2.id);
     assert.equal(f.root, null);
-    assert.deepEqual(f.stabilized, []);
+    assert.deepEqual(f.versions, []);
     assert.equal(f.active, s2);
     assert.equal(f.display, s2, "the stabilized GLB is what the viewer loads");
-    assert.equal(f.isStabilized, true);
+    assert.equal(f.isVersion, true);
+    assert.equal(f.head, null, "no original, no pair to flip between");
     // A middle link missing: s2's chain ends before a root.
     const broken = V.versionFamily([g, s2], s2.id);
     assert.equal(broken.root, null);
@@ -410,8 +414,9 @@ await test("versionFamily: a source mesh that failed to load is not displayed (t
     const failed = V.versionFamily(models, s2.id, new Set([g.id]));
     assert.equal(failed.display, s2);
     assert.equal(failed.root, g);
-    assert.deepEqual(failed.stabilized.map((m) => m.id), [s2.id, s1.id]);
-    assert.equal(failed.isStabilized, true);
+    assert.deepEqual(failed.versions.map((m) => m.id), [s1.id, s2.id]);
+    assert.equal(failed.isVersion, true);
+    assert.equal(failed.onSource, false, "its own blocks: nothing drawn over another model's mesh");
     // The original itself always shows its own file, failed or not; another family is not affected.
     assert.equal(V.versionFamily(models, g.id, new Set([g.id])).display, g);
     assert.equal(V.versionFamily(models, s1.id, new Set(["other"])).display, g);

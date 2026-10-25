@@ -253,7 +253,7 @@ export async function stopGeneration(requestAccessCode: () => Promise<boolean>):
     if (queued) {
         // Otherwise the moment this run ends, the queue would start a second paid one.
         store.setQueuedPrompt(null);
-        store.restoreDraft(queued);
+        store.restoreDraft(queued.text);
         toast.info("Queued prompt moved back to the box", { description: "It was not sent." });
     }
 

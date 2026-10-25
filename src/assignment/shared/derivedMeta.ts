@@ -28,7 +28,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 const REASONS: readonly StabilizeReason[] = ["floating", "cantilever", "cog", "stress"];
 const STOPS: readonly StabilizeStop[] = ["stable", "no-improving-move", "max-steps", "max-blocks", "time-budget", "canceled"];
-const ADDED_ROLES: readonly AddedRole[] = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original");
+const ADDED_ROLES: readonly AddedRole[] = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original" && r !== "user");
 const SOLVERS = ["awatif-wasm", "awatif-ts"] as const;
 const HEX64 = /^[0-9a-f]{64}$/;
 const MAX_TEXT = 300;
@@ -81,7 +81,8 @@ function stepMetrics(value: unknown, field: string): Result<StepMetrics> {
     };
 }
 
-function fullMetrics(value: unknown, field: string): Result<StabilizationMetrics> {
+/** Also used by shared/voxelEdit/log.ts for the before/after figures of an edit log. */
+export function fullMetrics(value: unknown, field: string): Result<StabilizationMetrics> {
     const base = stepMetrics(value, field);
     if (!base.ok) return base;
     const v = value as Record<string, unknown>;

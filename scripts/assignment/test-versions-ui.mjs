@@ -11,7 +11,7 @@
 // library becomes a log. No DOM; the one piece that touches elements (focusing the Stabilize card) gets a fake page.
 import { build } from "esbuild";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -61,13 +61,33 @@ export { JobCard } from "@/assignment/components/chat/JobCard";
 export { ProviderOption, ProviderPicker } from "@/assignment/components/chat/ProviderPicker";
 export { default as Workspace } from "@/assignment/pages/Workspace";
 export * from "@/assignment/store/providers";
+export * from "@/assignment/shared/versionTree";
+export * from "@/assignment/store/workGuard";
+export * from "@/assignment/store/chatNotes";
+export * from "@/assignment/store/editRouter";
+export { useAccessPrompt, settleAccessPrompt } from "@/assignment/store/access";
+export * from "@/assignment/store/models";
+export * from "@/assignment/store/jobs";
+export * from "@/assignment/store/replies";
+export * from "@/assignment/components/chat/composerLogic";
+export * from "@/assignment/components/workspace/format";
+export { Composer } from "@/assignment/components/chat/Composer";
+export { RouteChip } from "@/assignment/components/chat/RouteChip";
+export { RunChip } from "@/assignment/components/workspace/RunChip";
+export { KindIcon, TreeConnector } from "@/assignment/components/workspace/KindIcon";
+export { ModelKindChip } from "@/assignment/components/workspace/ModelKindChip";
+export { DeleteVersionDialog } from "@/assignment/components/workspace/DeleteVersionDialog";
+export { StabilizerLog } from "@/assignment/components/analysis/StabilizerLog";
+export * from "@/assignment/components/analysis/useStabilizerLog";
 export { ModelsPanel } from "@/assignment/components/workspace/ModelsPanel";
 export { ANALYSIS_PEEK_CARD_PX } from "@/assignment/components/analysis/AnalysisPeekCard";
 export { WorkspaceShell } from "@/assignment/components/workspace/WorkspaceShell";
-export { VersionSwitcher } from "@/assignment/components/workspace/VersionSwitcher";
+export { VersionSwitcher, VersionTreeList } from "@/assignment/components/workspace/VersionSwitcher";
 export { SupportsFailedNotice } from "@/assignment/components/workspace/SupportsFailedNotice";
 export { ModelPairLink } from "@/assignment/components/workspace/ModelPairLink";
 export { toasts } from "@/assignment/components/ui/sonner";
+export { useEditStore } from "@/assignment/store/edit";
+export { useVoxelEditStore } from "@/assignment/store/voxelEdit";
 export { useVersionSwitcherState } from "@/assignment/components/workspace/useVersionSwitcherState";
 export { focusStabilizeCard, revealStabilizeCard } from "@/assignment/components/analysis/stabilizeFocus";
 export { useAnalysisSnapshot, useModelVerdict } from "@/assignment/components/analysis/useAnalysis";
@@ -109,8 +129,63 @@ await build({
                                 "data-view-change": typeof p.onViewChange === "function" ? "yes" : "no", "data-layer-raised": String(p.layerRaised),
                                 // The old compare/version chrome of the stage: none of it is handed over any more.
                                 "data-compare-props": ["onCompareChange", "compareStatus", "derivedFrom"].filter((k) => k in p && p[k] !== undefined).join(","),
-                                "data-insets": JSON.stringify(p.insets), "data-mode": p.analysisView?.mode ?? "",
+                                "data-insets": JSON.stringify(p.insets), "data-mode": p.analysisView?.mode ?? "", "data-preview-label": p.previewLabel ?? "",
                             }, p.overlay);
+                        }`,
+                    loader: "js",
+                    resolveDir: root,
+                }));
+                // The cards and panels of the other owners are mounted by name here; what they render is their own tests' business.
+                b.onResolve({ filter: /components\/chat\/EditCard$/ }, () => ({ path: "edit-card-stub", namespace: "shim" }));
+                b.onLoad({ filter: /^edit-card-stub$/, namespace: "shim" }, () => ({
+                    contents: `
+                        import React from "react";
+                        export function EditCard({ job }) { return React.createElement("div", { "data-testid": "edit-card", "data-job": job.id, "data-status": job.status }); }
+                        export function PendingEditCards() { return null; }`,
+                    loader: "js",
+                    resolveDir: root,
+                }));
+                b.onResolve({ filter: /components\/optimize\/OptimizePanel$/ }, () => ({ path: "optimize-panel-stub", namespace: "shim" }));
+                b.onLoad({ filter: /^optimize-panel-stub$/, namespace: "shim" }, () => ({
+                    contents: `
+                        import React from "react";
+                        export default function OptimizePanel() { return React.createElement("div", { "data-testid": "optimize-panel-stub" }); }`,
+                    loader: "js",
+                    resolveDir: root,
+                }));
+                // What the router calls: recorded, and made to fail on request.
+                b.onResolve({ filter: /store\/(edit|voxelEdit)$/ }, (args) =>
+                    args.importer.endsWith("editRouter.ts") ? { path: args.path.endsWith("voxelEdit") ? "voxel-edit-stub" : "edit-stub", namespace: "shim" } : undefined,
+                );
+                b.onLoad({ filter: /^edit-stub$/, namespace: "shim" }, () => ({
+                    contents: `
+                        export const meshEditBusy = () => Boolean(globalThis.__meshBusy);
+                        export async function startDesignOrMeshEdit(a) {
+                            (globalThis.__designMeshEdits ??= []).push(a);
+                            if (globalThis.__editFails) throw new Error(globalThis.__editFails);
+                        }`,
+                    loader: "js",
+                }));
+                // What the block editor shows when the request has come back (`__voxelState`: a proposal, a notice, or neither = dropped) and what the router
+                // asked of it (`__voxelCalls`). A kept draft is found when `__kept` names the model.
+                b.onLoad({ filter: /^voxel-edit-stub$/, namespace: "shim" }, () => ({
+                    contents: `
+                        import { ApiRequestError } from "./src/assignment/lib/api.ts";
+                        const calls = (c) => (globalThis.__voxelCalls ??= []).push(c);
+                        export const useVoxelEditStore = {
+                            getState: () => ({
+                                proposal: null, notice: null, resumable: null, ...(globalThis.__voxelState ?? {}),
+                                findResumable(id) { calls(["findResumable", id]); if (globalThis.__kept === id) globalThis.__voxelState = { ...globalThis.__voxelState, resumable: { modelId: id, count: 2 } }; },
+                                async resume() { calls(["resume"]); globalThis.__voxelState = { ...globalThis.__voxelState, resumable: null, draft: { count: 2 } }; },
+                                cancel() { calls(["cancel"]); },
+                            }),
+                        };
+                        export async function requestBlockEdit(a) {
+                            (globalThis.__blockEdits ??= []).push({ ...a, held: globalThis.__heldDuringBlockEdit?.() });
+                            calls(["request"]);
+                            if (globalThis.__edit401 > 0) { globalThis.__edit401--; throw new ApiRequestError(401, "Access code required"); }
+                            if (globalThis.__editFails) throw new Error(globalThis.__editFails);
+                            globalThis.__afterRequest?.();
                         }`,
                     loader: "js",
                     resolveDir: root,
@@ -143,6 +218,7 @@ const lib = await import(pathToFileURL(path.join(outDir, "bundle.mjs")).href);
 const { React, renderToStaticMarkup } = lib;
 const h = React.createElement;
 const render = (el) => renderToStaticMarkup(el);
+const textOf = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 
 let passed = 0;
 const failures = [];
@@ -177,7 +253,8 @@ const stab = (id, sourceId, added, minutes, over = {}) =>
 
 const INITIAL_VIEW = lib.useAnalysisStore.getState().view;
 function resetAll() {
-    lib.forgetStabilized();
+    lib.forgetHeads();
+    lib.resetWorkGuard();
     lib.setStabilizeDeps();
     lib.useStabilizeStore.getState().discard();
     lib.useAnalysisStore.setState({
@@ -185,7 +262,20 @@ function resetAll() {
         view: INITIAL_VIEW, colorChoice: INITIAL_VIEW.colorBy, preview: null, layerRaised: false, selection: null, stepSelection: null,
         panelOpen: false, sheetOpen: false, openRequest: 0,
     });
-    lib.useWorkspaceStore.setState({ models: [], activeModelId: null, activeProjectId: null, messages: [], workspaceTab: "3d" });
+    lib.useWorkspaceStore.setState({
+        models: [], activeModelId: null, activeProjectId: null, messages: [], jobs: {}, workspaceTab: "3d", composerChoice: null, queuedPrompt: null, providers: null,
+    });
+    globalThis.__designMeshEdits = [];
+    globalThis.__blockEdits = [];
+    globalThis.__editFails = null;
+    globalThis.__edit401 = 0;
+    globalThis.__heldDuringBlockEdit = null;
+    lib.useVoxelEditStore.setState({ sourceModelId: null, projectId: null, status: "idle", proposal: null, draft: null, draftResult: null, notice: null, resumable: null });
+    lib.useEditStore.setState({ runs: {}, undone: {} });
+    globalThis.__voxelState = { proposal: { summary: "Added a shelf." } };
+    globalThis.__voxelCalls = [];
+    globalThis.__kept = null;
+    globalThis.__afterRequest = null;
     storage.clear();
     lib.toasts.length = 0;
 }
@@ -212,16 +302,16 @@ await test("mark: problems are red with their count, a clean model is Stable, an
 
 await test("mark: the accessible names say which version and its state", () => {
     assert.equal(lib.segmentLabel("original", { text: "4 problems" }), "Show the original version (4 problems)");
-    assert.equal(lib.segmentLabel("stabilized", { text: "Stable" }), "Show the stabilized version (Stable)");
+    assert.equal(lib.segmentLabel("head", { text: "Stable" }, "v4 · Lightest"), "Show v4 · Lightest (Stable)", "the right half names its version");
+    assert.equal(lib.segmentLabel("head", { text: "Stable" }), "Show the latest version (Stable)");
     assert.match(lib.segmentTitle("original"), /V switches/);
-    assert.match(lib.segmentTitle("stabilized"), /supports/);
-    assert.equal(lib.segmentLabel("stabilized", { text: "Stable" }, { n: 2, of: 3 }), "Show the stabilized version 2 of 3 (Stable)", "several versions: which one");
+    assert.match(lib.segmentTitle("head"), /version you are working on/);
 });
 
 await test("a11y: the tooltip carries the status in words (the compact bar shows a symbol and a number), and the key's reach", () => {
     assert.match(lib.segmentTitle("original", { text: "4 problems" }), /The original model, as it was made · 4 problems\./);
-    assert.match(lib.segmentTitle("stabilized", { text: "Stable" }, { n: 2, of: 3 }), /stabilized version 2 of 3: .* · Stable\./);
-    assert.match(lib.segmentTitle("original"), /V switches while the 3D view or this switch has focus/, "not a key anywhere on the page");
+    assert.match(lib.segmentTitle("head", { text: "Stable" }, { title: "v4 · Lightest", detail: "−23% weight" }), /v4 · Lightest \(−23% weight\) · Stable\./);
+    assert.match(lib.segmentTitle("original"), /V switches, \[ and \] walk the versions, while the 3D view or this switch has focus/, "not a key anywhere on the page");
 });
 
 await test("a11y: warnings and problems differ in shape, not only in colour (a triangle, a dot) in the compact mark too", () => {
@@ -237,15 +327,35 @@ await test("a11y: warnings and problems differ in shape, not only in colour (a t
 
 // ================= the menu line =================
 
-await test("menu: '+16 blocks · Stable · time', today's versions without a date, older ones with it", () => {
+await test("menu: 'v3 · Stabilized · +16 blocks · Stable · time', today's versions without a date, older ones with it", () => {
     const now = new Date(at(0));
-    const today = lib.versionMenuLine({ derived: { added_blocks: 16 }, created_at: at(0) }, { text: "Stable" }, now, "en-US");
-    assert.match(today, /^\+16 blocks · Stable · \d{1,2}:\d{2}\s?[AP]M$/);
-    const old = lib.versionMenuLine({ derived: { added_blocks: 1 }, created_at: at(-24 * 60) }, { text: "2 problems" }, now, "en-US");
-    assert.match(old, /^\+1 block · 2 problems · [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}\s?[AP]M$/);
-    assert.match(lib.versionMenuLine({ derived: { added_blocks: 0 }, created_at: at(0) }, { text: "Stable" }, now, "en-US"), /^No blocks added · Stable/);
-    assert.equal(lib.versionMenuLine({ derived: null, created_at: "not a date" }, { text: "Stable" }, now), "Stable");
+    const row = (m, title, mark) => lib.versionRowLine(m, title, mark, now, "en-US");
+    const today = row(stab("s1", "m1", 16, 0), "v3 · Stabilized", { text: "Stable" });
+    assert.match(today, /^v3 · Stabilized · \+16 blocks · Stable · \d{1,2}:\d{2}\s?[AP]M$/);
+    const old = row(stab("s1", "m1", 1, -24 * 60), "v2 · Stabilized", { text: "2 problems" });
+    assert.match(old, /^v2 · Stabilized · \+1 block · 2 problems · [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}\s?[AP]M$/);
+    assert.match(row(stab("s1", "m1", 0, 0), "v2 · Stabilized", { text: "Stable" }), /^v2 · Stabilized · No blocks added · Stable/);
+    assert.equal(row(model("m1", { created_at: "not a date" }), "v1 · Original", { text: "Stable" }), "v1 · Original · Stable");
     assert.equal(lib.clockTime("nope"), null);
+});
+
+await test("menu: each kind of version says what it did, in plain words", () => {
+    const edited = (target, over = {}) => model("e", { kind: "edited", source_model_id: "m1", edit: { target, label: "Taller back", summary: "x", entries: [{ n: 1, instruction: "make it taller", summary: "x", added: 12, removed: 3, moved: 0 }], changes: null, ops: null, notes: [], stabilized_depth: 0 }, ...over });
+    assert.equal(lib.versionDetail(edited("voxel")), "+12 −3 blocks");
+    assert.equal(lib.versionDetail(edited("voxel", { edit: { ...edited("voxel").edit, entries: [{ n: 1, instruction: "a", summary: "b", added: 1, removed: 0, moved: 0 }] } })), "+1 block");
+    assert.equal(lib.versionDetail(edited("design", { edit: { ...edited("design").edit, changes: { added: ["cup holder"], changed: ["seat"], removed: [] } } })), "2 parts changed");
+    assert.equal(lib.versionDetail(edited("mesh", { edit: { ...edited("mesh").edit, ops: [{ op: "stretch", label: "back" }] } })), "1 change");
+    const opt = (before, after) => model("o", { kind: "optimized", source_model_id: "m1", optimization: { title: "Lightest", goal: "as light as possible", before: { blocks: 100, weight_kg: before }, after: { blocks: 80, weight_kg: after }, shape_changed: false } });
+    assert.equal(lib.versionDetail(opt(100, 77)), "−23% weight");
+    assert.equal(lib.versionDetail(opt(100, 110)), "+10% weight");
+    assert.equal(lib.versionDetail(model("r")), null, "an original says nothing");
+    assert.equal(lib.versionStory(edited("voxel")), "“make it taller” — x");
+    assert.equal(lib.versionStory(opt(100, 77)), "“as light as possible” · −23% weight");
+    assert.equal(lib.modelTitle(edited("voxel")), "Edited · Taller back");
+    assert.equal(lib.modelTitle(opt(100, 77)), "Optimized · Lightest");
+    assert.equal(lib.modelTitle(model("r")), "a shelf");
+    assert.match(lib.modelFileName(opt(100, 77)), /-optimized\.glb$/);
+    assert.match(lib.modelFileName(edited("mesh")), /-edited\.glb$/);
 });
 
 // ================= when the switcher is shown =================
@@ -286,36 +396,73 @@ await test("mode: a warning the stabilizer cannot act on (thin parts left out) o
 
 // ================= where a click or V goes =================
 
-await test("target: V flips original <-> stabilized, and returns to the version that was on screen", () => {
+await test("target: V flips the original and the version you work on, and returns to the one that was on screen", () => {
     const root = model("m1");
     const v1 = stab("s1", "m1", 4, 5);
     const v2 = stab("s2", "m1", 6, 10);
     const models = [root, v1, v2];
     const fam = (active) => lib.versionFamily(models, active);
-    assert.deepEqual(fam("m1").stabilized.map((m) => m.id), ["s2", "s1"], "newest first");
-    assert.equal(lib.toggleTarget(fam("m1")).id, "s2", "from the original: the newest version");
+    assert.deepEqual(fam("m1").versions.map((m) => m.id), ["s1", "s2"], "oldest first (v2, v3)");
+    assert.equal(fam("m1").head.id, "s2", "from the original: the newest version");
+    assert.equal(lib.toggleTarget(fam("m1")).id, "s2");
     assert.equal(lib.toggleTarget(fam("s1")).id, "m1", "from a version: the original");
     assert.equal(lib.toggleTarget(fam("s2")).id, "m1");
-    lib.rememberStabilized(fam("s1"));
+    lib.rememberHead(models, v1);
     assert.equal(lib.toggleTarget(fam("m1")).id, "s1", "back to the one that was shown last");
-    assert.equal(lib.stabilizedTarget(fam("s2")).id, "s2", "the Stabilized half stands for the one on screen");
+    assert.equal(fam("s2").head.id, "s2", "the right half stands for the one on screen");
     assert.equal(lib.targetOf("original", fam("s2")).id, "m1");
-    assert.equal(lib.targetOf("stabilized", fam("m1")).id, "s1");
-    lib.forgetStabilized();
+    assert.equal(lib.targetOf("head", fam("m1")).id, "s1");
+    lib.forgetHeads();
     assert.equal(lib.toggleTarget(fam("m1")).id, "s2");
     assert.equal(lib.toggleTarget(lib.versionFamily([root], "m1")), null, "nothing to flip to");
     assert.equal(lib.toggleTarget(lib.versionFamily([v1], "s1")), null, "the original is gone");
     assert.equal(lib.toggleTarget(null), null);
 });
 
-await test("target: a chain generated -> v1 -> v2 is one family: the Original half is the generated model", () => {
+await test("target: a chain generated -> stabilized -> edited -> optimized is one family: the Original half is the generated model", () => {
+    const root = model("m1");
+    const v1 = stab("s1", "m1", 4, 5);
+    const v2 = model("e1", { kind: "edited", source_model_id: "s1", created_at: at(10), edit: { target: "voxel", label: "Shelf", summary: "", entries: [], changes: null, ops: null, notes: [], stabilized_depth: 1 } });
+    const v3 = model("o1", { kind: "optimized", source_model_id: "e1", created_at: at(15), optimization: { title: "Lightest", shape_changed: false, stabilized_depth: 1 } });
+    const f = lib.versionFamily([root, v1, v2, v3], "o1");
+    assert.equal(f.root.id, "m1");
+    assert.equal(lib.toggleTarget(f).id, "m1");
+    assert.deepEqual(f.versions.map((m) => m.id), ["s1", "e1", "o1"]);
+});
+
+await test("keys: [ and ] walk to the parent and the newest child, on any tab but Models", () => {
+    const key = (over) => ({ key: "]", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, defaultPrevented: false, ...over });
+    assert.equal(lib.stepKeyOf(key({})), "child");
+    assert.equal(lib.stepKeyOf(key({ key: "[" })), "parent");
+    assert.equal(lib.stepKeyOf(key({ key: "[", ctrlKey: true })), null, "a chord belongs to the browser");
+    assert.equal(lib.stepKeyOf(key({ key: "a" })), null);
+    assert.equal(lib.isOptimizeKey(key({ key: "o" })), true);
+    assert.equal(lib.isOptimizeKey(key({ key: "O", metaKey: true })), false);
     const root = model("m1");
     const v1 = stab("s1", "m1", 4, 5);
     const v2 = stab("s2", "s1", 2, 10);
-    const f = lib.versionFamily([root, v1, v2], "s2");
-    assert.equal(f.root.id, "m1");
-    assert.equal(lib.toggleTarget(f).id, "m1");
-    assert.deepEqual(f.stabilized.map((m) => m.id), ["s2", "s1"]);
+    load([root, v1, v2], "s1");
+    assert.equal(lib.stepVersion("child"), true);
+    assert.equal(S().activeModelId, "s2");
+    assert.equal(lib.stepVersion("child"), false, "the last one has no child");
+    assert.equal(lib.stepVersion("parent"), true);
+    assert.equal(lib.stepVersion("parent"), true);
+    assert.equal(S().activeModelId, "m1");
+    assert.equal(lib.stepVersion("parent"), false, "the original has no parent");
+    lib.useWorkspaceStore.setState({ workspaceTab: "models" });
+    assert.equal(lib.stepVersion("child"), false);
+    // The key handler claims a key that walked, says so (once, as a toast) when there is nowhere to go, and leaves typing alone.
+    load([root, v1, v2], "m1");
+    let prevented = 0;
+    const press = (k, target = null) => lib.handleVersionKey({ ...key({ key: k }), target, preventDefault: () => void prevented++ });
+    assert.equal(press("]"), true);
+    assert.deepEqual([S().activeModelId, prevented], ["s1", 1]);
+    assert.equal(press("["), true);
+    assert.equal(S().activeModelId, "m1");
+    assert.equal(press("["), true, "the key is handled: it says so");
+    assert.equal(prevented, 2, "and is left alone");
+    assert.match(lib.toasts.at(-1).title, /no earlier version/);
+    assert.equal(press("]", { closest: () => ({}) }), false, "typing in a field");
 });
 
 // ================= the stores =================
@@ -364,66 +511,100 @@ await test("V key: a bare v only", () => {
 
 // ================= the markup =================
 
-await test("switcher: Original | Stabilized with each half's status, the open one checked", () => {
+const optimized = (id, sourceId, minutes, over = {}) =>
+    model(id, {
+        kind: "optimized", provider: "optimizer", source_model_id: sourceId, created_at: at(minutes),
+        optimization: { title: "Lightest", goal: "as light as possible", shape_changed: false, stabilized_depth: 1, before: { blocks: 100, weight_kg: 200 }, after: { blocks: 77, weight_kg: 154 } },
+        ...over,
+    });
+const edited = (id, sourceId, minutes, target = "voxel", label = "Taller back", over = {}) =>
+    model(id, {
+        kind: "edited", provider: target === "voxel" ? "editor" : "hunyuan", source_model_id: sourceId, created_at: at(minutes),
+        edit: { version: 1, target, label, summary: "Raised the back.", entries: [{ n: 1, instruction: "make the back taller", summary: "Raised the back.", added: 12, removed: 0, moved: 0 }], changes: null, ops: null, notes: [], stabilized_depth: 0, depth: 1, base_steps: 0, engine: "", job_id: null, created_at: at(minutes) },
+        ...over,
+    });
+
+await test("switcher: Original | the version you work on, each half with its status, the open one checked", () => {
     load([model("m1", { analysis: summary(4) }), stab("s1", "m1", 16, 5, { analysis: summary(0) })], "s1");
     const html = bar();
     assert.match(html, /data-testid="version-switcher"/);
     assert.match(html, /role="radiogroup"/);
     assert.match(html, /aria-label="Model version"/);
     assert.match(html, /aria-label="Show the original version \(4 problems\)"/);
-    assert.match(html, /aria-label="Show the stabilized version \(Stable\)"/);
+    assert.match(html, /aria-label="Show v2 · Stabilized \(Stable\)"/);
     assert.match(html, /data-testid="version-original"[^>]*aria-checked="false"|aria-checked="false"[^>]*data-testid="version-original"/);
-    assert.match(html, /aria-checked="true"[^>]*data-testid="version-stabilized"|data-testid="version-stabilized"[^>]*aria-checked="true"/);
+    assert.match(html, /aria-checked="true"[^>]*data-testid="version-head"|data-testid="version-head"[^>]*aria-checked="true"/);
     assert.match(html, /4 problems/, "the words beside the red mark");
     assert.match(html, />Stable</, "and beside the green one");
-    assert.doesNotMatch(html, /aria-haspopup/, "one stabilized version: a plain button, no menu");
-    assert.match(html, /Showing the stabilized version/);
+    assert.match(html, />v2 · Stabilized</, "the right half names its version");
+    assert.match(html, /Showing v2 · Stabilized/);
+    assert.match(html, /aria-label="Show all versions \(2\)"/, "the tree is behind a chevron, also for one version (it walks and deletes)");
     load([model("m1", { analysis: summary(4) }), stab("s1", "m1", 16, 5, { analysis: summary(0) })], "m1");
     assert.match(bar(), /Showing the original version/);
 });
 
-await test("switcher: it also shows on the Analysis tab, and not on the Models tab", () => {
+await test("switcher: it also shows on the Stability and Optimization tabs, and not on the Models tab", () => {
     load([model("m1"), stab("s1", "m1", 4, 5)], "s1", "analysis");
     assert.match(bar({ tab: "analysis" }), /data-testid="version-switcher"/);
+    assert.match(bar({ tab: "optimize" }), /data-testid="version-switcher"/);
     assert.equal(bar({ tab: "models" }), "");
 });
 
-await test("switcher: several stabilized versions: the Stabilized half is one click, a chevron beside it opens the list, and the half names its version", () => {
-    load([model("m1"), stab("s1", "m1", 4, 5, { analysis: summary(2) }), stab("s2", "m1", 6, 10, { analysis: summary(0) })], "m1");
+await test("switcher: the right half is the version on screen, else the one seen last, else the newest; edited and optimized versions have names", () => {
+    const root = model("m1");
+    const models = [root, stab("s1", "m1", 4, 5, { analysis: summary(2) }), edited("e1", "m1", 7), optimized("p1", "s1", 10, { analysis: summary(0) })];
+    load(models, "m1");
     const html = bar();
-    // The half is a plain radio now (it picks the version, it does not open a menu); the chevron is the menu's trigger.
-    const half = html.match(/<button[^>]*data-testid="version-stabilized"[^>]*>/)[0];
-    assert.doesNotMatch(half, /aria-haspopup/, "the half itself opens nothing");
+    const half = html.match(/<button[^>]*data-testid="version-head"[^>]*>/)[0];
     assert.match(half, /role="radio"/);
+    assert.doesNotMatch(half, /aria-haspopup/, "the half itself opens nothing");
     const trigger = html.match(/<button[^>]*data-testid="version-menu-trigger"[^>]*>/)[0];
     assert.match(trigger, /aria-haspopup="menu"/);
     assert.doesNotMatch(trigger, /role="radio"/, "a button that opens a menu is not a radio");
-    assert.match(trigger, /aria-label="Choose a stabilized version \(2 versions\)"/);
-    assert.match(html, /aria-label="Show the stabilized version 2 of 2 \(Stable\)"/, "the newest version stands for the half, and says which");
-    assert.match(html, /data-testid="version-ordinal"[^>]*>v2</, "and the bar names it");
-    lib.rememberStabilized(lib.versionFamily(S().models, "s1"));
-    assert.match(bar(), /aria-label="Show the stabilized version 1 of 2 \(2 problems\)"/, "or the one seen last");
-    load(S().models, "s1");
-    assert.match(bar(), /aria-label="Show the stabilized version 1 of 2 \(2 problems\)"/);
-    assert.match(bar(), /aria-checked="true"[^>]*data-testid="version-stabilized"|data-testid="version-stabilized"[^>]*aria-checked="true"/);
+    assert.match(trigger, /aria-label="Show all versions \(4\)"/);
+    assert.match(html, /aria-label="Show v4 · Lightest \(Stable\)"/, "the newest version stands for the half, and says which");
+    assert.match(half, /title="v4 · Lightest \(−23% weight\) · Stable\./, "its tooltip says what it did");
+    lib.rememberHead(models, models[1]);
+    assert.match(bar(), /aria-label="Show v2 · Stabilized \(2 problems\)"/, "or the one seen last");
+    load(models, "e1");
+    assert.match(bar(), /aria-label="Show v3 · Taller back \(Not analysed yet\)"/, "a change by words is named by what it did");
+    assert.match(bar(), /aria-checked="true"[^>]*data-testid="version-head"|data-testid="version-head"[^>]*aria-checked="true"/);
 });
 
-await test("switcher: one stabilized version has no chevron and no version number", () => {
-    load([model("m1"), stab("s1", "m1", 4, 5)], "m1");
-    const html = bar();
-    assert.doesNotMatch(html, /version-menu-trigger|version-ordinal|aria-haspopup/);
+await test("tree: the rows are indented under the version they were made from, the one on screen is ticked, and each row says what it did", () => {
+    const models = [model("m1", { analysis: summary(0) }), stab("s1", "m1", 4, 5, { analysis: summary(0, 1) }), edited("e1", "m1", 7, "voxel", "Shelf", { analysis: summary(2) }), optimized("p1", "s1", 10)];
+    load(models, "p1");
+    const family = lib.versionFamily(models, "p1");
+    const rows = lib.familyRows(family);
+    assert.deepEqual(rows.map((r) => `${r.model.id}:${r.depth}`), ["m1:0", "s1:1", "p1:2", "e1:1"], "depth first, oldest first");
+    assert.deepEqual(rows.map((r) => lib.familyTitle(family, r.model)), ["v1 · Original", "v2 · Stabilized", "v4 · Lightest", "v3 · Shelf"]);
+    assert.equal(lib.versionOrdinal(family, { id: "e1" }).n, 3);
+    assert.equal(lib.versionOrdinal(family, { id: "m1" }).n, 1);
+    assert.equal(lib.versionOrdinal(family, { id: "nope" }), null);
+    assert.equal(lib.versionOrdinal(null, { id: "e1" }), null);
 });
 
-await test("menu: each row names its version (v1 is the oldest), so two like versions made in a minute can be told apart", () => {
-    const now = new Date(at(0));
-    const family = lib.versionFamily([model("m1"), stab("s1", "m1", 6, 0), stab("s2", "m1", 6, 0)], "m1");
-    assert.deepEqual(family.stabilized.map((m) => lib.versionOrdinal(family, m)), [{ n: 2, of: 2 }, { n: 1, of: 2 }]);
-    assert.equal(lib.versionOrdinal(family, { id: "m1" }), null, "the original is not one of them");
-    assert.equal(lib.versionOrdinal(null, { id: "s1" }), null);
-    const line = (m, ordinal) => lib.versionMenuLine(m, { text: "Stable" }, now, "en-US", ordinal);
-    assert.match(line(family.stabilized[0], { n: 2, of: 2 }), /^v2 · \+6 blocks · Stable · /);
-    assert.match(line(family.stabilized[1], { n: 1, of: 2 }), /^v1 · \+6 blocks · Stable · /);
-    assert.notEqual(line(family.stabilized[0], { n: 2, of: 2 }), line(family.stabilized[1], { n: 1, of: 2 }));
+await test("tree rows (the phone's sheet shares them with the desktop menu): indented, ticked, named, with what each did and its mark", () => {
+    const models = [model("m1", { analysis: summary(0) }), stab("s1", "m1", 9, 5, { analysis: summary(0, 1) }), edited("e1", "m1", 7, "voxel", "Shelf", { analysis: summary(2) }), optimized("p1", "s1", 10, { analysis: summary(0) })];
+    load(models, "p1");
+    const family = lib.versionFamily(models, "p1");
+    const html = render(h(lib.VersionTreeList, { family, onPick() {} }));
+    assert.deepEqual([...html.matchAll(/data-testid="version-menu-item" data-active="(true|false)" data-depth="(\d)"/g)].map((m) => `${m[1]}:${m[2]}`), ["false:0", "false:1", "true:2", "false:1"]);
+    const text = textOf(html);
+    assert.match(text, /v1 · Original/);
+    assert.match(text, /v2 · Stabilized \+9 blocks/);
+    assert.match(text, /v4 · Lightest −23% weight/);
+    assert.match(text, /v3 · Shelf \+12 blocks/);
+    assert.match(html, /data-mark="fail"/, "the edited version has problems: a dot");
+    assert.match(html, /data-mark="warn"/, "and the stabilized one a warning: a triangle");
+    assert.equal((html.match(/data-testid="tree-connector"/g) ?? []).length, 3, "every row but the root has its connector");
+    assert.match(html, /lucide-sliders-horizontal/);
+    assert.match(html, /lucide-pencil-line/);
+});
+
+await test("switcher: no version has no chevron; the control is not there at all", () => {
+    load([model("m1")], "m1");
+    assert.doesNotMatch(bar(), /version-menu-trigger|aria-haspopup/);
 });
 
 await test("switcher: no analysis yet is a hollow dot and the words in the label, never invented problems", () => {
@@ -439,7 +620,7 @@ await test("switcher: the live analysis wins over the saved summary", () => {
     lib.useAnalysisStore.setState({ summaries: { m1: summary(0), s1: summary(1) } });
     const html = bar();
     assert.match(html, /aria-label="Show the original version \(Stable\)"/);
-    assert.match(html, /aria-label="Show the stabilized version \(1 problem\)"/);
+    assert.match(html, /aria-label="Show v2 · Stabilized \(1 problem\)"/);
 });
 
 await test("switcher: compact keeps the marks and drops the words", () => {
@@ -702,7 +883,7 @@ await test("V key: no listener on the window any more (the page cannot be made t
     const read = (file) => readFileSync(path.join(root, "src/assignment", file), "utf8");
     const page = read("pages/Workspace.tsx");
     assert.doesNotMatch(page, /isVersionKey|toggleVersion|handleVersionKey/, "the page no longer owns the key");
-    assert.match(read("components/workspace/WorkspaceShell.tsx"), /handleVersionKey\(versionKeyEvent\(e\)\)/, "the stage handles it, like A");
+    assert.match(read("components/workspace/WorkspaceShell.tsx"), /handleVersionKey\(keyEvent\)/, "the stage handles it, like A");
     assert.match(read("components/workspace/VersionSwitcher.tsx"), /handleVersionKey\(versionKeyEvent\(event\)\)/, "and so does the switch");
 });
 
@@ -711,8 +892,8 @@ await test("V key: no listener on the window any more (the page cannot be made t
 await test("supports failure: only the 3D tab of a stabilized model on its source, only when the run failed, with the reason", () => {
     const f = (over) => lib.supportsFailure({ onSource: true, tab: "3d", phase: "error", error: "The stabilized model's file was not found.", ...over });
     assert.equal(f({}), "The stabilized model's file was not found.");
-    assert.equal(f({ error: null }), "The stabilized model's blocks could not be read.", "a reason is always given");
-    assert.equal(f({ error: "  " }), "The stabilized model's blocks could not be read.");
+    assert.equal(f({ error: null }), "This version's blocks could not be read.", "a reason is always given");
+    assert.equal(f({ error: "  " }), "This version's blocks could not be read.");
     assert.equal(f({ phase: "running" }), null);
     assert.equal(f({ phase: "done" }), null);
     assert.equal(f({ phase: "loading" }), null);
@@ -828,17 +1009,17 @@ await test("look: embedded in the tab card it is a tray without its own border o
 
 // ================= the same words open the same model (UX-7) =================
 
-await test("links: an original links to the bar's Stabilized, a version to the original; Previous only as an extra on a version of a version", () => {
+await test("links: an original links to the bar's right half (Latest), a version to the original; Previous only as an extra on a version of a version", () => {
     const root = model("m1");
     const v1 = stab("s1", "m1", 4, 5);
     const v2 = stab("s2", "s1", 2, 10);
     const models = [root, v1, v2];
     const links = (id, list = models) => lib.pairLinks(lib.versionFamily(list, id), list).map((l) => `${l.label}:${l.model.id}`);
-    // The original: the family's Stabilized half (the newest version, here a version of a version), not its only direct child.
-    assert.deepEqual(links("m1"), ["Stabilized:s2"]);
-    lib.rememberStabilized(lib.versionFamily(models, "s1"));
-    assert.deepEqual(links("m1"), ["Stabilized:s1"], "the one seen last, like the bar");
-    lib.forgetStabilized();
+    // The original: the family's head (the newest version, here a version of a version), not its only direct child.
+    assert.deepEqual(links("m1"), ["Latest:s2"]);
+    lib.rememberHead(models, v1);
+    assert.deepEqual(links("m1"), ["Latest:s1"], "the one seen last, like the bar");
+    lib.forgetHeads();
     // A version made from the original: Original.
     assert.deepEqual(links("s1"), ["Original:m1"]);
     // A version made from a version: Original is the generated model (as the bar's), Previous the one before it.
@@ -850,18 +1031,19 @@ await test("links: an original links to the bar's Stabilized, a version to the o
     assert.deepEqual(lib.pairLinks(null, models), []);
 });
 
-await test("links: a card for each model renders them (the stabilized chat card gets its way back to the original)", () => {
+await test("links: a card for each model renders them (the version's chat card gets its way back to the original)", () => {
     const root = model("m1");
     const v1 = stab("s1", "m1", 4, 5);
     const v2 = stab("s2", "s1", 2, 10);
     const models = [root, v1, v2];
     const link = (m) => render(h(lib.ModelPairLink, { model: m, models, onView() {} }));
     const labels = (html) => [...html.matchAll(/data-label="([^"]*)"/g)].map((x) => x[1]);
-    assert.deepEqual(labels(link(root)), ["Stabilized"]);
+    assert.deepEqual(labels(link(root)), ["Latest"]);
     assert.deepEqual(labels(link(v1)), ["Original"]);
     assert.deepEqual(labels(link(v2)), ["Original", "Previous"]);
     assert.match(link(v2), /aria-label="Show the original version"/);
     assert.match(link(v2), /aria-label="Show the previous version"/);
+    assert.match(link(root), /aria-label="Show the latest version"/);
     assert.equal(link(model("lonely")), "", "nothing to flip to");
 });
 
@@ -876,14 +1058,14 @@ const derivedOf = (added, over = {}) => ({
 const planned = () => lib.analyzeAssembly(lib.descriptorFromBlocks([[0, 0, 0], [1, 0, 0], [2, 0, 0]].map((cell) => ({ cell }))), null, lib.sanitizeSettings(null));
 const FAILING = { kind: "fail", errors: 2, warnings: 0, blocks: 3, custom: null, headline: "2 problems", short: "2 problems" };
 
-await test("target: the Stabilized half of the bar is the version seen last, else the newest of the family (a version of a version counts)", () => {
+await test("target: the right half of the bar is the version seen last, else the newest of the family (a version of a version counts)", () => {
     const R = model("m1");
     const S1 = stab("s1", "m1", 4, 5, { derived: derivedOf(4) });
     const S2 = stab("s2", "s1", 6, 10, { derived: derivedOf(6) });
     load([R, S1, S2], "m1");
-    assert.equal(lib.stabilizedTarget(lib.versionFamily(S().models, "m1")).id, "s2", "the newest of the family: S2 is made from S1, and the bar opens it");
-    lib.rememberStabilized(lib.versionFamily(S().models, "s1"));
-    assert.equal(lib.stabilizedTarget(lib.versionFamily(S().models, "m1")).id, "s1", "the one seen last");
+    assert.equal(lib.versionFamily(S().models, "m1").head.id, "s2", "the newest of the family: S2 is made from S1, and the bar opens it");
+    lib.rememberHead(S().models, S1);
+    assert.equal(lib.versionFamily(S().models, "m1").head.id, "s1", "the one seen last");
 });
 
 await test("panel: an original that has a stabilized version gets no button that switches versions (the bar's switcher is the only way)", () => {
@@ -904,7 +1086,8 @@ await test("panel: components/analysis has no way to open another version, a Com
     const offenders = (pattern) => files.filter((f) => pattern.test(readFileSync(path.join(dir, f), "utf8").replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, "")));
     // The one place that moves between models is the strip of a run that belongs to another model ("Go to that model"): that is a
     // model, not a version of this one.
-    const moves = (pattern) => offenders(pattern).filter((f) => f !== "RunStrip.tsx");
+    // (And the block-edit card, which opens the version it has just saved: the model it made, not another version of this one.)
+    const moves = (pattern) => offenders(pattern).filter((f) => f !== "RunStrip.tsx" && f !== "EditBlocksCard.tsx");
     assert.deepEqual(moves(/\bopenVersion\s*\(/), [], "versions are switched in the bar");
     assert.deepEqual(moves(/\bsetActiveModel\s*\(/), [], "and so are models, except from the other-model strip");
     assert.deepEqual(offenders(/\b(requestCompare|setCompare|ensureOriginal|CompareNotice|CompareChip)\b/), [], "the compare machinery is gone");
@@ -956,7 +1139,7 @@ await test("bar: the switcher is inside the tab card, after the tabs, so the tab
 
 await test("bar: a window too narrow for it beside the tabs puts the switcher on a row under the bar; a phone always does, and holds the row while the verdict is pending", async () => {
     const narrow = await shellHtml({ width: 700, models: PAIR, active: "s1" });
-    const rowAt = narrow.indexOf('class="mt-2 flex min-h-9 items-center"');
+    const rowAt = narrow.indexOf('class="mt-2 flex min-h-9 items-center gap-2"');
     assert.ok(rowAt > narrow.indexOf('data-testid="workspace-tab-strip"'), "under the bar");
     assert.ok(narrow.indexOf('data-testid="version-switcher"') > rowAt, "in that row");
     assert.equal(narrow.match(/data-testid="version-switcher"/g).length, 1);
@@ -1035,7 +1218,7 @@ await test("bar: when the original mesh cannot be loaded, the stabilized version
     globalThis.__viewerLoadError("Could not read the file.");
     assert.equal(lib.toasts.length, 1);
     assert.match(lib.toasts[0].title, /original model could not be displayed/);
-    assert.match(lib.toasts[0].options.description, /stabilized model.s blocks/);
+    assert.match(lib.toasts[0].options.description, /this version.s blocks/);
     assert.equal(lib.useAnalysisStore.getState().viewerFailure, null, "the version is not reported failed: it can still be shown");
     assert.equal(lib.meshFailures().has("m1"), true);
     const after = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
@@ -1270,8 +1453,8 @@ await test("auto-switch: when a run saves, the new version opens in the viewer a
     assert.deepEqual(lib.toasts.filter((t) => t.kind === "success").map((t) => t.title), ["Switched to the stabilized version"], "and it says so, once");
     // ...and the bar says which version that is, with the way back: the same switch as everywhere else.
     const html = await shellHtml({ models: S().models, active: "s1", tab: "analysis" });
-    assert.match(html, /aria-checked="true"[^>]*data-testid="version-stabilized"|data-testid="version-stabilized"[^>]*aria-checked="true"/);
-    assert.match(html, /Showing the stabilized version/);
+    assert.match(html, /aria-checked="true"[^>]*data-testid="version-head"|data-testid="version-head"[^>]*aria-checked="true"/);
+    assert.match(html, /Showing v2 · Stabilized/);
 });
 
 /** The answer of a stabilizer that added 4 blocks, and a run for `source` that waits on `upload` (released by the caller) before it saves. */
@@ -1404,7 +1587,7 @@ await test("chat: a card says Stability check, not Analysis, and has no Compare 
     const html = card(twin);
     assert.match(html, />Stability check</);
     assert.match(html, /\+4 blocks · 1 problem · open stability check/, "the verdict line says where it leads");
-    assert.match(html, /aria-label="Stabilized version: [^"]*Open the stability check\."/);
+    assert.match(html, /aria-label="This version: [^"]*Open the stability check\."/);
     assert.match(html, /Strength used 198% → 21%/, "plain words for the load on the worst joint");
     assert.doesNotMatch(html, /Compare|Open analysis|open analysis|Highest joint stress|the structure/);
     assert.match(html, /data-label="Original"/, "the way to the other half is the pair link, the bar's switch");
@@ -1588,6 +1771,918 @@ await test("the job card of an AI designer: a Parts badge, the helper while it r
     assert.doesNotMatch(done, /job-designer-note/, "the note is for the wait");
     // A failure reads as it did.
     assert.match(card(job({ status: "failed", error: "The designer sent no parts.", stage: "Failed" })), /The designer sent no parts\./);
+});
+
+// ================= versions, edits and the Optimization tab (the foundation of the build) =================
+
+const ASSIST = { available: true, queued: true, images: true, model: "meta/muse-spark-1.3-contributor", daily_limit: 400, used_today: 3 };
+const providersWith = (assist, extra = {}) => ({ providers: [MUSE, HUNYUAN], default_provider: "muse", access_required: false, daily_limit: null, used_today: 0, assist, ...extra });
+const editJob = (over = {}) => job({ id: "j-edit", kind: "edit", edit: { source_model_id: "m1", target: "design", result: null }, prompt: "make the back taller", stage: "Designing the change", ...over });
+
+// ---------- the work guard ----------
+
+await test("work guard: one kind of work at a time per project, the second is told to finish or discard the first", () => {
+    const release = lib.acquireWork("stabilize", "p1", { label: "Stabilizing" });
+    assert.equal(typeof release, "function");
+    assert.equal(lib.currentWork().kind, "stabilize");
+    assert.equal(lib.acquireWork("blocks", "p1"), null);
+    assert.equal(lib.acquireWork("optimize", "p1"), null);
+    assert.equal(lib.workBusyMessage("blocks", "p1"), "Finish or discard the stabilizing first.");
+    assert.equal(lib.workBusyMessage("stabilize", "p1"), null, "its own kind is not in its way");
+    assert.equal(lib.anyWorkMessage("p1"), "Finish or discard the stabilizing first.");
+    assert.equal(lib.anyWorkMessage("p2"), null, "another project's work is not this one's");
+    release();
+    release();
+    assert.equal(lib.currentWork(), null, "given back (and a second call does nothing)");
+    const again = lib.acquireWork("optimize", "p1");
+    assert.ok(again);
+    assert.equal(lib.workBusyMessage("blocks", "p1"), "Finish or discard the optimization first.");
+    again();
+    const blocks = lib.acquireWork("blocks", "p1");
+    assert.equal(lib.workBusyMessage("stabilize", "p1"), "Finish or discard the block changes first.");
+    blocks();
+});
+
+await test("work guard: the same work may take it twice (the router and the store); it is free when both have given it back", () => {
+    const outer = lib.acquireWork("blocks", "p1", { label: "Changing the blocks" });
+    const inner = lib.acquireWork("blocks", "p1", { stop: () => {} });
+    assert.ok(outer && inner);
+    assert.equal(typeof lib.currentWork().stop, "function", "what the second told it is kept");
+    outer();
+    assert.equal(lib.currentWork()?.kind, "blocks", "one taker left");
+    inner();
+    assert.equal(lib.currentWork(), null);
+    // A release from work that was replaced does not give back the new work's hold.
+    const first = lib.acquireWork("blocks", "p1");
+    lib.resetWorkGuard();
+    const second = lib.acquireWork("optimize", "p1");
+    first();
+    assert.equal(lib.currentWork()?.kind, "optimize");
+    second();
+});
+
+await test("work guard: opening another project drops it; an edit job on the queue keeps all other work out; waiting turns the optimizer's mark into a dot", () => {
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1" });
+    lib.acquireWork("stabilize", "p1");
+    assert.ok(lib.currentWork());
+    lib.useWorkspaceStore.setState({ activeProjectId: "p2" });
+    assert.equal(lib.currentWork(), null, "the work stopped with its project");
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1", jobs: { e: editJob({ project_id: "p1" }) } });
+    assert.equal(lib.acquireWork("blocks", "p1"), null, "a change to the design is on its way");
+    assert.equal(lib.workBusyMessage("optimize", "p1"), "Wait for the change to finish first.");
+    lib.useWorkspaceStore.setState({ jobs: { e: editJob({ project_id: "p1", status: "succeeded", model: null }) } });
+    const release = lib.acquireWork("optimize", "p1");
+    assert.ok(release, "a finished job is no obstacle");
+    assert.equal(lib.currentWork().waiting, false);
+    lib.setWorkWaiting("optimize", true);
+    assert.equal(lib.currentWork().waiting, true);
+    lib.setWorkWaiting("blocks", false);
+    assert.equal(lib.currentWork().waiting, true, "another kind's flag is not this one's");
+    release();
+});
+
+// ---------- the notes ----------
+
+await test("chat notes: the person's words and the assistant's line go in the chat of the open project, and nowhere else", () => {
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1", messages: [] });
+    const user = lib.postUserNote("p1", "  add a shelf  ");
+    const reply = lib.postAssistantNote("p1", "Added a shelf.", { modelIds: ["a", "b", ...Array.from({ length: 12 }, (_, i) => `x${i}`)] });
+    const messages = S().messages;
+    assert.deepEqual(messages.map((m) => [m.role, m.content]), [["user", "add a shelf"], ["assistant", "Added a shelf."]]);
+    assert.equal(messages[1].model_ids.length, 10, "at most ten cards");
+    assert.deepEqual(messages[1].model_ids.slice(0, 2), ["a", "b"]);
+    assert.equal(messages[0].model_ids, undefined);
+    assert.ok(user && reply && user !== reply);
+    assert.equal(lib.postUserNote("elsewhere", "hello"), null, "another project is open");
+    assert.equal(lib.postAssistantNote("p1", "   "), null, "nothing to say");
+    assert.equal(S().messages.length, 2);
+    lib.removeNote(user);
+    lib.removeNote(null);
+    assert.deepEqual(S().messages.map((m) => m.role), ["assistant"]);
+});
+
+// ---------- what the words do ----------
+
+await test("composer state: edit by default when a model can be edited; the person's choice wins; an example or a server without the editor falls back to New with the reason", () => {
+    const muse = model("m1", { provider: "muse" });
+    const ex = model("ex", { kind: "example", provider: "example", example_slug: "shelf-arm" });
+    const state = (models, active, over = {}) => lib.composerStateOf({ models, activeModelId: active, tab: "3d", assist: ASSIST, choice: null, ...over });
+    assert.deepEqual(state([], null), { mode: "new", hasModel: false, canEdit: false, editReason: null, target: null, subject: null });
+    const a = state([muse], "m1");
+    assert.deepEqual([a.mode, a.canEdit, a.target, a.subject], ["edit", true, "design", "the original"]);
+    assert.equal(state([muse], "m1", { choice: "new" }).mode, "new", "the choice wins");
+    assert.equal(state([muse], "m1", { choice: "edit" }).mode, "edit");
+    const hun = state([model("m1")], "m1");
+    assert.equal(hun.target, "mesh");
+    const stabilized = state([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    assert.deepEqual([stabilized.target, stabilized.subject], ["voxel", "v2 · Stabilized"]);
+    const onExample = state([ex], "ex");
+    assert.deepEqual([onExample.mode, onExample.canEdit, onExample.hasModel], ["new", false, true]);
+    assert.match(onExample.editReason, /Edits work on models you generate/);
+    assert.equal(state([ex], "ex", { tab: "analysis" }).mode, "edit", "an example's blocks can be changed on the Stability tab");
+    const noEditor = state([muse], "m1", { assist: undefined });
+    assert.deepEqual([noEditor.mode, noEditor.canEdit, noEditor.editReason], ["new", false, "The AI editor is not set up on the server."]);
+    assert.equal(state([muse], "m1", { assist: { ...ASSIST, queued: false } }).canEdit, false, "a design needs the queue");
+    assert.equal(state([model("m1"), stab("s1", "m1", 4, 5)], "s1", { assist: { ...ASSIST, queued: false } }).canEdit, true, "the blocks do not");
+    assert.equal(state([muse], "m1", { assist: { ...ASSIST, available: false } }).canEdit, false);
+});
+
+await test("composer words: the placeholder follows the mode and the target, the chip says who works on what, an edit is shorter than a prompt", () => {
+    const p = (over) => lib.placeholderFor({ mode: "edit", generating: false, started: true, target: "design", subject: "v3 · Stabilized", ...over });
+    assert.equal(p({}), "Describe a change to v3 · Stabilized");
+    assert.equal(p({ target: "voxel" }), "Describe a change to the blocks");
+    assert.equal(p({ generating: true }), "Queue the next change");
+    assert.equal(p({ mode: "new" }), "Describe another object");
+    assert.equal(p({ mode: "new", started: false }), "Describe the object you want to build");
+    assert.equal(p({ mode: "new", generating: true }), "Queue the next prompt");
+    assert.deepEqual(lib.ROUTE_WORDS, { design: "Muse · edits the parts", mesh: "Muse · adjusts the model", voxel: "Muse · changes the blocks" });
+    assert.equal(lib.maxCharsFor("edit", 1000), 500);
+    assert.equal(lib.maxCharsFor("new", 1000), 1000);
+    assert.equal(lib.assistReason(ASSIST, "mesh"), null);
+    assert.equal(lib.assistLimitReached({ ...ASSIST, used_today: 400 }), true);
+    assert.equal(lib.assistLimitReached({ ...ASSIST, daily_limit: null, used_today: 9999 }), false);
+    assert.equal(lib.assistLimitReached(undefined), false);
+});
+
+const composerProps = (over = {}) => ({
+    input: "", onInput() {}, onSubmit() {}, onStop() {}, textareaRef: { current: null }, onTextareaFocus() {}, onTextareaBlur() {}, placeholder: "Describe", locked: false,
+    generating: false, stoppable: false, canSend: false, providers: [MUSE, HUNYUAN], selected: ["muse"], onSelectedChange() {}, usage: null, mode: "new", onModeChange() {},
+    edit: null, onRegenerate: null, ...over,
+});
+
+await test("composer markup: the toggle is there only with a model; the Edit half is off with its reason; Edit mode swaps the picker for the route chip and shortens the box", () => {
+    const none = render(h(lib.Composer, composerProps()));
+    assert.doesNotMatch(none, /composer-mode/, "no model, nothing to choose");
+    assert.match(none, /data-testid="provider-picker"/);
+    assert.match(none, /maxLength="1000"|maxlength="1000"/i);
+    const on = render(h(lib.Composer, composerProps({ mode: "edit", edit: { target: "voxel", canEdit: true, reason: null, subject: "v3 · Stabilized" } })));
+    assert.match(on, /role="radiogroup"[^>]*aria-label="What your words do"/);
+    assert.match(on, /data-testid="mode-edit"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-testid="mode-edit"/);
+    assert.match(on, /Edit v3 · Stabilized/);
+    assert.match(on, /data-testid="route-chip"[^>]*data-target="voxel"/);
+    assert.doesNotMatch(on, /data-testid="provider-picker"/, "the picker gives way to the route chip");
+    assert.match(on, /Muse · changes the blocks/);
+    assert.match(on, /maxLength="500"|maxlength="500"/i);
+    assert.match(on, /aria-label="Describe a change"/);
+    const off = render(h(lib.Composer, composerProps({ mode: "new", edit: { target: null, canEdit: false, reason: "Edits work on models you generate.", subject: "the original" } })));
+    const edit = off.match(/<button[^>]*data-testid="mode-edit"[^>]*>/)[0];
+    assert.match(edit, /aria-disabled="true"/);
+    assert.doesNotMatch(edit, /\sdisabled(=|\s|>)/, "a disabled button takes no focus and no tap: the reason would be tooltip-only");
+    assert.match(edit, /title="Edits work on models you generate\."/, "the reason is the tooltip");
+    assert.match(off, /data-testid="mode-new"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-testid="mode-new"/);
+    const sendEdit = render(h(lib.Composer, composerProps({ mode: "edit", canSend: true, edit: { target: "design", canEdit: true, reason: null, subject: "the original" } })));
+    assert.match(sendEdit, /aria-label="Send change"/);
+});
+
+await test("route chip: a mesh edit has a menu with the second way (Hunyuan again, with the cost); the others are a plain label", () => {
+    assert.doesNotMatch(render(h(lib.RouteChip, { target: "design" })), /aria-haspopup/);
+    assert.doesNotMatch(render(h(lib.RouteChip, { target: "voxel", onRegenerate() {} })), /aria-haspopup/);
+    assert.doesNotMatch(render(h(lib.RouteChip, { target: "mesh" })), /aria-haspopup/, "Hunyuan not usable: nothing to choose");
+    const mesh = render(h(lib.RouteChip, { target: "mesh", onRegenerate() {} }));
+    assert.match(mesh, /aria-haspopup="menu"/);
+    assert.match(mesh, /Muse · adjusts the model/);
+});
+
+await test("the chat panel: with a model it edits by default and says so; with an example, or without the editor, it makes a new model", async () => {
+    const chat = async (models, assist, extra = {}) => {
+        lib.useWorkspaceStore.setState({
+            activeProjectId: PROJECT_ID, project: { id: PROJECT_ID, name: "Lamp", pinned: false }, messages: [], jobs: {}, models, activeModelId: models[0]?.id ?? null,
+            workspaceTab: "3d", providers: providersWith(assist), ...extra,
+        });
+        return withMatchMedia(false, async () => render(h(lib.ChatPanel, {})));
+    };
+    const muse = model("m1", { provider: "muse", project_id: PROJECT_ID });
+    const html = await chat([muse], ASSIST);
+    assert.match(html, /placeholder="Describe a change to the original"/);
+    assert.match(html, /data-testid="route-chip"[^>]*data-target="design"/);
+    assert.match(html, /data-testid="usage-hint"[^>]*>3\/400 today</, "an edit counts against the editor's own cap");
+    const chosenNew = await chat([muse], ASSIST, { composerChoice: "new" });
+    assert.match(chosenNew, /placeholder="Describe another object"/);
+    assert.match(chosenNew, /data-testid="provider-picker"/);
+    const example = await chat([model("ex", { kind: "example", provider: "example", example_slug: "shelf-arm", project_id: PROJECT_ID })], ASSIST);
+    assert.match(example, /placeholder="Describe another object"/);
+    assert.match(example, /Edits work on models you generate/);
+    const none = await chat([muse], undefined);
+    assert.match(none, /placeholder="Describe another object"/);
+    assert.match(none, /The AI editor is not set up on the server\./);
+    const queued = await chat([muse], ASSIST, { queuedPrompt: { text: "make it taller", mode: "edit" }, jobs: { j: job({ project_id: PROJECT_ID }) } });
+    assert.match(queued, /Queued\. Changes the model when this run finishes/, "a queued change says it is a change");
+    assert.match(queued, /make it taller/);
+    const queuedNew = await chat([muse], ASSIST, { queuedPrompt: { text: "a red lamp", mode: "new" }, jobs: { j: job({ project_id: PROJECT_ID }) } });
+    assert.match(queuedNew, /Queued\. Sends when this run finishes/);
+    lib.useWorkspaceStore.setState({ queuedPrompt: null });
+});
+
+// ---------- the router ----------
+
+const readyForEdit = (models, active, { tab = "3d", assist = ASSIST } = {}) => {
+    lib.useWorkspaceStore.setState({
+        activeProjectId: "p1", project: { id: "p1", name: "Lamp", pinned: false }, messages: [], jobs: {}, models, activeModelId: active, workspaceTab: tab,
+        providers: providersWith(assist),
+    });
+};
+
+await test("router: a Muse model's change goes to the parts editor, a Hunyuan model's to the mesh editor, both with what they need and without the router writing the chat", async () => {
+    readyForEdit([model("m1", { provider: "muse" })], "m1");
+    assert.deepEqual(await lib.submitEdit("  make the back taller  "), { ok: true });
+    assert.deepEqual(globalThis.__designMeshEdits, [{ projectId: "p1", modelId: "m1", target: "design", instruction: "make the back taller" }]);
+    assert.equal(S().messages.length, 0, "the editor writes the person's words and its card, the router must not add a second copy");
+    globalThis.__designMeshEdits = [];
+    readyForEdit([model("m1")], "m1");
+    assert.deepEqual(await lib.submitEdit("make the back taller"), { ok: true });
+    assert.equal(globalThis.__designMeshEdits[0].target, "mesh");
+    assert.equal(globalThis.__blockEdits.length, 0);
+});
+
+await test("router: a change to the blocks takes the guard while the request is out, shows the Stability tab, and writes the person's words", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1", { tab: "3d" });
+    globalThis.__heldDuringBlockEdit = () => lib.currentWork()?.kind;
+    assert.deepEqual(await lib.submitEdit("add a shelf under the seat"), { ok: true });
+    assert.deepEqual(globalThis.__blockEdits.map((e) => [e.modelId, e.instruction, e.held]), [["s1", "add a shelf under the seat", "blocks"]]);
+    assert.equal(S().workspaceTab, "analysis", "the proposal is on the Stability tab, wherever the words were typed");
+    assert.deepEqual(S().messages.map((m) => [m.role, m.content]), [["user", "add a shelf under the seat"]]);
+    assert.equal(lib.currentWork(), null, "given back when the request has come back (the block editor keeps its own hold for the draft)");
+    // From the Optimization tab, and for an original (a mesh is voxelised: the unstable block version).
+    readyForEdit([model("m1")], "m1", { tab: "optimize" });
+    assert.deepEqual(await lib.submitEdit("make the legs thicker"), { ok: true });
+    assert.equal(globalThis.__blockEdits.length, 2);
+    assert.equal(S().workspaceTab, "analysis");
+});
+
+await test("router: it refuses, with a reason in words, and gives the text back: nothing to edit, an example, no editor, the day's limit, too long, other work", async () => {
+    const refused = async (text = "make it taller") => {
+        const before = lib.toasts.length;
+        const out = await lib.submitEdit(text);
+        assert.deepEqual(out, { ok: false, restorePrompt: true }, `refused: ${text.slice(0, 20)}`);
+        return lib.toasts.slice(before);
+    };
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1", models: [], activeModelId: null, providers: providersWith(ASSIST) });
+    assert.match((await refused())[0].title, /no model to change/);
+    readyForEdit([model("ex", { kind: "example", provider: "example", example_slug: "shelf-arm" })], "ex");
+    assert.match((await refused())[0].options.description, /Edits work on models you generate/);
+    readyForEdit([model("m1", { provider: "muse" })], "m1", { assist: null });
+    assert.match((await refused())[0].options.description, /AI editor is not set up/);
+    readyForEdit([model("m1", { provider: "muse" })], "m1", { assist: { ...ASSIST, used_today: 400 } });
+    assert.equal((await refused())[0].title, "Daily limit reached");
+    readyForEdit([model("m1", { provider: "muse" })], "m1");
+    assert.match((await refused("x".repeat(501)))[0].title, /too long/);
+    assert.match((await refused(""))?.[0]?.title ?? "", /^$/, "empty: nothing said");
+    // Other work holds the guard: a block edit while the optimizer runs, a design edit while a stabilizer run waits for a decision.
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    const hold = lib.acquireWork("optimize", "p1");
+    assert.equal((await refused())[0].options.description, "Finish or discard the optimization first.");
+    hold();
+    readyForEdit([model("m1", { provider: "muse" })], "m1");
+    const run = lib.acquireWork("stabilize", "p1");
+    assert.equal((await refused())[0].options.description, "Finish or discard the stabilizing first.");
+    run();
+    assert.equal(globalThis.__designMeshEdits.length + globalThis.__blockEdits.length, 0, "nothing was started");
+    assert.equal(S().messages.length, 0, "nothing was written");
+});
+
+await test("router: an access code the server refuses is asked for again once; with a new one the change goes through, without it nothing is kept", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    globalThis.__edit401 = 1;
+    const before = globalThis.__blockEdits.length;
+    const sent = lib.submitEdit("add a shelf");
+    for (let i = 0; i < 20 && !lib.useAccessPrompt.getState().open; i++) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(lib.useAccessPrompt.getState().open, true, "the dialog asks for the code");
+    lib.settleAccessPrompt(true);
+    assert.deepEqual(await sent, { ok: true });
+    assert.equal(globalThis.__blockEdits.length, before + 2, "the same change was sent again");
+    // dismissed: the refusal is what the person is told, and the words go back to the box
+    lib.useWorkspaceStore.setState({ messages: [] });
+    globalThis.__edit401 = 1;
+    lib.toasts.length = 0;
+    const second = lib.submitEdit("add a shelf");
+    for (let i = 0; i < 20 && !lib.useAccessPrompt.getState().open; i++) await new Promise((r) => setTimeout(r, 5));
+    lib.settleAccessPrompt(false);
+    assert.deepEqual(await second, { ok: false, restorePrompt: true });
+    assert.equal(S().messages.length, 0, "the words were taken back out of the chat");
+    assert.match(lib.toasts.at(-1).options.description, /Access code required/);
+});
+
+await test("router: when the editor fails, the person's words are taken back out of the chat and handed back; the guard is free", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    globalThis.__editFails = "The AI editor is busy.";
+    const out = await lib.submitEdit("add a shelf");
+    assert.deepEqual(out, { ok: false, restorePrompt: true });
+    assert.equal(S().messages.length, 0);
+    assert.equal(lib.currentWork(), null);
+    assert.equal(lib.toasts.at(-1).options.description, "The AI editor is busy.");
+    readyForEdit([model("m1", { provider: "muse" })], "m1");
+    assert.deepEqual(await lib.submitEdit("add a shelf"), { ok: false, restorePrompt: true });
+    assert.match(lib.toasts.at(-1).title, /Could not start the change/);
+});
+
+await test("router: a mesh edit is refused before anything is written while another one of the project is going", async () => {
+    // (A Hunyuan model is not a Muse parts model: its change is a mesh edit.)
+    readyForEdit([model("m1")], "m1");
+    globalThis.__meshBusy = true;
+    try {
+        assert.deepEqual(await lib.submitEdit("make the back taller"), { ok: false, restorePrompt: true });
+        assert.equal(lib.toasts.at(-1).title, "Another edit is still running");
+        assert.equal(S().messages.length, 0, "the words stay in the box, nothing is written to the chat");
+        assert.equal(globalThis.__designMeshEdits.length, 0);
+    } finally {
+        globalThis.__meshBusy = false;
+    }
+    assert.deepEqual(await lib.submitEdit("make the back taller"), { ok: true });
+    assert.equal(globalThis.__designMeshEdits.at(-1).target, "mesh");
+});
+
+// ---------- the run chip ----------
+
+await test("run chip: a change on the queue, the stabilizer while it runs, and work that can be stopped are announced; nothing else is", () => {
+    const base = { jobs: {}, projectId: "p1", hold: null, stabilizing: false };
+    assert.equal(lib.runActivityOf(base), null);
+    const e = editJob({ project_id: "p1", created_at: new Date(Date.now() - 8000).toISOString() });
+    const a = lib.runActivityOf({ ...base, jobs: { e } });
+    assert.deepEqual([a.words, a.stopKey], ["Muse is editing", "job"]);
+    assert.ok(Math.abs(a.since - Date.parse(e.created_at)) < 1);
+    assert.equal(lib.runActivityOf({ ...base, jobs: { e: { ...e, status: "succeeded" } } }), null, "a finished job is not running");
+    assert.equal(lib.runActivityOf({ ...base, jobs: { e: { ...e, project_id: "other" } } }), null, "another project's");
+    assert.equal(lib.runActivityOf({ ...base, jobs: { g: job({ project_id: "p1" }) } }), null, "a generation has its own card and overlay");
+    const hold = (kind, extra = {}) => ({ kind, projectId: "p1", since: 1000, label: null, stop: null, waiting: false, ...extra });
+    assert.deepEqual(lib.runActivityOf({ ...base, hold: hold("stabilize"), stabilizing: true }), { words: "Stabilizing", since: 1000, stopKey: "stabilize" });
+    assert.equal(lib.runActivityOf({ ...base, hold: hold("stabilize"), stabilizing: false }), null, "a run that waits for Save or Discard is not running");
+    assert.equal(lib.runActivityOf({ ...base, hold: hold("optimize") }), null, "no way to stop it: not announced");
+    assert.deepEqual(lib.runActivityOf({ ...base, hold: hold("optimize", { stop() {}, label: "Optimizing" }) }), { words: "Optimizing", since: 1000, stopKey: "hold" });
+    assert.equal(lib.runActivityOf({ ...base, hold: hold("optimize", { stop() {}, projectId: "other" }) }), null);
+    assert.equal(lib.runActivityOf({ ...base, hold: hold("blocks", { stop() {}, waiting: true }) }), null, "a draft that waits for Save is not running, even if it can still be stopped");
+    // A mesh edit: the pictures (no job yet), the plan applied and the result saved (the job is done) are this page's work, told here too.
+    assert.deepEqual(lib.runActivityOf({ ...base, meshRun: { key: "pending-1", since: 500, stoppable: true } }), { words: "Muse is editing", since: 500, stopKey: "mesh", stopId: "pending-1" });
+    assert.deepEqual(lib.runActivityOf({ ...base, meshRun: { key: "j1", since: 500, stoppable: false } }), { words: "Muse is editing", since: 500, stopKey: null, stopId: "j1" }, "saving the result cannot be stopped");
+    assert.equal(lib.runActivityOf({ ...base, jobs: { e }, meshRun: { key: e.id, since: 1, stoppable: true } }).stopKey, "job", "while the plan is made the job is the thing to stop");
+});
+
+await test("run chip: on a phone's row the words are for a screen reader only, and the row holds the control, the chip and the picked issue", async () => {
+    const e = editJob({ project_id: "p1" });
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1", jobs: { e } });
+    const chip = render(h(lib.RunChip, { compact: true }));
+    assert.match(chip, /class="[^"]*sr-only[^"]*" data-testid="run-chip-words"/);
+    assert.match(chip, /data-testid="run-chip-stop"/);
+    assert.doesNotMatch(render(h(lib.RunChip, {})), /sr-only[^"]*" data-testid="run-chip-words"/);
+    lib.useWorkspaceStore.setState({ jobs: {} });
+    const phone = await shellHtml({ mobile: true, models: PAIR, active: "s1", tab: "3d" });
+    lib.useWorkspaceStore.setState({ jobs: { e } });
+    const running = await shellHtml({ mobile: true, models: PAIR, active: "s1", tab: "3d" });
+    assert.doesNotMatch(phone, /data-testid="run-chip"/);
+    const row = running.slice(running.indexOf('class="mt-2 flex items-center gap-2 min-h-10"'));
+    assert.ok(row.indexOf('data-testid="version-switcher"') < row.indexOf('data-testid="run-chip"'), "the chip sits beside the control, in its row");
+});
+
+await test("run chip: it shows the words, the clock and a Stop button", () => {
+    assert.equal(render(h(lib.RunChip, {})), "");
+    lib.useWorkspaceStore.setState({ activeProjectId: "p1", jobs: { e: editJob({ project_id: "p1" }) } });
+    const html = render(h(lib.RunChip, {}));
+    assert.match(html, /role="status"/);
+    assert.match(html, /data-testid="run-chip-words"[^>]*>Muse is editing…</);
+    assert.match(html, /data-testid="pipeline-elapsed"/);
+    assert.match(html, /data-testid="run-chip-stop"[^>]*aria-label="Stop: Muse is editing"/);
+});
+
+// ---------- the bar with four tabs ----------
+
+await test("tabs: 3D, Stability, Optimization, Models in that order; the Optimization tab names its key and carries the optimizer's mark", async () => {
+    const html = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
+    const order = [...html.matchAll(/data-testid="tab-(3d|analysis|optimize|models)"/g)].map((m) => m[1]);
+    assert.deepEqual(order, ["3d", "analysis", "optimize", "models"]);
+    assert.match(textOf(html.slice(html.indexOf('data-testid="workspace-tab-strip"'), html.indexOf("version-switcher"))), /3D Stability .*Optimization Models/);
+    assert.match(html, /data-testid="tab-optimize"/);
+    assert.match(html, /title="Optimization \(O while the 3D view has focus\)"/);
+    assert.doesNotMatch(html, /optimize-dock|optimize-panel-stub/, "the panel is for its own tab");
+    // The optimizer's work: a spinner; a result that waits: a dot.
+    const release = lib.acquireWork("optimize", "p1", { label: "Optimizing" });
+    const spinning = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
+    const tabCell = (page) => page.slice(page.indexOf('data-testid="tab-optimize"'), page.indexOf('data-testid="tab-models"'));
+    assert.match(tabCell(spinning), /animate-spin/);
+    lib.setWorkWaiting("optimize", true);
+    const waiting = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
+    assert.match(tabCell(waiting), /aria-label="A result is waiting"/);
+    assert.doesNotMatch(tabCell(waiting), /animate-spin/);
+    release();
+    assert.doesNotMatch(tabCell(await shellHtml({ models: PAIR, active: "s1", tab: "3d" })), /animate-spin|waiting/);
+});
+
+await test("tabs: the Optimization tab mounts the optimizer's panel under the bar (a phone: docked at the foot), shows the blocks, and keeps the version control", async () => {
+    const html = await shellHtml({ models: PAIR, active: "s1", tab: "optimize" });
+    assert.match(html, /data-testid="optimize-dock"/);
+    assert.match(html, /data-testid="optimize-panel-stub"/);
+    assert.equal(attr(html, "data-mode"), "blocks", "the stage draws the blocks over the model");
+    assert.match(html, /data-testid="version-switcher"/);
+    assert.match(html, /aria-pressed="true"[^>]*data-testid="tab-optimize"|data-testid="tab-optimize"[^>]*aria-pressed="true"/);
+    assert.equal(JSON.parse(attr(html, "data-insets").replace(/&quot;/g, '"')).left, 344, "the model is framed beside the panel, as beside the report");
+    const phone = await shellHtml({ mobile: true, models: PAIR, active: "s1", tab: "optimize" });
+    assert.match(phone, /data-testid="optimize-peek"/);
+    assert.match(phone, /data-testid="optimize-panel-stub"/);
+    assert.doesNotMatch(phone, /optimize-dock/);
+    assert.doesNotMatch(phone, /analysis-peek-dock[^>]*>.*analysis-peek/, "not the report's card");
+    const stability = await shellHtml({ models: PAIR, active: "s1", tab: "analysis" });
+    assert.doesNotMatch(stability, /optimize-dock|optimize-panel-stub/);
+    const models = await shellHtml({ models: PAIR, active: "s1", tab: "models" });
+    assert.doesNotMatch(models, /optimize-panel-stub/);
+});
+
+await test("keys: O flips the 3D view and the Optimization tab like A flips Stability, only while the stage has focus; a link ?tab=optimization opens it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const shell = readFileSync(path.join(root, "src/assignment/components/workspace/WorkspaceShell.tsx"), "utf8");
+    assert.match(shell, /isOptimizeKey\(keyEvent\)/);
+    assert.match(shell, /workspace\.workspaceTab === "optimize" \? "3d" : "optimize"/);
+    assert.match(shell, /if \(inTypingContext\(e\.target\)\) return;\s*e\.preventDefault\(\);\s*const workspace = useWorkspaceStore\.getState\(\);\s*workspace\.setWorkspaceTab\(/, "not in a field");
+    assert.equal(lib.tabFromParam("optimize"), "optimize");
+    assert.equal(lib.tabFromParam("optimization"), "optimize");
+    assert.equal(lib.tabFromParam("nope"), null);
+    assert.equal(lib.isBlockTab("optimize"), true);
+    assert.equal(lib.isBlockTab("analysis"), true);
+    assert.equal(lib.isBlockTab("3d"), false);
+    // The strip of the bar scrolls sideways when narrow; the run chip sits in the free room beside the control, on every tab.
+    lib.useWorkspaceStore.setState({ jobs: { e: editJob({ project_id: "p1" }) } });
+    for (const tab of ["3d", "analysis", "optimize", "models"]) {
+        const page = await shellHtml({ models: PAIR, active: "s1", tab });
+        lib.useWorkspaceStore.setState({ jobs: { e: editJob({ project_id: "p1" }) } });
+        assert.match(await shellHtml({ models: PAIR, active: "s1", tab }), /data-testid="run-chip"/, `the chip is on the ${tab} tab`);
+        void page;
+    }
+});
+
+await test("preview: the stage's chip names whose picture it is", async () => {
+    assert.equal(lib.previewLabelOf("stabilize"), "Stabilizer preview");
+    assert.equal(lib.previewLabelOf("blocks"), "Preview of your change");
+    assert.equal(lib.previewLabelOf("optimize"), "Optimizer preview");
+    assert.equal(lib.previewLabelOf(null), "Stabilizer preview");
+    const html = await shellHtml({ models: PAIR, active: "s1", tab: "analysis" });
+    assert.equal(attr(html, "data-preview-label"), "Stabilizer preview");
+    const preview = planned();
+    lib.useAnalysisStore.getState().setPreview("s1", preview, "blocks");
+    assert.equal(attr(await shellHtml({ models: PAIR, active: "s1", tab: "analysis" }), "data-preview-label"), "Preview of your change");
+    lib.useAnalysisStore.getState().setPreview("s1", null, "blocks");
+});
+
+await test("tabs: the insets of the Optimization tab are the report's (beside the panel on a desktop, above the card on a phone)", () => {
+    const insets = { top: 60, right: 0, bottom: 0, left: 0 };
+    const input = { insets, analysisOn: true, mobile: false, switcherRowPx: 0, panelOpen: true, freeWidth: 1200, dockInsetPx: 344, peekPx: 190 };
+    assert.equal(lib.viewerInsetsFor(input).left, 344);
+    assert.equal(lib.viewerInsetsFor({ ...input, mobile: true }).bottom, 190 + 8);
+});
+
+// ---------- the Models tab as a tree ----------
+
+const TREE = () => {
+    const root = model("m1", { analysis: summary(0), created_at: at(0) });
+    const s1 = stab("s1", "m1", 9, 5, { analysis: summary(0, 1) });
+    const e1 = edited("e1", "m1", 7, "voxel", "Shelf", { analysis: summary(2) });
+    const p1 = optimized("p1", "s1", 10, { analysis: summary(0) });
+    return [root, s1, e1, p1];
+};
+
+await test("models tab: one tree, the versions indented under the one they were made from, numbered, with what each did in the person's words", () => {
+    const models = TREE();
+    const html = render(h(lib.ModelsPanel, { models, activeModelId: "p1", providers: [HUNYUAN], onView() {}, onEdit() {}, onDelete: async () => ({}) }));
+    assert.equal((html.match(/data-testid="model-group"/g) ?? []).length, 1);
+    assert.deepEqual([...html.matchAll(/data-testid="model-row" data-kind="(\w+)"/g)].map((m) => m[1]), ["generated", "stabilized", "optimized", "edited"], "depth first");
+    assert.deepEqual([...html.matchAll(/data-testid="model-ordinal"[^>]*>v(\d)</g)].map((m) => m[1]), ["1", "2", "4", "3"]);
+    assert.deepEqual([...html.matchAll(/<div[^>]*class="flex items-stretch gap-1\.5" data-depth="(\d)"/g)].map((m) => m[1]), ["0", "1", "2", "1"]);
+    assert.match(html, /data-testid="tree-connector" data-depth="2"/);
+    const text = textOf(html);
+    assert.match(text, /Stabilized · a shelf/);
+    assert.match(text, /Edited · Shelf/);
+    assert.match(text, /Optimized · Lightest/);
+    assert.match(text, /“make the back taller” — Raised the back\./, "an edit quotes the request and says what it did");
+    assert.match(text, /“as light as possible” · −23% weight/, "an optimization quotes its goal");
+    assert.match(text, /\+9 blocks/);
+    assert.match(html, /data-testid="model-kind" data-kind="edited"/);
+    assert.match(html, /data-testid="model-kind" data-kind="optimized"/);
+});
+
+await test("models tab: Edit… and Delete are on versions as they should be; a root cannot be deleted, an example cannot be edited, and the reason is the tooltip", () => {
+    const ex = model("ex", { kind: "example", provider: "example", example_slug: "shelf-arm" });
+    const models = [ex, stab("t", "ex", 4, 1), ...TREE()];
+    const html = render(h(lib.ModelsPanel, { models, activeModelId: "m1", providers: [HUNYUAN], onView() {}, onEdit() {}, onDelete: async () => ({}) }));
+    const rows = html.split('data-testid="model-row"').slice(1);
+    const deletable = rows.map((r) => /data-testid="model-delete"/.test(r));
+    assert.equal(deletable.filter(Boolean).length, 4, "the stabilized twin, the stabilized, the edited and the optimized version; not the two roots");
+    const edits = rows.map((r) => r.match(/<button[^>]*data-testid="model-edit"[^>]*>/)?.[0] ?? "");
+    const exRow = rows.findIndex((r) => /data-kind="example"/.test(r));
+    assert.match(edits[exRow], /aria-disabled="true"/);
+    assert.doesNotMatch(edits[exRow], /\sdisabled(=|\s|>)/, "not a disabled button: it takes focus and a tap, and says why");
+    assert.match(edits[exRow], /title="Edits work on models you generate/);
+    assert.doesNotMatch(edits.filter((_, n) => n !== exRow && /model-edit/.test(rows[n])).join(""), /\sdisabled(=|\s|>)/);
+    const noEdit = render(h(lib.ModelsPanel, { models: TREE(), activeModelId: "m1", providers: [HUNYUAN], onView() {} }));
+    assert.doesNotMatch(noEdit, /model-edit|model-delete/, "no handler, no button");
+    assert.match(render(h(lib.ModelsPanel, { models: [], activeModelId: null, providers: [], onView() {} })), /No models yet/);
+});
+
+await test("delete dialog: says what goes and what stays, closed when there is nothing to ask", () => {
+    const models = TREE();
+    assert.equal(render(h(lib.DeleteVersionDialog, { model: null, models, onConfirm() {}, onCancel() {} })), "");
+    const sub = lib.subtreeIds(models, "s1");
+    assert.deepEqual(sub, ["s1", "p1"]);
+});
+
+await test("models list: a version's card undoes it only when nothing was made from it; chips name each kind; the optimized card quotes the saving", () => {
+    const models = TREE();
+    const card = (m) => render(h(lib.ModelCard, { model: m, models, active: false, onView() {} }));
+    assert.match(card(models[3]), /data-testid="model-undo"/, "the optimized version is a leaf");
+    assert.doesNotMatch(card(models[1]), /model-undo/, "a stabilized version is not undone by a card");
+    assert.doesNotMatch(card(models[0]), /model-undo/);
+    const withKid = [...models, edited("e2", "e1", 12)];
+    assert.doesNotMatch(render(h(lib.ModelCard, { model: models[2], models: withKid, active: false, onView() {} })), /model-undo/, "something was made from it");
+    assert.match(textOf(card(models[3])), /−23% weight · /, "the verdict line leads with what it did");
+    assert.match(card(models[3]), /aria-label="This version: −23% weight/);
+    assert.match(textOf(card(models[2])), /\+12 blocks/);
+    assert.match(card(models[3]), /data-label="Original"/);
+});
+
+await test("job cards: a change of a design or a mesh is the edit card's, never a generation's Retry; a generation is what it was", () => {
+    const card = (j) => render(h(lib.JobCard, { job: j, providers: [MUSE, HUNYUAN], active: false, canRetry: true, onView() {}, onRetry() {} }));
+    const edit = card(editJob({ status: "failed", error: "nope" }));
+    assert.match(edit, /data-testid="edit-card" data-job="j-edit" data-status="failed"/);
+    assert.doesNotMatch(edit, /Retry|job-card/);
+    assert.match(card(job({ status: "failed", error: "nope" })), /data-testid="job-card"/);
+    assert.match(card(job({ kind: "generate", status: "failed", error: "nope" })), /Retry/);
+});
+
+// ---------- how this version was made ----------
+
+await test("log: a version says how it was made in its own words: the stabilizer's steps, the requests of an edit, the optimizer's goal and figures", () => {
+    const metric = (blocks, kg, util, margin) => ({ blocks, weight_kg: kg, errors: 0, warnings: 0, floating_blocks: 0, over_limit: 0, longest_cantilever: 3, cog_margin_mm: margin, max_utilisation: util, max_deflection_um: 5 });
+    const opt = optimized("p1", "s1", 10, { optimization: { title: "Lightest", goal: "as light as possible", shape_changed: false, stabilized_depth: 1, removed: 23, added: 0, stop: "converged", before: metric(100, 200, 0.6, 136), after: metric(77, 154, 0.75, 120) } });
+    const ed = edited("e1", "m1", 7, "design", "Taller back", { edit: { ...edited("e1", "m1", 7).edit, target: "design", changes: { added: ["cup holder"], changed: ["back"], removed: [] }, notes: ["scaled to 98% to fit the 1000 mm cube"] } });
+    const hookOf = (m) => {
+        lib.useWorkspaceStore.setState({ models: [m], activeModelId: m.id });
+        let out;
+        function Probe() {
+            out = lib.useStabilizerLog(m);
+            return null;
+        }
+        render(h(Probe));
+        return out;
+    };
+    const o = hookOf(opt);
+    assert.deepEqual([o.kind, o.title, lib.logSummary(o)], ["optimizer", "What the optimizer did", "Lightest"]);
+    const e = hookOf(ed);
+    assert.deepEqual([e.kind, e.title, lib.logSummary(e)], ["edit", "What was changed", "1 request"]);
+    const s = hookOf(stab("s1", "m1", 4, 5, { derived: derivedOf(4, { steps: [{ n: 1 }] }) }));
+    assert.deepEqual([s.kind, s.title, lib.logSummary(s)], ["stabilizer", "What the stabilizer did", "1 step"]);
+    assert.equal(hookOf(model("m1")), null, "an original made nothing");
+    assert.equal(hookOf(stab("s0", "m1", 0, 5, { derived: derivedOf(0) })), null, "a stabilizer that found nothing to add has no log");
+    const result = planned();
+    const optHtml = textOf(render(h(lib.StabilizerLog, { log: o, result })));
+    assert.match(optHtml, /“as light as possible”/);
+    assert.match(optHtml, /Blocks 100 → to 77/);
+    assert.match(optHtml, /Weight 200 kg → to 154 kg/);
+    assert.match(optHtml, /Strength used 60% → to 75%/);
+    assert.match(optHtml, /Weight inside the base 136 mm → to 120 mm/);
+    assert.match(optHtml, /Took away 23 blocks\./);
+    assert.match(optHtml, /No single block can change without breaking a limit or the goal\./);
+    const edHtml = textOf(render(h(lib.StabilizerLog, { log: e, result })));
+    assert.match(edHtml, /“make the back taller”/);
+    assert.match(edHtml, /Added: cup holder/);
+    assert.match(edHtml, /Changed: back/);
+    assert.match(edHtml, /scaled to 98% to fit the 1000 mm cube/);
+});
+
+// ================= the ux review (UX-1 ... UX-10) =================
+
+/** The chat panel, server-rendered for the project with the stores as given. */
+async function chatHtml(models, { assist = ASSIST, extra = {}, phone = false, during = null } = {}) {
+    lib.useWorkspaceStore.setState({
+        activeProjectId: PROJECT_ID, project: { id: PROJECT_ID, name: "Lamp", pinned: false }, messages: [], jobs: {}, models, activeModelId: models[0]?.id ?? null,
+        workspaceTab: "3d", providers: providersWith(assist), ...extra,
+    });
+    // (After the project is open: opening another one drops the work guard, as it drops the work.)
+    const done = during?.();
+    try {
+        return await withMatchMedia(phone, async () => render(h(lib.ChatPanel, {})));
+    } finally {
+        done?.();
+    }
+}
+const meshRun = (over = {}) => ({
+    key: "pending-1", jobId: null, projectId: PROJECT_ID, sourceModelId: "m1", instruction: "make the seat wider", target: "mesh", status: "applying", startedAt: Date.now(),
+    step: null, stage: null, summary: null, notes: [], errorKind: null, error: null, savedModelId: null, regenPrompt: null, resultBytes: null, refined: false, hasLocalResult: false, ...over,
+});
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+await test("UX-1: an Undo on a card takes nothing else with it: offered for a version nothing was made from, and checked again when it is pressed", async () => {
+    const models = [model("m1"), edited("e1", "m1", 7, "design"), optimized("p1", "e1", 9), stab("s2", "m1", 4, 11)];
+    assert.equal(lib.canUndoVersion(models, models[2]), true, "an optimized leaf");
+    assert.equal(lib.canUndoVersion(models, models[1]), false, "something was made from the edit");
+    assert.equal(lib.canUndoVersion(models, models[0]), false, "a root");
+    assert.equal(lib.canUndoVersion(models, models[3]), false, "a stabilized version is not undone by a card");
+    const sent = [];
+    const before = globalThis.fetch;
+    globalThis.fetch = async (url, init) => (sent.push(`${init.method} ${url}`), { ok: true, status: 200, json: async () => ({ ok: true }) });
+    try {
+        load(models, "p1");
+        // The card was drawn before the optimized version existed: the press is checked against the list as it is now.
+        const refused = await lib.undoVersion(models[1]);
+        assert.equal(refused.ok, false);
+        assert.deepEqual(sent, [], "nothing was deleted");
+        assert.deepEqual(S().models.map((m) => m.id), ["m1", "e1", "p1", "s2"]);
+        assert.equal(lib.toasts.at(-1).title, "Other versions were made from this one");
+        const done = await lib.undoVersion(models[2]);
+        assert.deepEqual(done, { ok: true, removed: ["p1"] });
+        assert.deepEqual(sent, ["DELETE /api/assignment_alex/models/p1"]);
+        assert.equal(S().activeModelId, "e1", "back to the model it was made from");
+    } finally {
+        globalThis.fetch = before;
+    }
+    // The card itself: the optimized leaf has the button, the edit under it does not.
+    const card = (m) => render(h(lib.ModelCard, { model: m, models, active: false, onView() {} }));
+    assert.match(card(models[2]), /data-testid="model-undo"/);
+    assert.doesNotMatch(card(models[1]), /model-undo/);
+});
+
+await test("UX-2: the chords (stop, hide the chat, new project) work from the composer's box in both of its modes, and not from other text fields", () => {
+    assert.equal(lib.COMPOSER_SELECTOR, "[data-composer]");
+    const none = { querySelector: () => null };
+    const field = (tag, { composer = false, within = null, editable = false } = {}) => ({
+        tagName: tag, isContentEditable: editable,
+        closest: (selector) => (selector === lib.COMPOSER_SELECTOR ? (composer ? {} : null) : within && selector.includes(within) ? {} : null),
+    });
+    assert.equal(lib.shortcutBlocked(field("TEXTAREA", { composer: true }), none), false, "the composer's box");
+    assert.equal(lib.shortcutBlocked(field("TEXTAREA"), none), true, "any other text area: a rename, the block field");
+    assert.equal(lib.shortcutBlocked(field("INPUT"), none), true);
+    assert.equal(lib.shortcutBlocked(field("INPUT", { composer: true }), none), true, "only the box itself is the prompt");
+    assert.equal(lib.shortcutBlocked(field("SELECT"), none), true);
+    assert.equal(lib.shortcutBlocked(field("DIV", { editable: true }), none), true);
+    assert.equal(lib.shortcutBlocked(field("DIV"), none), false, "the page");
+    assert.equal(lib.shortcutBlocked(field("TEXTAREA", { composer: true, within: 'role="menu"' }), none), true, "in a menu or dialog");
+    assert.equal(lib.shortcutBlocked(field("BUTTON", { within: 'role="dialog"' }), none), true);
+    assert.equal(lib.shortcutBlocked(field("DIV"), { querySelector: () => ({}) }), true, "a dialog is open anywhere");
+    assert.equal(lib.shortcutBlocked(null, none), false);
+    assert.equal(lib.shortcutBlocked({}, none), false, "not an element");
+    // The box carries the mark in either mode (its label differs: "Prompt" for a new model, "Describe a change" for an edit).
+    const editing = render(h(lib.Composer, composerProps({ mode: "edit", edit: { target: "design", canEdit: true, reason: null, subject: "v2" } })));
+    const making = render(h(lib.Composer, composerProps({ mode: "new" })));
+    for (const html of [editing, making]) assert.match(html.match(/<textarea[^>]*>/)[0], /data-composer=""/);
+    assert.match(editing.match(/<textarea[^>]*>/)[0], /aria-label="Describe a change"/);
+    assert.match(making.match(/<textarea[^>]*>/)[0], /aria-label="Prompt"/);
+});
+
+await test("UX-3: a change to the blocks says it is working in the chat, and its proposal is brought up on the phone (the report opens)", async () => {
+    // The chat: a working card with Stop while the request is out (the run chip is on the canvas, the other screen of a phone).
+    const models = [model("m1", { project_id: PROJECT_ID }), stab("s1", "m1", 4, 5, { project_id: PROJECT_ID })];
+    const withStop = await chatHtml(models, {
+        extra: { activeModelId: "s1" },
+        phone: true,
+        during: () => lib.acquireWork("blocks", PROJECT_ID, { label: "Changing the blocks", stop() {} }),
+    });
+    assert.match(withStop, /data-testid="block-edit-working"/);
+    assert.match(textOf(withStop), /Reading the blocks to plan the change/);
+    assert.match(withStop, /data-testid="block-edit-stop"/);
+    const waiting = await chatHtml(models, {
+        extra: { activeModelId: "s1" },
+        during: () => {
+            const release = lib.acquireWork("blocks", PROJECT_ID, { stop() {} });
+            lib.setWorkWaiting("blocks", true);
+            return release;
+        },
+    });
+    assert.doesNotMatch(waiting, /block-edit-working/, "a proposal or a draft that waits is not work in progress");
+    const noStop = await chatHtml(models, { extra: { activeModelId: "s1" }, during: () => lib.acquireWork("blocks", PROJECT_ID) });
+    assert.match(noStop, /data-testid="block-edit-working"/);
+    assert.doesNotMatch(noStop, /block-edit-stop/, "no way to stop it yet: no button");
+    assert.doesNotMatch(await chatHtml(models), /block-edit-working/, "nothing running");
+    // (Another project's hold cannot exist beside the open one: the guard belongs to the project it was taken in.)
+    // The router: a proposal is asked for on the report (the page watches this request and leaves the chat for the canvas).
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1", { tab: "3d" });
+    const asked = AS().openRequest;
+    assert.deepEqual(await lib.submitEdit("add a shelf under the seat"), { ok: true });
+    assert.equal(AS().openRequest, asked + 1, "the report is asked for");
+    assert.equal(AS().sheetOpen, true, "a phone gets the whole proposal, with its warnings");
+    assert.equal(S().workspaceTab, "analysis");
+    assert.equal(S().activeModelId, "s1");
+    // A question or a refusal is an answer in the chat: the person stays where they typed.
+    globalThis.__voxelState = { notice: { kind: "ask", text: "Which shelf do you mean?", warnings: [] } };
+    const kept = AS().openRequest;
+    assert.deepEqual(await lib.submitEdit("make it nicer"), { ok: true });
+    assert.equal(AS().openRequest, kept, "no proposal, nothing to look at");
+});
+
+await test("UX-3: a phone keeps a place for the run chip while something runs, even with no versions and the 3D tab open", async () => {
+    const idle = await shellHtml({ mobile: true, models: [model("m1")], active: "m1", tab: "3d" });
+    assert.doesNotMatch(idle, /data-testid="run-chip"/);
+    lib.useWorkspaceStore.setState({ jobs: { e: editJob({ project_id: "p1" }) } });
+    const running = await shellHtml({ mobile: true, models: [model("m1")], active: "m1", tab: "3d" });
+    assert.match(running, /data-testid="run-chip"/, "a change on a model that has no versions yet is not invisible on the canvas");
+    lib.useWorkspaceStore.setState({ jobs: {} });
+    // A mesh edit in this page (no job yet), too.
+    lib.useEditStore.setState({ runs: { k: meshRun({ projectId: "p1" }) } });
+    assert.match(await shellHtml({ mobile: true, models: [model("m1")], active: "m1", tab: "3d" }), /data-testid="run-chip"/);
+});
+
+await test("UX-5: the router says so when a request for a change to the blocks came back with no answer (Stop, another version), and gives the words back", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    // Stop: neither a proposal nor a note.
+    globalThis.__voxelState = {};
+    assert.deepEqual(await lib.submitEdit("add a shelf"), { ok: false, restorePrompt: true });
+    assert.deepEqual(S().messages.map((m) => [m.role, m.content]), [["user", "add a shelf"], ["assistant", lib.BLOCK_EDIT_STOPPED]], "the person's words stay, with the answer to them");
+    assert.equal(lib.currentWork(), null);
+    // The person went to another version while the editor thought.
+    lib.useWorkspaceStore.setState({ messages: [] });
+    globalThis.__afterRequest = () => lib.useWorkspaceStore.setState({ activeModelId: "m1" });
+    assert.deepEqual(await lib.submitEdit("add a shelf"), { ok: false, restorePrompt: true });
+    assert.equal(S().messages.at(-1).content, lib.BLOCK_EDIT_MOVED);
+    // Another project was opened: its chat gets no line, and the words are not its to hold.
+    lib.useWorkspaceStore.setState({ messages: [], activeModelId: "s1" });
+    globalThis.__afterRequest = () => lib.useWorkspaceStore.setState({ activeProjectId: "p2", messages: [] });
+    assert.deepEqual(await lib.submitEdit("add a shelf"), { ok: true });
+    assert.equal(S().messages.length, 0);
+    for (const line of [lib.BLOCK_EDIT_STOPPED, lib.BLOCK_EDIT_MOVED]) assert.doesNotMatch(line, /voxel|FEM|objective|coordinate/i, line);
+});
+
+await test("UX-5: a saved chat whose first line of a change never got its job reads 'interrupted', not 'working' for ever; live lines and jobs are left alone", () => {
+    const at0 = "2026-10-24T12:00:00.000Z";
+    const rows = [
+        { id: "a", role: "user", content: "make the seat wider", timestamp: at0 },
+        { id: "b", role: "assistant", content: lib.EDIT_START_LINES.mesh, timestamp: at0 },
+        { id: "c", role: "assistant", content: lib.EDIT_START_LINES.design, timestamp: at0 },
+        { id: "d", role: "assistant", content: lib.EDIT_START_LINES.design, timestamp: at0, job_ids: ["j1"] },
+        { id: "e", role: "assistant", content: lib.EDIT_START_LINES.mesh, timestamp: at0, model_ids: ["m2"] },
+        { id: "f", role: "user", content: lib.EDIT_START_LINES.design, timestamp: at0 },
+        { id: "g", role: "assistant", content: "Generating with **Muse Spark**.", timestamp: at0 },
+    ];
+    // The lines are matched by their words: they must still be the ones the editor writes.
+    const editSource = readFileSync(path.join(root, "src/assignment/store/edit.ts"), "utf8");
+    for (const line of Object.values(lib.EDIT_START_LINES)) assert.ok(editSource.includes(`"${line}"`) || editSource.includes("EDIT_START_LINES"), `store/edit.ts writes "${line}"`);
+    assert.deepEqual(lib.sanitizeMessages(rows).map((m) => m.content), [
+        "make the seat wider", lib.EDIT_INTERRUPTED_LINE, lib.EDIT_INTERRUPTED_LINE, lib.EDIT_START_LINES.design, lib.EDIT_START_LINES.mesh, lib.EDIT_START_LINES.design, "Generating with **Muse Spark**.",
+    ]);
+});
+
+await test("UX-6: a change queued behind a mesh edit that is still applying waits for it, and is queued rather than refused when typed then", async () => {
+    const state = (over = {}) => ({ ...S(), jobs: {}, sending: false, ...over });
+    assert.equal(lib.queueMustWait(state(), { meshBusy: false, loading: false }), false);
+    assert.equal(lib.queueMustWait(state(), { meshBusy: true, loading: false }), true, "its job has ended, the edit has not");
+    assert.equal(lib.queueMustWait(state(), { meshBusy: false, loading: true }), true);
+    assert.equal(lib.queueMustWait(state({ sending: true }), { meshBusy: false, loading: false }), true);
+    assert.equal(lib.queueMustWait(state({ activeProjectId: "p1", jobs: { j: job({ project_id: "p1" }) } }), { meshBusy: false, loading: false }), true, "a job is running");
+    // The box says it queues while the edit is being applied.
+    const models = [model("m1", { project_id: PROJECT_ID })];
+    const idle = await chatHtml(models);
+    assert.match(idle, /aria-label="Send change"/);
+    lib.useEditStore.setState({ runs: { k: meshRun() } });
+    const applying = await chatHtml(models);
+    assert.match(applying, /aria-label="Queue change"/, "the send button queues");
+    assert.match(applying, /placeholder="Queue the next change"/);
+    lib.useEditStore.setState({ runs: { k: meshRun({ status: "saved" }) } });
+    assert.match(await chatHtml(models), /aria-label="Send change"/, "done: the box sends again");
+    // A new model is not held up by it.
+    lib.useEditStore.setState({ runs: { k: meshRun() } });
+    assert.match(await chatHtml(models, { extra: { composerChoice: "new" } }), /aria-label="Send"/);
+});
+
+await test("UX-7: the Draft chip sits on the half that stands for the version the changes belong to, wherever the person looks, and only for applied changes", () => {
+    const draft = (modelId, count = 2) => lib.useVoxelEditStore.setState({ sourceModelId: modelId, draft: { count }, status: "idle" });
+    assert.equal(lib.draftIsOn({ sourceModelId: "s1", draft: { count: 2 } }, "s1"), true);
+    assert.equal(lib.draftIsOn({ sourceModelId: "s1", draft: { count: 2 } }, "m1"), false, "another version's");
+    assert.equal(lib.draftIsOn({ sourceModelId: "s1", draft: { count: 0 } }, "s1"), false, "every change undone");
+    assert.equal(lib.draftIsOn({ sourceModelId: "s1", draft: null }, "s1"), false, "a proposal nobody applied");
+    load([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    assert.doesNotMatch(bar(), /version-draft/);
+    // A proposal is not a draft: the work hold is waiting, but nothing is unsaved.
+    lib.useVoxelEditStore.setState({ sourceModelId: "s1", proposal: { summary: "x" }, draft: null, status: "proposal" });
+    const release = lib.acquireWork("blocks", "p1");
+    lib.setWorkWaiting("blocks", true);
+    assert.doesNotMatch(bar(), /version-draft/, "a proposal alone claims no unsaved changes");
+    lib.useVoxelEditStore.setState({ proposal: null });
+    // Changes to the version: its half, with the version on screen ...
+    draft("s1");
+    let html = bar();
+    assert.equal((html.match(/data-testid="version-draft"/g) ?? []).length, 1);
+    assert.ok(html.indexOf("version-draft") > html.indexOf('data-testid="version-head"'), "on the right half");
+    assert.match(html, />Draft</);
+    // ... and with the original on screen it stays on the version's half.
+    load([model("m1"), stab("s1", "m1", 4, 5)], "m1");
+    html = bar();
+    assert.equal((html.match(/data-testid="version-draft"/g) ?? []).length, 1);
+    assert.ok(html.indexOf("version-draft") > html.indexOf('data-testid="version-head"'), "not on the Original that is on screen");
+    // Changes to the original: the Original half, whichever is on screen.
+    draft("m1");
+    load([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    html = bar();
+    assert.ok(html.indexOf("version-draft") < html.indexOf('data-testid="version-head"'), "on the Original");
+    assert.equal((html.match(/data-testid="version-draft"/g) ?? []).length, 1);
+    // The row of the tree says it too (a version that is neither half).
+    const models = [model("m1"), stab("s1", "m1", 4, 5), edited("e1", "m1", 7, "design")];
+    draft("e1");
+    load(models, "s1");
+    const rows = render(h(lib.VersionTreeList, { family: lib.versionFamily(models, "s1"), onPick() {} }));
+    assert.equal((rows.match(/data-testid="version-row-draft"/g) ?? []).length, 1);
+    release();
+});
+
+await test("UX-8: the Models tab's Edit… brings the chat back when it is folded away, then asks for the cursor", () => {
+    load([model("m1"), stab("s1", "m1", 4, 5)], "m1", "models");
+    lib.useWorkspaceStore.setState({ chatHidden: true, composerChoice: "new" });
+    const serial = S().composerFocusSerial;
+    lib.editVersion({ id: "s1" });
+    assert.equal(S().chatHidden, false, "a folded panel is invisible and cannot take the cursor");
+    assert.equal(S().activeModelId, "s1");
+    assert.equal(S().workspaceTab, "3d");
+    assert.equal(S().composerChoice, "edit");
+    assert.equal(S().composerFocusSerial, serial + 1);
+});
+
+await test("UX-9: a request puts back the changes kept from before a reload first (when the check of the model is done), so it cannot lose them", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    globalThis.__kept = "s1";
+    // The check of the model is not done: the request says "wait" itself, and nothing is replayed (a failed replay forgets the draft).
+    await lib.submitEdit("add a shelf");
+    assert.deepEqual(globalThis.__voxelCalls.map((c) => c[0]), ["request"]);
+    // Done: the kept changes come back first, then the request is made on top of them.
+    globalThis.__voxelCalls = [];
+    globalThis.__voxelState = { proposal: { summary: "x" } };
+    lib.useAnalysisStore.setState({ resultModelId: "s1", result: planned() });
+    await lib.submitEdit("add a shelf");
+    assert.deepEqual(globalThis.__voxelCalls.map((c) => c[0]), ["findResumable", "resume", "request"]);
+    // Nothing kept: nothing to put back.
+    globalThis.__voxelCalls = [];
+    globalThis.__kept = null;
+    globalThis.__voxelState = { proposal: { summary: "x" } };
+    await lib.submitEdit("add a shelf");
+    assert.deepEqual(globalThis.__voxelCalls.map((c) => c[0]), ["findResumable", "request"]);
+    // Kept for another version: left alone.
+    globalThis.__voxelCalls = [];
+    globalThis.__kept = "m1";
+    await lib.submitEdit("add a shelf");
+    assert.deepEqual(globalThis.__voxelCalls.map((c) => c[0]), ["findResumable", "request"]);
+});
+
+await test("UX-3: Stop is on the run chip from the first moment of a request for a change to the blocks, and stops it", async () => {
+    readyForEdit([model("m1"), stab("s1", "m1", 4, 5)], "s1");
+    globalThis.__heldDuringBlockEdit = () => lib.currentWork();
+    await lib.submitEdit("add a shelf");
+    const held = globalThis.__blockEdits[0].held;
+    assert.equal(typeof held.stop, "function");
+    assert.equal(held.label, "Changing the blocks");
+    held.stop();
+    await tick();
+    assert.ok(globalThis.__voxelCalls.some((c) => c[0] === "cancel"), "the editor was asked to cancel");
+});
+
+await test("UX-10: the version rows tell a screen reader which one is on screen and what kind each is; a greyed Edit says why when it is reached", () => {
+    const models = [model("m1", { analysis: summary(0) }), stab("s1", "m1", 9, 5, { analysis: summary(0) }), edited("e1", "m1", 7, "voxel", "Shelf", { analysis: summary(2) }), optimized("p1", "s1", 10, { analysis: summary(0) })];
+    load(models, "p1");
+    const html = render(h(lib.VersionTreeList, { family: lib.versionFamily(models, "p1"), onPick() {} }));
+    assert.equal((html.match(/aria-current="true"/g) ?? []).length, 1, "one row is current");
+    assert.match(html.match(/<button[^>]*aria-current="true"[^>]*>/)[0], /data-active="true"/);
+    const rowKinds = [...html.matchAll(/data-testid="version-row-kind"[^>]*>([^<]*)</g)].map((m) => m[1].trim());
+    assert.deepEqual(rowKinds, ["Optimized.", "Edited."], "the kind in a word where the title does not say it ('v2 · Stabilized' and 'v1 · Original' do)");
+    // The Edit half of the toggle and the Models tab's Edit…: reachable, described by the reason.
+    const reason = "Edits work on models you generate.";
+    const off = render(h(lib.Composer, composerProps({ mode: "new", edit: { target: null, canEdit: false, reason, subject: "the original" } })));
+    const id = off.match(/data-testid="mode-edit"[^>]*aria-describedby="([^"]+)"|aria-describedby="([^"]+)"[^>]*data-testid="mode-edit"/);
+    const describedBy = id[1] ?? id[2];
+    assert.match(off, new RegExp(`<span id="${describedBy.replace(/[«»]/g, ".")}" class="sr-only">${reason.replace(".", "\\.")}</span>`));
+    const on = render(h(lib.Composer, composerProps({ mode: "edit", edit: { target: "design", canEdit: true, reason: null, subject: "v2" } })));
+    assert.doesNotMatch(on.match(/<button[^>]*data-testid="mode-edit"[^>]*>/)[0], /aria-disabled="|aria-describedby=/);
+    const ex = model("ex", { kind: "example", provider: "example", example_slug: "shelf-arm" });
+    const panel = render(h(lib.ModelsPanel, { models: [ex], activeModelId: "ex", providers: [HUNYUAN], onView() {}, onEdit() {} }));
+    const edit = panel.match(/<button[^>]*data-testid="model-edit"[^>]*>/)[0];
+    const pid = edit.match(/aria-describedby="([^"]+)"/)[1];
+    assert.ok(panel.includes(`id="${pid}"`), "the description exists");
+    assert.match(textOf(panel), /Edits work on models you generate/);
+});
+
+// ---------- the words on screen ----------
+
+await test("vocabulary: what the person reads never says voxel, FEM, utilisation, COG, cantilever, compliance, objective, kPa or coordinates (those live in tooltips and the glossary)", async () => {
+    const FORBIDDEN = /\b(voxel|voxels|voxelis\w*|FEM|utilisation|COG|cantilever\w*|compliance|objective|kPa|coordinates?)\b/i;
+    const models = TREE();
+    models.push(edited("e2", "m1", 12, "mesh", "Wider seat"), edited("e3", "m1", 13, "design", "Cup holder"));
+    const pages = [];
+    for (const tab of ["3d", "analysis", "optimize", "models"]) {
+        pages.push(await shellHtml({ models, active: "p1", tab }));
+        lib.useWorkspaceStore.setState({ jobs: { e: editJob({ project_id: "p1" }) } });
+        pages.push(await shellHtml({ models, active: "e2", tab }));
+        lib.useWorkspaceStore.setState({ jobs: {} });
+    }
+    lib.useWorkspaceStore.setState({ models, activeModelId: "p1", providers: providersWith(ASSIST), workspaceTab: "3d" });
+    pages.push(render(h(lib.Composer, composerProps({ mode: "edit", edit: { target: "voxel", canEdit: true, reason: null, subject: "v4 · Lightest" } }))));
+    pages.push(render(h(lib.Composer, composerProps({ mode: "new", edit: { target: null, canEdit: false, reason: lib.NOT_EDITABLE_EXAMPLE, subject: "the original" } }))));
+    for (const m of models) pages.push(render(h(lib.ModelCard, { model: m, models, active: false, onView() {} })));
+    const words = [
+        ...Object.values(lib.ROUTE_WORDS), ...Object.values(lib.WORK_CHIP_WORDS), ...Object.values(lib.OPTIMIZE_STOP_WORDS), lib.AI_EDITOR_MISSING, lib.NOT_EDITABLE_EXAMPLE,
+        lib.NOT_EDITABLE_DEMO, lib.NOTHING_TO_EDIT, lib.EDIT_LOG_TITLE, lib.OPTIMIZER_LOG_TITLE, lib.STABILIZER_LOG_TITLE,
+        lib.placeholderFor({ mode: "edit", generating: false, started: true, target: "voxel", subject: "x" }),
+        ...models.map((m) => lib.versionDetail(m) ?? ""), ...models.map((m) => lib.versionStory(m) ?? ""), ...models.map((m) => lib.modelTitle(m)),
+        lib.workBusyMessage("blocks", "p1") ?? "", lib.editReplyLine(editJob({ status: "succeeded", model: models[2] }), [MUSE]),
+    ];
+    for (const page of pages) {
+        // The text of the page, minus tooltips and screen-reader sentences that quote the person's own words.
+        const visible = textOf(page);
+        assert.doesNotMatch(visible, FORBIDDEN, `visible text: ${visible.match(FORBIDDEN)?.[0]}`);
+    }
+    for (const word of words) assert.doesNotMatch(word, FORBIDDEN, `a sentence of the interface: ${word}`);
+});
+
+await test("vocabulary: 'optimiz' is a label (the tab, the kind, the heading) and never a sentence about an objective function", () => {
+    const sentences = [...Object.values(lib.OPTIMIZE_STOP_WORDS), lib.workBusyMessage("optimize", "p1") ?? "", ...Object.values(lib.ROUTE_HINTS)];
+    for (const s of sentences) assert.doesNotMatch(s, /optimi[sz]ation problem|objective function|compliance/i, s);
 });
 
 delete globalThis.document;

@@ -6,6 +6,7 @@ import { ChatPanel } from "@/assignment/components/chat/ChatPanel";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/assignment/components/ui/resizable";
 import { WorkspaceShell } from "@/assignment/components/workspace/WorkspaceShell";
 import { tabFromParam } from "@/assignment/components/workspace/shellLogic";
+import { shortcutBlocked } from "@/assignment/components/workspace/versionLogic";
 import { useMobileLayout } from "@/assignment/hooks/use-mobile";
 import { CHAT_MAX_PCT, useChatSizes } from "@/assignment/hooks/useChatSizes";
 import { useProjectRoute } from "@/assignment/hooks/useProjectRoute";
@@ -17,19 +18,6 @@ import { useAnalysisStore } from "@/assignment/store/analysis";
 import { useAutosave } from "@/assignment/store/persist";
 import { refreshProviders } from "@/assignment/store/providers";
 import { selectIsGenerating, useProjectHasContent, useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
-
-/**
- * Shortcuts stay out of dialogs, menus and text fields other than the prompt box: a chord typed
- * into a rename or the access-code field must not throw that work away.
- */
-function shortcutBlocked(target: EventTarget | null): boolean {
-    if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return true;
-    if (!(target instanceof Element)) return false;
-    if (target.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
-    if (target instanceof HTMLTextAreaElement) return target.getAttribute("aria-label") !== "Prompt";
-    if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) return true;
-    return target instanceof HTMLElement && target.isContentEditable;
-}
 
 /**
  * The app page, /app/new and /app/<id>: the 3D viewer fills the window and two floating rounded
@@ -52,7 +40,7 @@ export default function Workspace() {
         void refreshProviders();
     }, []);
 
-    // ?tab=analysis|3d|models (an opened example lands on the verdict): read once, then removed from the URL so a
+    // ?tab=analysis|optimize|3d|models (an opened example lands on the verdict): read once, then removed from the URL so a
     // reload or a shared link does not keep forcing the tab. Applied when the project has landed, because opening a
     // project starts it on the 3D tab (store.setProject). The report's tab is called Stability now; its id, and so
     // this link, stays "analysis", and ?tab=stability means the same tab (tabFromParam).
@@ -212,8 +200,9 @@ export default function Workspace() {
         return () => window.removeEventListener("keydown", onKeyDown);
     }, []);
 
-    // "V" (original <-> stabilized) is not here: a bare letter on `window` cannot be switched off and would fire from anywhere on the
-    // page. Like "A", it lives on the 3D view and on the version switch (WorkspaceShell, VersionSwitcher), where it has focus.
+    // "V" (original <-> the version you work on), "[" and "]" (walk the versions) and "O" (3D <-> Optimization) are not here: a bare key on
+    // `window` cannot be switched off and would fire from anywhere on the page. Like "A", they live on the 3D view and on the version
+    // control (WorkspaceShell, VersionSwitcher), where it has focus.
 
     // A chat card asked to open the stability check: on a phone that means leaving the chat for the canvas.
     const analysisOpenRequest = useAnalysisStore((s) => s.openRequest);
@@ -223,6 +212,15 @@ export default function Workspace() {
         seenOpenRequest.current = analysisOpenRequest;
         setMobileView("canvas");
     }, [analysisOpenRequest]);
+
+    // The Models tab's "Edit..." wants the cursor in the composer: on a phone that means leaving the canvas for the chat.
+    const composerFocusSerial = useWorkspaceStore((s) => s.composerFocusSerial);
+    const seenComposerFocus = useRef(composerFocusSerial);
+    useEffect(() => {
+        if (seenComposerFocus.current === composerFocusSerial) return;
+        seenComposerFocus.current = composerFocusSerial;
+        setMobileView("chat");
+    }, [composerFocusSerial]);
 
     if (isMobile) {
         return (

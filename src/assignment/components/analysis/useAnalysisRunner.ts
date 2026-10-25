@@ -3,11 +3,11 @@
 // The result goes to store/analysis.ts; the headline numbers are saved with the model.
 //
 // Two kinds of model are analysed:
-//   - a mesh (and a stabilized model whose source is gone, shown as its own blocks): the viewer's GLB IS the model, so its
-//     triangles are voxelised (a block assembly declares its cells, which are read instead);
-//   - a stabilized model shown on the mesh it was made from (store/versions.ts: the viewer loads the SOURCE's GLB): the
-//     blocks are the descriptor read from the stabilized model's own GLB, and the viewer's triangles only give the source's
-//     bounds, which place the lattice over the mesh exactly as voxelising that mesh does (voxelize.ts transformForBounds).
+//   - a mesh (and a block version shown as its own blocks: a block edit, a thinned optimization, a version whose mesh is gone): the
+//     viewer's GLB IS the model, so its triangles are voxelised (a block assembly declares its cells, which are read instead);
+//   - a block version shown on the mesh it sits on (store/versions.ts: the viewer loads the MESH's GLB): the blocks are the
+//     descriptor read from the version's own GLB, and the viewer's triangles only give the mesh's bounds, which place the lattice
+//     over the mesh exactly as voxelising that mesh does (voxelize.ts transformForBounds).
 //     The run is for the active model and its id, whatever mesh is on stage.
 
 import { useEffect } from "react";
@@ -15,6 +15,7 @@ import { useEffect } from "react";
 import type { Bounds } from "@/assignment/analysis/assembly";
 import type { AnalysisResult, LoadedModel, TriangleSoup } from "@/assignment/analysis/types";
 import type { ModelAsset } from "@/assignment/shared/contract";
+import { isBlockVersion } from "@/assignment/shared/versionTree";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { stageWords } from "@/assignment/store/analysisLogic";
 import { saveSummary } from "@/assignment/store/analysisSave";
@@ -47,14 +48,14 @@ export function useAnalysisRunner(model: ModelAsset | null): void {
     useEffect(() => () => useStabilizeStore.getState().leave(), []);
 
     const modelId = model?.id ?? null;
-    // The mesh the viewer loads for this model: its own GLB, or for a stabilized model the GLB of the model it was made from.
+    // The mesh the viewer loads for this model: its own GLB, or for a block version the GLB of the mesh it sits on.
     const display = useDisplayModel(model);
     const glbUrl = display?.glb_url ?? null;
-    // The stabilized model's own file, read for its blocks while the viewer shows another one.
+    // The version's own file, read for its blocks while the viewer shows another one.
     // (By id and url, not the object: saving the summary replaces the model with a new object, which must not restart the run.)
-    const stabilizedOnSource = model !== null && display !== null && display.id !== model.id && model.kind === "stabilized";
-    const blocksId = stabilizedOnSource ? model.id : null;
-    const blocksUrl = stabilizedOnSource ? model.glb_url : null;
+    const blocksOnSource = model !== null && display !== null && display.id !== model.id && isBlockVersion(model);
+    const blocksId = blocksOnSource ? model.id : null;
+    const blocksUrl = blocksOnSource ? model.glb_url : null;
     // The handle itself, not just its url: a viewer that reloaded the same model hands over a fresh one, and the
     // run that found it empty must start again with it.
     const loaded = useAnalysisStore((s) => s.loaded);
@@ -89,7 +90,7 @@ export function useAnalysisRunner(model: ModelAsset | null): void {
                 };
                 let result: AnalysisResult;
                 if (blocksFrom) {
-                    // A stabilized model on its source mesh: the blocks from its own file, the placement from the mesh on stage.
+                    // A block version on its mesh: the blocks from its own file, the placement from the mesh on stage.
                     const [descriptor, assemblyModule] = await Promise.all([loadAssembly(blocksFrom), import("@/assignment/analysis/assembly")]);
                     if (signal.aborted) return;
                     let bounds = boundsOfHandle.get(handle);
@@ -116,7 +117,7 @@ export function useAnalysisRunner(model: ModelAsset | null): void {
                     result = await runAnalysis(() => readTriangles(handle), settings, {
                         signal,
                         cacheKey: handle.url,
-                        // A stabilized model declares its blocks: they are analysed as they are, never voxelised again.
+                        // A block version declares its blocks: they are analysed as they are, never voxelised again.
                         assembly: handle.assembly,
                         onProgress,
                     });

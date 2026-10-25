@@ -4,6 +4,7 @@ import { DEFAULT_ANALYSIS_SETTINGS } from "@/assignment/analysis/types";
 import { AboutPage } from "@/assignment/components/analysis/AboutPage";
 import { ChecksDetails } from "@/assignment/components/analysis/ChecksDetails";
 import { DetailSection } from "@/assignment/components/analysis/DetailSection";
+import { EditBlocksCard } from "@/assignment/components/analysis/EditBlocksCard";
 import { KeyChips } from "@/assignment/components/analysis/KeyChips";
 import { ErrorState, LoadingState, NoModelState, RunningState, UnavailableState } from "@/assignment/components/analysis/PanelStates";
 import { PanelHeader } from "@/assignment/components/analysis/PanelHeader";
@@ -14,6 +15,7 @@ import { StabilizeCard } from "@/assignment/components/analysis/StabilizeCard";
 import { StabilizerLog } from "@/assignment/components/analysis/StabilizerLog";
 import { StrengthDetails } from "@/assignment/components/analysis/StrengthDetails";
 import type { AnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
+import { useBlockDraft } from "@/assignment/components/analysis/useBlockDraft";
 import { logSummary, useStabilizerLog } from "@/assignment/components/analysis/useStabilizerLog";
 import { VerdictBlock } from "@/assignment/components/analysis/VerdictBlock";
 import { TooltipProvider } from "@/assignment/components/ui/tooltip";
@@ -65,6 +67,8 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
     const pending = mine && answerIsBeforeRun(status, errorKind, outcome);
     const stabilizing = mine && status === "running";
     const log = useStabilizerLog(model);
+    // Unsaved changes made by words (store/voxelEdit.ts): while there are some, the headline is theirs and the problem list waits.
+    const block = useBlockDraft(model);
 
     // A run that ends and waits for a decision (Save or Discard, Retry, Dismiss) puts the report in front: the strip is there, not
     // on the Settings or About page that may be open. Only the moment it starts to wait: the user can still go and look at a page.
@@ -116,13 +120,21 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
         body = <ErrorState message={run.error ?? "The check failed."} onRetry={retry} />;
     } else if (result && verdict) {
         const waiting = "after the run";
+        const drafting = block.drafting && block.result !== null && block.verdict !== null;
         body = (
             <div className={cn("transition-opacity", updating && "opacity-60")} aria-busy={updating}>
-                <VerdictBlock result={result} verdict={verdict} sentence={sentence} before={pending} />
-                <KeyChips result={result} dimmed={pending} />
-                <div data-testid="analysis-action">{model && <StabilizeCard model={model} result={result} verdict={verdict} analysing={updating} />}</div>
-                {!pending && <ProblemList result={result} />}
-                <div data-testid="analysis-details">
+                <VerdictBlock result={drafting && block.result ? block.result : result} verdict={drafting && block.verdict ? block.verdict : verdict} sentence={drafting ? block.sentence : sentence} before={pending} />
+                {drafting ? (
+                    <p className="-mt-2 px-4 pb-2 pl-14 text-[11px] text-muted-foreground" data-testid="analysis-draft-label">
+                        With your changes, not saved yet
+                    </p>
+                ) : (
+                    <KeyChips result={result} dimmed={pending} />
+                )}
+                <div data-testid="analysis-action">{model && !block.editing && <StabilizeCard model={model} result={result} verdict={verdict} analysing={updating} />}</div>
+                {model && <EditBlocksCard model={model} result={result} />}
+                {!pending && !drafting && <ProblemList result={result} />}
+                <div data-testid="analysis-details" hidden={drafting}>
                     <DetailSection
                         id="checks"
                         title="All checks and numbers"
@@ -148,7 +160,7 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
                     {log && (
                         <DetailSection
                             id="log"
-                            title="What the stabilizer did"
+                            title={log.title}
                             summary={logSummary(log)}
                             open={openDetail === "log"}
                             onOpenChange={toggleDetail("log")}

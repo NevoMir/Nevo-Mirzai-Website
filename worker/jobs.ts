@@ -3,7 +3,9 @@
 // is the heartbeat (throttled to one vendor poll per ~3 s), and finalization is leased so it can be retried.
 
 import { ACCESS_HEADER, TERMINAL_JOB_STATUSES } from "../src/assignment/shared/contract.ts";
-import type { Job, JobStatus, ProviderId, ProvidersResponse } from "../src/assignment/shared/contract.ts";
+import type { EditResult, Job, JobStatus, ModelKind, ModelProvider, ProviderId, ProvidersResponse } from "../src/assignment/shared/contract.ts";
+import { designEditMeta } from "../src/assignment/shared/partsEdit.ts";
+import { stabilizationsOf } from "../src/assignment/shared/versionMeta.ts";
 import {
     JOB_COLS,
     MODEL_COLS,
@@ -14,17 +16,23 @@ import {
     type JobRow,
     type ModelRow,
 } from "./db.ts";
-import { MAX_STORE_MS, ModelFileError, storeGlb, storeThumbnail } from "./glb.ts";
+import { MAX_STORE_MS, ModelFileError, storeGlb, storeThumbnail, type StoredGlb } from "./glb.ts";
+import { llmDailyLimit, refundLlmSlot, reserveLlmSlot } from "./llmCall.ts";
 import { PROVIDER_SPECS, listProviders, resolveProvider } from "./providers/index.ts";
+import { mockLlmEnabled } from "./providers/mock.ts";
+import { PLAN_LIMIT, editModelOf } from "./providers/openrouter.ts";
 import {
     ProviderError,
     type AdapterState,
+    type EditSubmit,
     type Env,
     type PollResult,
     type ProviderAdapter,
     type ProviderSpec,
+    type SubmitResult,
 } from "./providers/types.ts";
 import { HttpError, errorSummary, nowIso, requireUuid, secretsMatch } from "./util.ts";
+import { chainLengthSql, readVersionCounts, requireChainRoom, versionCapError, versionInsert } from "./versions.ts";
 
 const POLL_INTERVAL_MS = 3_000;
 const MAX_RUNTIME_MS = 30 * 60 * 1000;
@@ -71,20 +79,37 @@ function generationLocked(env: Env): boolean {
     return listProviders(env).some((p) => p.available && p.id !== "mock");
 }
 
+/** True when the paid AI editor is switched off for the same reason generation is (a real key, no access code, no explicit opt-out). The offline demo is never locked. */
+export function assistLocked(env: Env): boolean {
+    return generationLocked(env) && !mockLlmEnabled(env);
+}
+
 export async function getProvidersResponse(env: Env): Promise<ProvidersResponse> {
     const locked = generationLocked(env);
     if (locked) console.warn("ACCESS_CODE is not set: generation is disabled (set the secret, or ALLOW_OPEN_GENERATION=1)");
     const providers = listProviders(env).map((p) => (locked && p.id !== "mock" ? { ...p, available: false } : p));
-    const available = providers.filter((p) => p.available);
-    const used = await env.DB.prepare("SELECT generations FROM usage WHERE day = ?1")
+    const ready = providers.filter((p) => p.available);
+    const used = await env.DB.prepare("SELECT generations, llm FROM usage WHERE day = ?1")
         .bind(today())
-        .first<{ generations: number }>();
+        .first<{ generations: number; llm: number }>();
+    // The AI editor (edits by words, optimization goals) spends the same OpenRouter key as the Muse designer, so the same lock applies;
+    // the offline demo (MOCK_PROVIDER=1) answers without a key and costs nothing.
+    const mock = mockLlmEnabled(env);
+    const editor = (Boolean(env.OPENROUTER_API_KEY?.trim()) && !locked) || mock;
     return {
         providers,
-        default_provider: (available.find((p) => p.id === "tripo-parts") ?? available[0])?.id ?? null,
+        default_provider: (ready.find((p) => p.id === "tripo-parts") ?? ready[0])?.id ?? null,
         access_required: configuredCode(env) !== "",
         daily_limit: dailyLimit(env),
         used_today: used?.generations ?? 0,
+        assist: {
+            available: editor,
+            queued: Boolean(env.LLM_QUEUE),
+            images: editor,
+            model: editModelOf(env),
+            daily_limit: llmDailyLimit(env),
+            used_today: used?.llm ?? 0,
+        },
     };
 }
 
@@ -129,7 +154,8 @@ export async function checkAccessCode(env: Env, request: Request, code: unknown)
     return false;
 }
 
-async function assertAccess(env: Env, request: Request): Promise<void> {
+/** Throws 401 unless the request carries the access code (a no-op when none is configured). Same rule for generation, edits and /llm/*. */
+export async function requireAccess(env: Env, request: Request): Promise<void> {
     if (!configuredCode(env)) return;
     if (!(await checkAccessCode(env, request, request.headers.get(ACCESS_HEADER) ?? ""))) {
         throw new HttpError(401, "Access code required");
@@ -248,7 +274,7 @@ export async function startGeneration(
     rawProjectId: string,
     body: Record<string, unknown>,
 ): Promise<Job[]> {
-    await assertAccess(env, request);
+    await requireAccess(env, request);
     const projectId = requireUuid(rawProjectId, "project id");
     const project = await projectExists(env, projectId);
     if (!project) throw new HttpError(404, "Project not found");
@@ -280,7 +306,7 @@ export async function startGeneration(
     // earlier job is over, so neither trips this.) Other models of the project may keep running.
     const running = await env.DB.prepare(
         `SELECT provider FROM jobs WHERE project_id = ?1 AND provider IN (SELECT value FROM json_each(?2))
-         AND ${ACTIVE} LIMIT 1`,
+         AND kind = 'generate' AND ${ACTIVE} LIMIT 1`,
     )
         .bind(projectId, JSON.stringify(resolved.map((r) => r.id)))
         .first<{ provider: string }>();
@@ -371,6 +397,81 @@ async function submitOne(
     const row = await getJobRow(env, id);
     if (!row) throw new Error("job vanished after insert");
     return row;
+}
+
+// ---------- Starting an edit ----------
+
+/** An edit job still counted as running after this long is not: its client never came back to poll it (DESIGN_TIMEOUT_MS plus a grace). */
+const STALE_EDIT_MS = 15 * 60 * 1000;
+
+export interface StartEditJobInput {
+    projectId: string;
+    sourceId: string;
+    instruction: string;
+    target: "design" | "mesh";
+    /** What the queue message needs (worker/edit.ts has validated it). */
+    submit: EditSubmit;
+}
+
+/**
+ * Starts an edit job on the Muse queue (spec 3.2): takes a slot of the day's AI-call cap, inserts the job row (refused when another edit of the
+ * project is running: the check is part of the INSERT, so two requests cannot both pass it) and hands the task to the queue. Every step after
+ * the slot is taken gives it back when nothing was started. The result is the job as a poll would show it.
+ */
+export async function startEditJob(env: Env, input: StartEditJobInput): Promise<Job> {
+    const route = adapterFor("muse", "openrouter");
+    if (!route) throw new HttpError(503, "The AI editor is not available.");
+    if (!(await reserveLlmSlot(env))) {
+        throw new HttpError(429, `Today's limit of AI edits is used up (${llmDailyLimit(env)} a day). Try again tomorrow.`);
+    }
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    try {
+        const inserted = await env.DB.prepare(
+            `INSERT INTO jobs (id, project_id, provider, via, prompt, status, progress, stage, created_at, updated_at, kind, source_model_id, edit_target)
+             SELECT ?1, ?2, 'muse', 'openrouter', ?3, 'queued', 0, 'Queued', ?4, ?4, 'edit', ?5, ?6
+             WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE project_id = ?2 AND kind = 'edit' AND ${ACTIVE} AND created_at > ?7)`,
+        )
+            .bind(id, input.projectId, input.instruction, now, input.sourceId, input.target, new Date(Date.now() - STALE_EDIT_MS).toISOString())
+            .run();
+        if (inserted.meta.changes !== 1) {
+            await refundLlmSlot(env);
+            throw new HttpError(409, "Another edit is still running in this project. Wait for it to finish or stop it first.");
+        }
+    } catch (err) {
+        // A D1 error, or the project was purged meanwhile: nothing was started.
+        if (!(err instanceof HttpError)) await refundLlmSlot(env);
+        throw err;
+    }
+    await touchProject(env, input.projectId).catch(() => {});
+    let submitted: SubmitResult;
+    try {
+        submitted = await route.adapter.submit(env, input.instruction, { edit: input.submit, model: editModelOf(env) });
+        if (!submitted.taskId) throw new ProviderError("The editor did not return a task id.");
+    } catch (err) {
+        console.error(`edit submit failed: ${errorSummary(err)}`);
+        const message = safeMessage(err, "Could not start the edit. Please try again.");
+        await markFailed(env, id, message);
+        // retryable = a timeout or network error: the task may exist anyway. Anything else definitely did not start.
+        if (!(err instanceof ProviderError) || !err.retryable) await refundLlmSlot(env);
+        throw new HttpError(err instanceof ProviderError && err.status >= 400 && err.status < 600 ? err.status : 502, message);
+    }
+    // From here the task is on the queue: its slot is the consumer's to hand back (when the model was never charged), not this request's.
+    try {
+        const started = await env.DB.prepare(
+            `UPDATE jobs SET provider_task_id = ?1, provider_state = ?2, status = 'running', stage = 'Submitted', updated_at = ?3
+             WHERE id = ?4 AND status = 'queued'`,
+        )
+            .bind(submitted.taskId, submitted.state ? JSON.stringify(submitted.state) : null, nowIso(), id)
+            .run();
+        // Stopped (or given up on) while the task was being created: stop it, nobody will collect the result.
+        if (started.meta.changes !== 1) await tryCancel(env, route.adapter, submitted.taskId, submitted.state ?? null);
+    } catch (err) {
+        console.error(`edit bookkeeping failed: ${errorSummary(err)}`);
+        await markFailed(env, id, "Could not start the edit. Please try again.").catch(() => {});
+        throw new HttpError(502, "Could not start the edit. Please try again.");
+    }
+    return reload(env, id);
 }
 
 /** What a vendor poll's follow-up writes need to prove they are allowed to land (see advanceJob). */
@@ -536,6 +637,26 @@ async function recordPollError(env: Env, row: JobRow, err: unknown, claim: PollC
 
 // ---------- Finalizing ----------
 
+/** A finished task that left a file to save as a model. */
+type GlbResult = Extract<PollResult, { glbUrl: string }>;
+/** A finished edit task that left only a result (a mesh plan, or a design edit that changed nothing). */
+type PlanResult = Extract<PollResult, { plan: EditResult }>;
+
+/**
+ * An edit that has no file: its result goes into the job (jobs.plan) and the job succeeds without a model. "Plan ready" for a mesh edit (the browser
+ * applies it), or the model's reason for a design edit that changed nothing. Written under the poll's claim like every other verdict.
+ */
+async function finalizePlan(env: Env, row: JobRow, result: PlanResult, claim: PollClaim): Promise<Job> {
+    const plan = row.kind === "edit" ? JSON.stringify(result.plan) : "";
+    if (!plan || plan.length > PLAN_LIMIT) {
+        await markFailed(env, row.id, "The edit came back in a form the server could not keep. Please try again.", claim);
+        return reloadAndRelease(env, row);
+    }
+    const now = nowIso();
+    await updateClaimed(env, row.id, claim, "status = 'succeeded', progress = 100, stage = 'Done', error = NULL, plan = ?1, finished_at = ?2, updated_at = ?2", [plan, now]);
+    return reloadAndRelease(env, row);
+}
+
 async function finalizeJob(
     env: Env,
     ctx: ExecutionContext,
@@ -543,9 +664,10 @@ async function finalizeJob(
     result: Extract<PollResult, { status: "succeeded" }>,
     claim: PollClaim,
 ): Promise<Job> {
+    if (result.glbUrl === undefined) return finalizePlan(env, row, result, claim);
     // Copies that failed or died already used up the tries: stop asking the vendor for the same file.
     if (row.finalize_attempts >= MAX_FINALIZE_ATTEMPTS) {
-        const error = "Could not save the generated model after several tries. Please generate it again.";
+        const error = row.kind === "edit" ? "Could not save the edited model after several tries. Please try the edit again." : "Could not save the generated model after several tries. Please generate it again.";
         await markFailed(env, row.id, error, claim);
         return reloadAndRelease(env, row); // the job is over: whatever the adapter staged for it can go
     }
@@ -575,13 +697,7 @@ async function finalizeJob(
     return reload(env, row.id);
 }
 
-async function saveModel(
-    env: Env,
-    row: JobRow,
-    result: Extract<PollResult, { status: "succeeded" }>,
-    token: string,
-    attempt: number,
-): Promise<void> {
+async function saveModel(env: Env, row: JobRow, result: GlbResult, token: string, attempt: number): Promise<void> {
     const modelId = crypto.randomUUID();
     const glbKey = `models/${modelId}.glb`;
     let thumbKey: string | null = null;
@@ -589,37 +705,15 @@ async function saveModel(
         const stored = await storeGlb(env, result.glbUrl, glbKey);
         if (result.thumbnailUrl) thumbKey = await storeThumbnail(env, result.thumbnailUrl, modelId);
         const finished = nowIso();
-        const [jobUpdate] = await env.DB.batch([
-            env.DB.prepare(
-                `UPDATE jobs SET status = 'succeeded', progress = 100, stage = 'Done', error = NULL, model_id = ?1,
-                 finished_at = ?2, updated_at = ?2 WHERE id = ?3 AND status = 'finalizing' AND updated_at = ?4`,
-            ).bind(modelId, finished, row.id, token),
-            env.DB.prepare(
-                `INSERT INTO models (id, project_id, job_id, provider, prompt, glb_key, thumb_key, size_bytes, part_count, created_at)
-                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-                 WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ?3 AND model_id = ?1 AND status = 'succeeded')`,
-            ).bind(
-                modelId,
-                row.project_id,
-                row.id,
-                row.provider,
-                row.prompt,
-                glbKey,
-                thumbKey,
-                stored.size,
-                stored.partCount,
-                finished,
-            ),
-            env.DB.prepare(
-                "UPDATE projects SET modified_at = ?1 WHERE id = ?2 AND EXISTS (SELECT 1 FROM models WHERE id = ?3)",
-            ).bind(finished, row.project_id, modelId),
-        ]);
-        if (jobUpdate.meta.changes !== 1) {
-            // The lease was lost (another request took over, or the project was deleted): drop our copy.
+        const saved =
+            row.kind === "edit"
+                ? await insertEditedModel(env, row, result, token, { modelId, glbKey, stored, finished })
+                : await insertGeneratedModel(env, row, token, { modelId, glbKey, thumbKey, stored, finished });
+        if (saved !== "saved") {
+            // The lease was lost (another request took over, or the project was deleted), or an identical edit was there first: drop our copy.
             await deleteKeys(env, [glbKey, thumbKey]);
-        } else {
-            await releaseTask(env, row); // the model is ours now: the adapter's staging copy can go
         }
+        if (saved !== "lost") await releaseTask(env, row); // the model is ours (or the identical one is): the adapter's staging copy can go
     } catch (err) {
         await deleteKeys(env, [glbKey, thumbKey]);
         // A problem with the file itself (not a GLB, too big, a 4xx) will not go away; anything else (a dropped
@@ -655,6 +749,127 @@ async function saveModel(
     }
 }
 
+interface SaveArgs {
+    modelId: string;
+    glbKey: string;
+    stored: StoredGlb;
+    finished: string;
+}
+
+/** The generated model: the job succeeds and the row is added in one batch. "lost": the lease was lost, nothing was written. */
+async function insertGeneratedModel(env: Env, row: JobRow, token: string, a: SaveArgs & { thumbKey: string | null }): Promise<"saved" | "lost"> {
+    const [jobUpdate] = await env.DB.batch([
+        env.DB.prepare(
+            `UPDATE jobs SET status = 'succeeded', progress = 100, stage = 'Done', error = NULL, model_id = ?1,
+             finished_at = ?2, updated_at = ?2 WHERE id = ?3 AND status = 'finalizing' AND updated_at = ?4`,
+        ).bind(a.modelId, a.finished, row.id, token),
+        env.DB.prepare(
+            `INSERT INTO models (id, project_id, job_id, provider, prompt, glb_key, thumb_key, size_bytes, part_count, created_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+             WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ?3 AND model_id = ?1 AND status = 'succeeded')`,
+        ).bind(a.modelId, row.project_id, row.id, row.provider, row.prompt, a.glbKey, a.thumbKey, a.stored.size, a.stored.partCount, a.finished),
+        env.DB.prepare(
+            "UPDATE projects SET modified_at = ?1 WHERE id = ?2 AND EXISTS (SELECT 1 FROM models WHERE id = ?3)",
+        ).bind(a.finished, row.project_id, a.modelId),
+    ]);
+    return jobUpdate.meta.changes === 1 ? "saved" : "lost";
+}
+
+/**
+ * The new version of a design edit: the model row (kind 'edited', the source's provider and prompt, EditMeta built here from the job and the
+ * validated result) and the job's success in one batch. The caps (versions per source, per project) are conditions of the INSERT itself
+ * (worker/versions.ts), so parallel saves cannot all pass a count they read before. The row is deleted again, in the same batch, when this
+ * request no longer holds the job's lease. The same result made twice from one model is the model that is there: "existing". A cap that is
+ * full, a source that is gone or a chain that is too deep end the job with a message (a ModelFileError).
+ */
+async function insertEditedModel(env: Env, row: JobRow, result: GlbResult, token: string, a: SaveArgs): Promise<"saved" | "lost" | "existing"> {
+    const edit = result.edit;
+    if (!edit || !row.source_model_id) throw new ModelFileError("The edit came back without its description. Please try again.");
+    const sourceId = row.source_model_id;
+    const source = await env.DB.prepare(`SELECT kind, provider, prompt, meta, ${chainLengthSql("?1")} AS chain FROM models WHERE id = ?1 AND project_id = ?2`)
+        .bind(sourceId, row.project_id)
+        .first<{ kind: string; provider: string; prompt: string; meta: string | null; chain: number | null }>();
+    if (!source) throw new ModelFileError("The model you were editing was deleted, so the edit was not saved.");
+    let depth: number;
+    try {
+        depth = requireChainRoom(source.chain);
+    } catch (err) {
+        throw new ModelFileError(err instanceof HttpError ? err.message : "This version is too deep to edit again.");
+    }
+    const meta = designEditMeta({
+        instruction: row.prompt,
+        summary: edit.summary,
+        changes: edit.changes,
+        notes: edit.notes,
+        engine: edit.engine,
+        depth,
+        stabilizedDepth: stabilizationsOf({ kind: source.kind as ModelKind, meta: source.meta }),
+        jobId: row.id,
+        createdAt: a.finished,
+    });
+    const plan: EditResult = { target: "design", applied: true, summary: edit.summary, notes: edit.notes, changes: edit.changes };
+    const prior = await existingEdit(env, sourceId, edit.hash);
+    if (prior) return finishWithExisting(env, row, token, a.finished, prior, plan);
+    let batch: D1Result[];
+    try {
+        batch = await env.DB.batch([
+            versionInsert(env, {
+                id: a.modelId,
+                projectId: row.project_id,
+                jobId: row.id,
+                provider: source.provider as ModelProvider,
+                prompt: source.prompt,
+                glbKey: a.glbKey,
+                sizeBytes: a.stored.size,
+                partCount: a.stored.partCount,
+                createdAt: a.finished,
+                analysis: null,
+                kind: "edited",
+                sourceId,
+                assemblyHash: edit.hash,
+                meta: JSON.stringify(meta),
+            }),
+            env.DB.prepare(
+                `UPDATE jobs SET status = 'succeeded', progress = 100, stage = 'Done', error = NULL, model_id = ?1, plan = ?2,
+                 finished_at = ?3, updated_at = ?3 WHERE id = ?4 AND status = 'finalizing' AND updated_at = ?5 AND EXISTS (SELECT 1 FROM models WHERE id = ?1)`,
+            ).bind(a.modelId, JSON.stringify(plan), a.finished, row.id, token),
+            // The lease was lost between the checks and the batch: the row that was just added has no job to belong to.
+            env.DB.prepare("DELETE FROM models WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM jobs WHERE id = ?2 AND model_id = ?1)").bind(a.modelId, row.id),
+            env.DB.prepare("UPDATE projects SET modified_at = ?1 WHERE id = ?2 AND EXISTS (SELECT 1 FROM models WHERE id = ?3)").bind(a.finished, row.project_id, a.modelId),
+        ]);
+    } catch (err) {
+        // The same result was saved by a request that got in between (the unique index): that one is the answer.
+        if (err instanceof Error && /UNIQUE constraint/i.test(err.message)) {
+            const winner = await existingEdit(env, sourceId, edit.hash);
+            if (winner) return finishWithExisting(env, row, token, a.finished, winner, plan);
+        }
+        throw err;
+    }
+    if ((batch[1].meta.changes ?? 0) === 1) return "saved";
+    // Nothing was added: the lease is gone (somebody else finished this job), a cap is full, or the source was deleted a moment ago.
+    const current = await env.DB.prepare("SELECT status, updated_at FROM jobs WHERE id = ?1").bind(row.id).first<{ status: string; updated_at: string }>();
+    if (!current || current.status !== "finalizing" || current.updated_at !== token) return "lost";
+    const counts = await readVersionCounts(env, sourceId, row.project_id);
+    if (counts && !counts.source_exists) throw new ModelFileError("The model you were editing was deleted, so the edit was not saved.");
+    const full = versionCapError(counts);
+    if (full) throw new ModelFileError(full.message);
+    throw new Error("the edited model was not saved");
+}
+
+const existingEdit = (env: Env, sourceId: string, hash: string): Promise<{ id: string } | null> =>
+    env.DB.prepare("SELECT id FROM models WHERE source_model_id = ?1 AND assembly_hash = ?2").bind(sourceId, hash).first<{ id: string }>();
+
+/** An identical edit of the same model is already stored: the job points at that model instead of adding a second row. */
+async function finishWithExisting(env: Env, row: JobRow, token: string, finished: string, existing: { id: string }, plan: EditResult): Promise<"existing" | "lost"> {
+    const done = await env.DB.prepare(
+        `UPDATE jobs SET status = 'succeeded', progress = 100, stage = 'Done', error = NULL, model_id = ?1, plan = ?2, finished_at = ?3, updated_at = ?3
+         WHERE id = ?4 AND status = 'finalizing' AND updated_at = ?5`,
+    )
+        .bind(existing.id, JSON.stringify(plan), finished, row.id, token)
+        .run();
+    return done.meta.changes === 1 ? "existing" : "lost";
+}
+
 async function deleteKeys(env: Env, keys: Array<string | null>): Promise<void> {
     const present = keys.filter((k): k is string => Boolean(k));
     if (present.length > 0) await env.FILES.delete(present).catch(() => {});
@@ -663,7 +878,7 @@ async function deleteKeys(env: Env, keys: Array<string | null>): Promise<void> {
 // ---------- Canceling ----------
 
 export async function cancelJob(env: Env, request: Request, rawId: string): Promise<Job> {
-    await assertAccess(env, request);
+    await requireAccess(env, request);
     const id = requireUuid(rawId, "job id");
     const row = await getJobRow(env, id);
     if (!row) throw new HttpError(404, "Job not found");

@@ -14,8 +14,9 @@ import {
 import { assemblyHash, descriptorFromBlocks, type AssemblyDescriptor } from "@/assignment/shared/assembly";
 import {
     MAX_DERIVED_DEPTH,
-    MAX_DERIVED_PER_PROJECT,
-    MAX_DERIVED_PER_SOURCE,
+    MAX_VERSIONS_PER_PROJECT,
+    MAX_VERSIONS_PER_SOURCE,
+    MAX_VERSION_DEPTH,
     type AddedRole,
     type DerivedMeta,
     type ModelAsset,
@@ -25,7 +26,16 @@ import {
     type StepMetrics,
 } from "@/assignment/shared/contract";
 import { fixOfIssues, fmtPct, plural, stabilizeLabelOf, type StabilizeLabel, type Verdict } from "@/assignment/store/analysisLogic";
-import { descendantsOf, type TreeModel } from "@/assignment/store/versionTree";
+import {
+    chainDepth,
+    childrenOf,
+    descendantsOf,
+    isVersion,
+    stabilizationsOfModel,
+    versionCount,
+    versionsOfSource,
+    type TreeModel,
+} from "@/assignment/shared/versionTree";
 import { STRESS_WARN_SHARE } from "@/assignment/viewer/analysisGeometry";
 
 // ---------- what the user can choose ----------
@@ -68,9 +78,9 @@ export interface StabilizeOffer {
     /** The primary button: "Reduce stress" when nothing fails and only heavily loaded joints are left, else "Stabilize". */
     label: StabilizeLabel;
     /**
-     * The stabilized version the card offers to open, when there is one. For an original it is the version the bar's "Stabilized"
-     * half opens (`opens`, else the newest version of the whole family: a version made from a version counts); for a version
-     * it is the newest one made directly from it.
+     * The stabilized version the card offers to open, when there is one. For an original it is the stabilized version the bar's right
+     * half opens (`opens`, else the newest stabilized version of the whole family: a version made from a version counts); for a
+     * version it is the newest stabilized one made directly from it. (Edited and optimized versions are the bar's business, not this card's.)
      */
     child: Pick<ModelAsset, "id"> | null;
     /** Why a new run cannot start (shown instead of the button), else null. */
@@ -83,16 +93,16 @@ export interface StabilizeOffer {
  * stress, so it would run, add nothing and say so. `analysing`: an analysis of this model is running, so its numbers are about to change.
  */
 export function stabilizeOffer(input: {
-    model: Pick<ModelAsset, "id" | "derived">;
+    model: Pick<ModelAsset, "id" | "derived"> & Partial<Pick<ModelAsset, "kind" | "edit" | "optimization">>;
     models: ReadonlyArray<TreeModel>;
     /** `issues` say what is left to fix (which warnings there are); without them the verdict's own `fix` does. */
     result: Pick<AnalysisResult, "stats" | "stress"> & Partial<Pick<AnalysisResult, "issues">>;
     verdict: (Pick<Verdict, "kind"> & Partial<Pick<Verdict, "fix">>) | null;
     analysing: boolean;
     /**
-     * What the bar's "Stabilized" half opens for this model (components/workspace/versionLogic.ts stabilizedTarget: the version
-     * seen last, else the newest), so "Open stabilized version" and the bar are one action. Used for an original only, and only when
-     * it is one of its versions; left out, the newest version of the family is offered.
+     * What the bar's right half opens for this model (the family's head: the version seen last, else the newest), so "Open stabilized
+     * version" and the bar are one action. Used for an original only, and only when it is one of its stabilized versions; left out, the
+     * newest stabilized version of the family is offered.
      */
     opens?: Pick<ModelAsset, "id"> | null;
 }): StabilizeOffer | null {
@@ -102,24 +112,36 @@ export function stabilizeOffer(input: {
     // warning about thin parts alone. The result's issues are the authority on which warnings there are; the verdict only counts them.
     const label = stabilizeLabelOf(result.issues ? { kind: verdict.kind, fix: fixOfIssues(result.issues) } : verdict);
     if (label === null) return null;
-    const children = models.filter((m) => m.kind === "stabilized" && m.source_model_id === model.id);
     const self = models.find((m) => m.id === model.id);
-    const original = self ? self.kind !== "stabilized" : model.derived === null;
-    // An original's versions are the whole family, not only the ones made directly from it: after generated -> A -> B the bar
-    // opens B, and so must the card (A is its only direct child). A version offers the one made from it.
-    const family = original ? descendantsOf(models, model.id) : [];
+    // The model may be one the list does not hold (a card made from a summary): its own fields say what it is.
+    const me: TreeModel = self ?? {
+        id: model.id,
+        kind: model.kind ?? (model.derived ? "stabilized" : "generated"),
+        source_model_id: null,
+        created_at: "",
+        derived: model.derived,
+        edit: model.edit,
+        optimization: model.optimization,
+    };
+    const original = !isVersion(me);
+    // An original's stabilized versions are the whole family's, not only the ones made directly from it: after generated -> A -> B the bar
+    // opens B, and so must the card (A is its only direct child). A version offers the stabilized one made from it.
+    const stabilizedKids = childrenOf(models, model.id).filter((m) => m.kind === "stabilized");
+    const family = original ? descendantsOf(models, model.id).filter((m) => m.kind === "stabilized") : [];
     const child: Pick<ModelAsset, "id"> | null = original
         ? (family.find((m) => m.id === input.opens?.id) ?? family[0] ?? null)
-        : children.length > 0
-          ? children[children.length - 1]
+        : stabilizedKids.length > 0
+          ? stabilizedKids[stabilizedKids.length - 1]
           : null;
     let blocked: string | null = null;
     if (input.analysing) blocked = "Wait for the analysis to finish.";
-    else if ((model.derived?.depth ?? 0) >= MAX_DERIVED_DEPTH) blocked = "This version has been stabilized the maximum number of times.";
-    else if (children.length >= MAX_DERIVED_PER_SOURCE) {
-        blocked = `This model has ${MAX_DERIVED_PER_SOURCE} stabilized versions already. Delete one in the Models tab to make another.`;
-    } else if (models.filter((m) => m.kind === "stabilized").length >= MAX_DERIVED_PER_PROJECT) {
-        blocked = `This project has ${MAX_DERIVED_PER_PROJECT} stabilized versions already. Delete some in the Models tab to make more.`;
+    else if (stabilizationsOfModel(me, MAX_DERIVED_DEPTH) >= MAX_DERIVED_DEPTH) blocked = "This version has been stabilized the maximum number of times.";
+    else if (versionsOfSource(models, model.id) >= MAX_VERSIONS_PER_SOURCE) {
+        blocked = `This model has ${MAX_VERSIONS_PER_SOURCE} versions already. Delete one in the Models tab to make another.`;
+    } else if (versionCount(models) >= MAX_VERSIONS_PER_PROJECT) {
+        blocked = `This project has ${MAX_VERSIONS_PER_PROJECT} versions already. Delete some in the Models tab to make more.`;
+    } else if (self && chainDepth(models, self, MAX_VERSION_DEPTH + 1) >= MAX_VERSION_DEPTH) {
+        blocked = "This version is too many steps from the original. Start from an earlier one.";
     }
     return { label, child, blocked };
 }

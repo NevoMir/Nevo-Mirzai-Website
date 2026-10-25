@@ -38,7 +38,7 @@ const PLACEMENT: Record<SceneLabel["kind"], { placement: Placement; offset: numb
 const prefersReducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** The part of the view the block scene is painted from. */
-type LookOfView = Pick<AnalysisViewState, "colorBy" | "layerMax" | "showGhost" | "showCog" | "highlight">;
+type LookOfView = Pick<AnalysisViewState, "colorBy" | "layerMax" | "showGhost" | "showCog" | "highlight"> & Partial<Pick<AnalysisViewState, "diff">>;
 
 /** What the stage shows when the view is not set: the block view with everything at its default. */
 const FALLBACK_VIEW: LookOfView = { colorBy: "status", layerMax: 99, showGhost: false, showCog: true, highlight: [] };
@@ -49,6 +49,7 @@ const patchOf = (view: LookOfView, analysis: AnalysisResult, previewing: boolean
     showGhost: view.showGhost,
     showCog: view.showCog,
     highlight: view.highlight,
+    diff: view.diff ?? null,
 });
 
 export interface AnalysisBridgeArgs {
@@ -329,7 +330,7 @@ export function useAnalysisView(args: AnalysisBridgeArgs): AnalysisBridge {
         if (blocks.setView(patchOf(now.view, blocks.analysis, !!now.previewing)) || blocks.flashing()) kick();
         syncLabels();
         viewerRef.current?.requestFrame();
-    }, [blocksEpoch, active, theme, colorBy, view?.layerMax, view?.showGhost, view?.showCog, highlightKey, kick, syncLabels, viewerRef]);
+    }, [blocksEpoch, active, theme, colorBy, view?.layerMax, view?.showGhost, view?.showCog, view?.diff, highlightKey, kick, syncLabels, viewerRef]);
 
     // ---- an issue was picked: fly to it and point at it (the rules are in analysisFocus) ----
     useEffect(() => {

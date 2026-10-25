@@ -34,7 +34,7 @@ import { useIsDark } from "@/assignment/hooks/useIsDark";
 import { cn } from "@/assignment/lib/utils";
 import { AnalysisLegend } from "./AnalysisLegend.tsx";
 import { highlightCut, resolveColorBy } from "./analysisGeometry.ts";
-import { assemblyCounts, decorateAssemblyRows, stageStepOffset } from "./assemblyParts.ts";
+import { assemblyCounts, assemblyNote, decorateAssemblyRows, stageStepOffset } from "./assemblyParts.ts";
 import { ColorChip } from "./ColorChip.tsx";
 import { downloadLabelFor, downloadStem, formatCount, num, partDetail, stageLabel } from "./format.ts";
 import { createModelHandle, type ModelHandle } from "./loadedModel.ts";
@@ -90,6 +90,8 @@ export interface GlbViewerProps {
      * colours, and the blocks each step adds flash once. Its `transform` must be the one of the model on stage.
      */
     previewResult?: AnalysisResult | null;
+    /** What the chip over a preview calls it ("Stabilizer preview", the default; a block edit and the optimizer have their own). */
+    previewLabel?: string;
     /**
      * A stage control of the block view was used: the Colour chip (`colorBy`), the Layers popover (`layerMax`, the highest layer
      * shown, from 0) or the Show menu (`showCog`, `showGhost`). Without it those controls are not offered (the Colour chip only
@@ -181,6 +183,7 @@ export default function GlbViewer({
     analysis: analysisProp,
     analysisView,
     previewResult,
+    previewLabel = "Stabilizer preview",
     onViewChange,
     layerRaised,
     onBlockHover,
@@ -944,12 +947,12 @@ export default function GlbViewer({
                                 <div ref={stackRef} className="flex max-w-full flex-col items-start gap-1">
                                     {blocksOn && analysis && analysisView ? (
                                         <p className="rounded-md bg-background/85 px-2 py-0.5 text-[11px] text-muted-foreground backdrop-blur">
-                                            {previewing ? "Stabilizer preview" : "Block view"} · {formatCount(analysis.blocks.length)} {analysis.blocks.length === 1 ? "block" : "blocks"} of {num(analysis.settings.blockSizeMm)} mm
+                                            {previewing ? previewLabel : "Block view"} · {formatCount(analysis.blocks.length)} {analysis.blocks.length === 1 ? "block" : "blocks"} of {num(analysis.settings.blockSizeMm)} mm
                                             {previewing && analysis.assembly ? ` (${formatCount(analysis.blocks.length - analysis.assembly.roleCounts[0])} added)` : ""}
                                         </p>
                                     ) : (
                                         <p className="rounded-md bg-background/85 px-2 py-0.5 text-[11px] text-muted-foreground backdrop-blur">
-                                            {stageCounts ? `Block assembly · ${formatCount(stageCounts.original + stageCounts.added)} blocks${stageCounts.added > 0 ? ` (${formatCount(stageCounts.added)} added)` : ""} · ${formatCount(rows.length)} ${rows.length === 1 ? "role" : "roles"}` : `GLB · ${formatCount(rows.length)} ${rows.length === 1 ? "part" : "parts"} · ${formatCount(stats.triangles)} triangles`}
+                                            {stageCounts ? `Block assembly · ${formatCount(stageCounts.original + stageCounts.added + stageCounts.edited)} blocks${assemblyNote(stageCounts, formatCount)} · ${formatCount(rows.length)} ${rows.length === 1 ? "role" : "roles"}` : `GLB · ${formatCount(rows.length)} ${rows.length === 1 ? "part" : "parts"} · ${formatCount(stats.triangles)} triangles`}
                                         </p>
                                     )}
                                     {supportsChipOn && (

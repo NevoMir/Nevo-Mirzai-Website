@@ -6,10 +6,10 @@ import type { ModelAsset } from "@/assignment/shared/contract";
 import { versionFamily } from "@/assignment/store/versions";
 
 /**
- * The way to the other versions of a model, from its row in the Models list or its card in the chat: "Stabilized" on the model
- * it was made from, "Original" on a stabilized version (and "Previous" on a version made from another version). They resolve
- * like the bar's two halves (versionLogic pairLinks), so the same word never opens a different model. Nothing when there is no
- * other one (a plain generated model, or a version whose original is gone).
+ * The way to the other versions of a model, from its card in the chat: "Latest" on the model it was made from (the version the bar's
+ * right half stands for), "Original" on a version (and "Previous" on a version made from another version). They resolve like the
+ * bar's two halves (versionLogic pairLinks), so the same word never opens a different model. Nothing when there is no other one
+ * (a plain generated model, or a version whose original is gone).
  */
 export function ModelPairLink({
     model,

@@ -431,7 +431,13 @@ export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "bl
     const statusLabel = STATUS_LABELS[block.status];
     const title = "Block";
     const zRange = `${z0}–${z1} mm up`;
-    const added = block.role && block.role !== "original" ? `${ROLE_LABELS[block.role]}, added ${addedWhen(block.step, stepOffset)}` : undefined;
+    // A block of the person's own edit was not added by a stabilizer step: no step to name.
+    const added =
+        block.role === "user"
+            ? ROLE_LABELS.user
+            : block.role && block.role !== "original"
+              ? `${ROLE_LABELS[block.role]}, added ${addedWhen(block.step, stepOffset)}`
+              : undefined;
     const parts = [`${title}, ${zRange}`, statusLabel, detail];
     if (added) parts.push(added);
     if (stress) parts.push(stress.text);

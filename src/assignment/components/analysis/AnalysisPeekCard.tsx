@@ -1,10 +1,12 @@
 import { useRef } from "react";
 import { ChevronUp, RotateCcw } from "lucide-react";
 
+import { EditBlocksCard } from "@/assignment/components/analysis/EditBlocksCard";
 import { KeyChips } from "@/assignment/components/analysis/KeyChips";
 import { StabilizeCard } from "@/assignment/components/analysis/StabilizeCard";
 import { summaryChip, useRunBadge } from "@/assignment/components/analysis/summary";
 import type { AnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
+import { useBlockDraft } from "@/assignment/components/analysis/useBlockDraft";
 import { VerdictBlock } from "@/assignment/components/analysis/VerdictBlock";
 import { Button } from "@/assignment/components/ui/button";
 import { Skeleton } from "@/assignment/components/ui/skeleton";
@@ -14,8 +16,8 @@ import { useAnalysisStore } from "@/assignment/store/analysis";
 import { useStabilizeStore } from "@/assignment/store/stabilize";
 import { answerIsBeforeRun, outcomeOf } from "@/assignment/store/stabilizeLogic";
 
-/** What the card takes with the idle report in it: the sentence, four figures and the button (the shell reserves this much before it has measured the card). */
-export const ANALYSIS_PEEK_CARD_PX = 190;
+/** What the card takes with the idle report in it: the sentence, four figures, the button and the "Change the blocks" row (the shell reserves this much before it has measured the card). */
+export const ANALYSIS_PEEK_CARD_PX = 240;
 
 /**
  * Phone: the answer docked at the bottom of the stage, so the model stays in sight: the sentence, the four figures and the one
@@ -32,6 +34,8 @@ export function AnalysisPeekCard({ model, snapshot }: { model: ModelAsset | null
     const outcome = useStabilizeStore((s) => (s.result ? outcomeOf(s.result) : null));
     const chip = summaryChip(snapshot, useRunBadge());
     const { phase, result, verdict, sentence } = snapshot;
+    // Unsaved changes made by words (store/voxelEdit.ts): their headline replaces the model's own while they exist.
+    const block = useBlockDraft(model);
     // A swipe up on the card opens the panel too (the grab bar says so).
     const swipeFrom = useRef<number | null>(null);
     if (phase === "no-model") return null;
@@ -42,17 +46,23 @@ export function AnalysisPeekCard({ model, snapshot }: { model: ModelAsset | null
 
     let body;
     if (result && verdict && model) {
+        const drafting = block.drafting && block.result !== null && block.verdict !== null;
         body = (
             <>
                 {/* Tapping the sentence opens the panel; the handle above and "Details" are the same for the keyboard. */}
                 <div onClick={open} className="cursor-pointer">
-                    <VerdictBlock result={result} verdict={verdict} sentence={sentence} before={pending} compact />
+                    <VerdictBlock result={drafting && block.result ? block.result : result} verdict={drafting && block.verdict ? block.verdict : verdict} sentence={drafting ? block.sentence : sentence} before={pending} compact />
                 </div>
-                <div className="mt-2">
-                    <KeyChips result={result} dimmed={pending} compact />
-                </div>
+                {!drafting && (
+                    <div className="mt-2">
+                        <KeyChips result={result} dimmed={pending} compact />
+                    </div>
+                )}
                 <div className="mt-2.5" data-testid="analysis-action">
-                    <StabilizeCard model={model} result={result} verdict={verdict} analysing={phase === "running"} compact />
+                    {!block.editing && <StabilizeCard model={model} result={result} verdict={verdict} analysing={phase === "running"} compact />}
+                </div>
+                <div className="mt-1.5">
+                    <EditBlocksCard model={model} result={result} compact />
                 </div>
             </>
         );

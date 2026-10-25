@@ -43,8 +43,9 @@ const completedHere = new Set<string>();
 export const completedThisSession = (modelId: string): boolean => completedHere.has(modelId);
 
 /**
- * Take a fresher copy of a job into the store. A job that has just succeeded also adds its model
- * and, if nothing is on screen yet or it is the first of the newest prompt to finish, shows it.
+ * Take a fresher copy of a job into the store. A job that has just succeeded also adds its model and, if nothing is on screen yet or it
+ * is the first of the newest prompt to finish, shows it. An edit job (a change of a design or a mesh) shows its new version at once
+ * (it was made from the one on screen); one that ends with a plan and no model leaves the plan on the job for its card to offer.
  */
 export function applyJob(job: Job): void {
     const store = useWorkspaceStore.getState();
@@ -69,12 +70,20 @@ export function applyJob(job: Job): void {
     store.addModel(job.model);
 
     const state = useWorkspaceStore.getState();
+    if (job.kind === "edit") {
+        // The change is what the person asked to see: its version goes on the stage, on the tab they are in (the Models tab has no stage).
+        state.setActiveModel(job.model.id);
+        if (state.workspaceTab === "models") state.setWorkspaceTab("3d");
+        return;
+    }
     const group = latestJobIds(state.messages);
     const firstOfGroup =
         group.includes(job.id) && !group.some((id) => id !== job.id && state.jobs[id]?.status === "succeeded");
     if (state.activeModelId === null || firstOfGroup) {
         state.setActiveModel(job.model.id);
         state.setWorkspaceTab("3d");
+        // A new model is what the next words are about: the composer goes back to editing it.
+        state.setComposerChoice(null);
     }
 }
 

@@ -19,10 +19,13 @@ import {
     type ProjectPatch,
     type TagPatch,
 } from "./db.ts";
-import { createDerivedModel, deleteDerivedModel } from "./derived.ts";
+import { createDerivedModel, deleteVersion } from "./derived.ts";
+import { handleStartEdit } from "./edit.ts";
+import { handleUploadEdited } from "./editUpload.ts";
 import { createProjectFromExample, listExamples } from "./examples.ts";
 import { putThumbnail, serveFile } from "./files.ts";
 import { advanceJob, cancelJob, checkAccessCode, getProvidersResponse, startGeneration } from "./jobs.ts";
+import { handleOptimizeSpec } from "./optimizeSpec.ts";
 import type { Env } from "./providers/types.ts";
 import {
     HttpError,
@@ -39,6 +42,7 @@ import {
     readJsonObject,
     requireUuid,
 } from "./util.ts";
+import { handleVoxelEdit } from "./voxelEdit.ts";
 
 const BULK_ACTIONS: readonly BulkAction[] = ["trash", "restore", "archive", "unarchive", "purge"];
 
@@ -80,6 +84,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
             if (method !== "POST") methodNotAllowed("POST");
             return json({ ok: await checkAccessCode(env, request, (await readJsonObject(request)).code) });
 
+        case "llm":
+            // The direct AI lane: one question, one answer, nothing stored (worker/voxelEdit.ts, worker/optimizeSpec.ts).
+            if (segments.length !== 2 || (a !== "voxel-edit" && a !== "optimize-spec")) break;
+            if (method !== "POST") methodNotAllowed("POST");
+            return json(a === "voxel-edit" ? await handleVoxelEdit(env, request) : await handleOptimizeSpec(env, request));
+
         case "projects":
             return projectRoutes(request, env, method, segments);
 
@@ -97,17 +107,28 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
 
         case "models": {
             if (!a) break;
-            // DELETE /models/:id: a stabilized version only.
+            // DELETE /models/:id: a version of any kind (stabilized, edited, optimized) and the versions made from it.
             if (segments.length === 2) {
                 if (method !== "DELETE") methodNotAllowed("DELETE");
-                await deleteDerivedModel(env, a);
+                await deleteVersion(env, a);
                 return json({ ok: true });
             }
             if (segments.length !== 3) break;
-            // POST /models/:sourceId/derived: store a stabilized version (raw GLB body, see worker/derived.ts).
+            // POST /models/:sourceId/derived: store a stabilized, block-edited or optimized version (raw GLB body, see worker/derived.ts).
             if (b === "derived") {
                 if (method !== "POST") methodNotAllowed("POST");
                 const { status, model } = await createDerivedModel(env, request, a);
+                return json({ model }, status);
+            }
+            // POST /models/:sourceId/edits: start a design or mesh edit on the queue (worker/edit.ts).
+            if (b === "edits") {
+                if (method !== "POST") methodNotAllowed("POST");
+                return json({ job: await handleStartEdit(env, ctx, request, a) }, 201);
+            }
+            // POST /models/:sourceId/edited?job=<id>: the browser-made GLB of a finished mesh edit (worker/editUpload.ts).
+            if (b === "edited") {
+                if (method !== "POST") methodNotAllowed("POST");
+                const { status, model } = await handleUploadEdited(env, request, a, url.searchParams.get("job"));
                 return json({ model }, status);
             }
             // PUT /models/:id/analysis. Open like the rest of the API except generation: it costs nothing and only

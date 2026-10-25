@@ -6,7 +6,8 @@
 import { BLOCK_ROLES, type AddedRole, type DerivedMeta } from "../src/assignment/shared/contract.ts";
 import { CELL_STRIDE, type AssemblyDescriptor } from "../src/assignment/shared/assembly.ts";
 
-const ADDED_ROLES = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original");
+// "user" blocks come from edits, never from the stabilizer (checkDerivedMeta cannot list them); one inside this run's steps fails the counts below.
+const ADDED_ROLES = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original" && r !== "user");
 
 /**
  * An error message when the log disagrees with the blocks, else null. checkDerivedMeta has already made the log add up on
@@ -15,8 +16,9 @@ const ADDED_ROLES = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original");
  * "Added by this run" is not "not original": a model stabilized a second time keeps the roles and steps of the first run
  * (the earlier additions are blocks of the model being analysed), and this run's steps are numbered after them. So the
  * blocks of this run are those with a step above `highest step - number of logged steps`. `firstRun` is true when the
- * source is an ordinary model (generated or an example's original): it has no steps of its own, so every added block belongs
- * to this run and the offset is 0.
+ * source is a mesh (representationOf(source) === "mesh": generated, example, edited design or mesh): it has no steps of its own, so
+ * every added block belongs to this run and the offset is 0. Every other source is a block assembly (stabilized, edited blocks,
+ * optimized) whose blocks keep their roles and steps: firstRun is false and this run's steps come after the highest one it has.
  */
 export function crossCheckDerived(descriptor: Pick<AssemblyDescriptor, "cells">, meta: DerivedMeta, firstRun: boolean): string | null {
     const cells = descriptor.cells;

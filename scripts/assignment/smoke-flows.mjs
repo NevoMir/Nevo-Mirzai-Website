@@ -50,7 +50,7 @@ export * from "@/assignment/store/stabilizeLogic";
 export * from "@/assignment/store/examples";
 export * from "@/assignment/store/models";
 export * from "@/assignment/lib/api";
-export * from "@/assignment/components/workspace/modelGroups";
+export * from "@/assignment/shared/versionTree";
 export { runAnalysis, clearAnalysisCache } from "@/assignment/analysis/runAnalysis";
 export { readAssemblyGlb } from "@/assignment/shared/assemblyGlb";
 export { STRESS_WARN } from "@/assignment/analysis/materials";
@@ -279,15 +279,14 @@ await test("Stabilize: the steps stream into the timeline and the stage preview,
     assert.ok(S.toasts.some((t) => t.title === "Switched to the stabilized version"), "saved: the new version is on the stage and the toast says so");
 });
 
-await test("both models are in the project: grouping puts the version under its source", () => {
-    const groups = S.groupModels(ws.getState().models);
+await test("both models are in the project: the tree puts the version under its source", () => {
+    const groups = S.forestOf(ws.getState().models);
     assert.equal(groups.length, 1);
-    assert.equal(groups[0].source.id, demoModel.id);
-    assert.deepEqual(groups[0].versions.map((v) => [v.model.id, v.depth]), [[savedModel.id, 1]]);
-    const pair = S.pairOf(demoModel, ws.getState().models);
-    assert.equal(pair.model.id, savedModel.id);
-    assert.equal(pair.label, "Stabilized");
-    assert.equal(S.pairOf(savedModel, ws.getState().models).label, "Original");
+    assert.equal(groups[0].root.id, demoModel.id);
+    assert.deepEqual(groups[0].rows.map((r) => [r.model.id, r.depth]), [[demoModel.id, 0], [savedModel.id, 1]]);
+    assert.equal(S.stepTarget(ws.getState().models, demoModel, "child").id, savedModel.id, "] from the original");
+    assert.equal(S.stepTarget(ws.getState().models, savedModel, "parent").id, demoModel.id, "[ from the version");
+    assert.equal(S.stageOf(ws.getState().models, savedModel).display.id, demoModel.id, "the version sits on the original's mesh");
 });
 
 await test("the saved version is stable when analysed from its own file, and its summary is saved with it", async () => {
@@ -337,7 +336,7 @@ await test("stabilizing the same model again returns the same stored version (id
 
 await test("deleting the version leaves the original and puts the viewer back on it", async () => {
     ws.getState().setActiveModel(savedModel.id);
-    const out = await S.deleteStabilized(savedModel);
+    const out = await S.deleteVersion(savedModel);
     assert.equal(out.ok, true);
     assert.deepEqual(ws.getState().models.map((m) => m.id), [demoModel.id]);
     assert.equal(ws.getState().activeModelId, demoModel.id);

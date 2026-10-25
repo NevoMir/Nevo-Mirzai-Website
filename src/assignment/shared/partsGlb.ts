@@ -9,6 +9,10 @@
 // two numbers, so each distinct one gets its own positions; their normals and triangles never change and are shared. The glTF frame is Y-up: a part's Z-up frame (x, y, z) is written as
 // (x, z, -y); the node carries the position, rotation and size. Triangles are counter-clockwise seen from outside.
 // Materials are plain PBR: base colour from the part's colour, metallic 0, roughness 0.75.
+//
+// The design itself travels in the file: scenes[0].extras["nevo:design"] is the exact PartsDesign the file was built from (about 10 to 25 KB for
+// 20 to 60 parts), so an edit by words (shared/partsEdit.ts) reads the design back exactly instead of rebuilding it from the nodes. Older
+// files without it are still readable (designFromGlb rebuilds them from the per-node "nevo:part" extras).
 
 import { rotationMatrix, uniqueNames, type DesignPart, type PartShape, type PartsDesign, type Vec3 } from "./partsDesign.ts";
 
@@ -436,8 +440,13 @@ function gltfQuaternion(rotation: Vec3): [number, number, number, number] | null
 
 const pad4 = (n: number): number => (n + 3) & ~3;
 
+export interface PartsGlbOptions {
+    /** Write the exact design into scenes[0].extras["nevo:design"] (default true). False writes the form older files have. */
+    embedDesign?: boolean;
+}
+
 /** The design as a binary glTF 2.0 file. The design should come from repairDesign: this only refuses what it cannot write. */
-export function buildPartsGlb(design: PartsDesign): Uint8Array {
+export function buildPartsGlb(design: PartsDesign, options: PartsGlbOptions = {}): Uint8Array {
     const parts: readonly DesignPart[] = design.parts;
     if (parts.length === 0) throw new Error("a design needs at least one part");
     if (parts.length > MAX_GLB_PARTS) throw new Error(`a design is limited to ${MAX_GLB_PARTS} parts`);
@@ -517,10 +526,18 @@ export function buildPartsGlb(design: PartsDesign): Uint8Array {
         nodes.push(node);
     });
 
+    // The embedded design uses the file's (unique) part names and a fixed key order, so reading it back and building again gives the same bytes.
+    const extras: Record<string, unknown> = { "nevo:parts": { version: 1, count: parts.length } };
+    if (options.embedDesign !== false) {
+        extras["nevo:design"] = {
+            name: design.name,
+            parts: parts.map((p, n) => ({ name: names[n], shape: p.shape, size: p.size, position: p.position, rotation: p.rotation, color: p.color })),
+        };
+    }
     const json = {
         asset: { version: "2.0", generator: PARTS_GLB_GENERATOR },
         scene: 0,
-        scenes: [{ name: design.name, nodes: parts.map((_, i) => i), extras: { "nevo:parts": { version: 1, count: parts.length } } }],
+        scenes: [{ name: design.name, nodes: parts.map((_, i) => i), extras }],
         nodes,
         meshes: gltfMeshes,
         materials,

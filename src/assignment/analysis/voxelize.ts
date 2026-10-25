@@ -225,8 +225,12 @@ export function transformForBounds(bounds: PlacementBounds, settings: Pick<Analy
     return placementForBounds(bounds, settings).transform;
 }
 
-/** Voxelises the soup. `settings` must already be normalised (normalizeSettings). */
-export function voxelize(soup: TriangleSoup, settings: AnalysisSettings, onProgress?: ProgressFn): VoxelGrid {
+/**
+ * Voxelises the soup. `settings` must already be normalised (normalizeSettings). `placeBy`: place the soup as if its bounding box were
+ * this one (default: its own). A PART of a model is voxelised with the bounds of the WHOLE model, so its blocks are the ones the whole
+ * model's voxelisation has (analysis/partLabels.ts).
+ */
+export function voxelize(soup: TriangleSoup, settings: AnalysisSettings, onProgress?: ProgressFn, placeBy?: PlacementBounds): VoxelGrid {
     const started = performance.now();
     const g = assertGridSize(settings, SUBDIVISION);
     const blockSize = settings.blockSizeMm;
@@ -242,7 +246,7 @@ export function voxelize(soup: TriangleSoup, settings: AnalysisSettings, onProgr
 
     // ----- transform -----
     // Decided by placementForBounds, which transformForBounds also uses: the two cannot drift apart.
-    const { transform, sizeMm, hasGeometry } = placementForBounds(bounds, settings);
+    const { transform, sizeMm, hasGeometry } = placementForBounds(placeBy ?? bounds, settings);
     const { factor, modelMin, offsetMm } = transform;
 
     const solid = new Uint16Array(g * g * g);

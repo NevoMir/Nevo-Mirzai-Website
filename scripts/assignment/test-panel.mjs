@@ -1681,7 +1681,8 @@ await test("the panel does not switch versions, and the old sections, the compar
         assert.ok(!existsSync(path.join(dir, `${gone}.tsx`)), `${gone}.tsx is gone`);
     }
     const offenders = (re) => files.filter((f) => re.test(source[f]));
-    assert.deepEqual(offenders(/setActiveModel/), [], "no component switches the model itself");
+    // (The block-edit card opens the version it has just saved; that is a new model, not a switch between the versions of this one.)
+    assert.deepEqual(offenders(/setActiveModel/).filter((f) => f !== "EditBlocksCard.tsx"), [], "no component switches the model itself");
     assert.deepEqual(offenders(/\bopenVersion\b/), ["RunStrip.tsx"], "the only way across is the run strip's 'Go to that model'");
     assert.deepEqual(offenders(/requestCompare|setCompare|ensureOriginal|originalResult|originalFor|originalState|compareStatus|onCompareChange|derivedFrom|CompareChip|CompareNotice|pendingCompare/), []);
     assert.deepEqual(offenders(/View original|Open stabilized version|stabilize-compare|stabilize-open"/), []);

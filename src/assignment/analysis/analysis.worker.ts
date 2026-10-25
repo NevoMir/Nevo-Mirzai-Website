@@ -9,6 +9,7 @@ import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 import { normalizeSettings } from "./settings.ts";
 import type { AnalysisResult } from "./types.ts";
 import { parseAssemblyDescriptor } from "../shared/assembly.ts";
+import { labelParts } from "./partLabels.ts";
 import { withStress } from "./withStress.ts";
 import { voxelize } from "./voxelize.ts";
 import type { AnalysisStage, VoxelGrid } from "./voxelize.ts";
@@ -39,6 +40,14 @@ const STRESS_FROM = 0.96;
 
 scope.onmessage = async (event) => {
     const request = event.data;
+    if (request.kind === "labels") {
+        try {
+            scope.postMessage({ kind: "labels", id: request.id, labels: labelParts(request.parts, request.usedCells, normalizeSettings(request.settings)) });
+        } catch (error) {
+            scope.postMessage({ kind: "error", id: request.id, message: error instanceof Error && error.message ? error.message : "The parts could not be read." });
+        }
+        return;
+    }
     if (request.kind !== "run") return;
     const { id } = request;
     try {

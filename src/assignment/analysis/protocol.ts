@@ -2,6 +2,8 @@
 
 import type { AssemblyDescriptor } from "../shared/assembly.ts";
 import type { Bounds } from "./assembly.ts";
+import type { PartLabels } from "../shared/voxelEdit/grid.ts";
+import type { PartSoup } from "./partLabels.ts";
 import type { AnalysisResult, AnalysisSettings, AnalysisTransform, Vec3 } from "./types.ts";
 import type { AnalysisStage } from "./voxelize.ts";
 
@@ -36,11 +38,24 @@ export interface RunRequest {
     wasmUrl?: string;
 }
 
-export type WorkerRequest = RunRequest;
+/**
+ * Which part of the mesh each block belongs to (partLabels.ts): one soup per glTF part, in the viewer's frame, and the codes of the blocks to
+ * label. Nothing is cached: the answer is asked for once per mesh.
+ */
+export interface LabelsRequest {
+    kind: "labels";
+    id: number;
+    parts: PartSoup[];
+    usedCells: number[];
+    settings: AnalysisSettings;
+}
+
+export type WorkerRequest = RunRequest | LabelsRequest;
 
 export type WorkerResponse =
     | { kind: "progress"; id: number; step: AnalysisStage; fraction: number }
     | { kind: "result"; id: number; result: AnalysisResult }
+    | { kind: "labels"; id: number; labels: PartLabels }
     | { kind: "error"; id: number; message: string }
     /** The worker no longer has the grid for `gridKey` and the request carried no triangles: send them. */
     | { kind: "need-soup"; id: number };

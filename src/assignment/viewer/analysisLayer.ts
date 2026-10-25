@@ -14,7 +14,7 @@
  * geometry that the ghost draws (that stays with the model's scene).
  */
 import * as THREE from "three";
-import type { AnalysisColorBy, AnalysisResult, Block } from "../analysis/types.ts";
+import type { AnalysisColorBy, AnalysisDiff, AnalysisResult, Block } from "../analysis/types.ts";
 import {
     PALETTE,
     blockColor,
@@ -43,6 +43,7 @@ import {
     type BlockPalette,
     type SceneLabel,
 } from "./analysisGeometry.ts";
+import { createDiffLayer } from "./diffLayer.ts";
 import { addStageLighting } from "./glbScene.ts";
 import type { ViewerScene } from "./orbitViewer.ts";
 import type { Vec3, ViewTheme } from "./types.ts";
@@ -62,6 +63,8 @@ export interface BlocksViewPatch {
     showGhost: boolean;
     showCog: boolean;
     highlight: readonly number[];
+    /** What changed against another version (the optimizer's result): ghosts of the blocks that are gone, a ring round the new ones, the rest dimmed. */
+    diff?: AnalysisDiff | null;
 }
 
 export interface BlocksSceneOptions {
@@ -147,7 +150,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     let reduced = options.reducedMotion ?? false;
     /** The layer cut, kept to the layers that exist (below 0 shows nothing). */
     const clampLayer = (layerMax: number) => Math.min(top, Math.floor(Number.isFinite(layerMax) ? layerMax : top));
-    const view: BlocksViewPatch = { colorBy: options.view.colorBy, layerMax: clampLayer(options.view.layerMax), showGhost: options.view.showGhost, showCog: options.view.showCog, highlight: [...options.view.highlight] };
+    const view: BlocksViewPatch = { colorBy: options.view.colorBy, layerMax: clampLayer(options.view.layerMax), showGhost: options.view.showGhost, showCog: options.view.showCog, highlight: [...options.view.highlight], diff: options.view.diff ?? null };
 
     // ---- bookkeeping: everything made here is freed in dispose() ----
     const geometries = new Set<THREE.BufferGeometry>();
@@ -403,6 +406,11 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     blocksGroup.name = "blocks:blocks";
     root.add(blocksGroup);
     blocksGroup.add(dimmed, dimmedEdges, halo, freshHalo, active, activeEdges);
+    // What changed against another version (ghosts of removed blocks, a ring round new ones): drawn in the same frame as the blocks.
+    const diffLayer = createDiffLayer(root, { cell, theme });
+    const cellKey = (c: readonly number[]): number => (c[2] * 1024 + c[1]) * 1024 + c[0];
+    const indexOfCell = new Map<number, number>();
+    blocks.forEach((b, i) => indexOfCell.set(cellKey(b.cell), i));
 
     // The layer cut: the top faces of the last shown layer, outlined and faintly filled.
     const cells = Math.max(1, analysis.gridSize[0] * analysis.gridSize[1]);
@@ -479,8 +487,16 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
         // A highlight the layer cut hides entirely emphasises nothing (the rest is not dimmed for it); the stage says so in a chip.
         const highlighted = new Set<number>();
         for (const i of view.highlight) if (i >= 0 && i < count && blocks[i].cell[2] <= view.layerMax) highlighted.add(i);
-        const focused = highlighted.size > 0;
-        emphasised = focused ? highlighted : null;
+        // A diff that dims the rest keeps its new blocks lit (and dims all when none are new): the red ghosts and green rings then stand out.
+        const lit = new Set(highlighted);
+        if (view.diff?.dimRest) {
+            for (const c of view.diff.added) {
+                const i = indexOfCell.get(cellKey(c));
+                if (i !== undefined && blocks[i].cell[2] <= view.layerMax) lit.add(i);
+            }
+        }
+        const focused = lit.size > 0 || !!view.diff?.dimRest;
+        emphasised = highlighted.size > 0 ? highlighted : null;
         shownSet = new Set<number>();
         shownCount = 0;
         const size = cell * INSET;
@@ -502,14 +518,14 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
             shownIndices[shownCount++] = i;
             shownSet.add(i);
             if (flash && freshSet.has(i)) writeBox(freshMatrices, nFresh++, b, cell * FRESH_SCALE);
-            if (!focused || highlighted.has(i)) {
+            if (!focused || lit.has(i)) {
                 writeBox(activeMatrices, nActive, b, size);
                 activeColors[nActive * 3] = rgb[i * 3];
                 activeColors[nActive * 3 + 1] = rgb[i * 3 + 1];
                 activeColors[nActive * 3 + 2] = rgb[i * 3 + 2];
                 writeEdges(activeEdge, nActive, b, size);
                 nActive += 1;
-                if (focused) writeBox(haloMatrices, nHalo++, b, cell * HALO_SCALE);
+                if (highlighted.has(i)) writeBox(haloMatrices, nHalo++, b, cell * HALO_SCALE);
             } else {
                 writeBox(dimMatrices, nDim, b, size);
                 dimColors[nDim * 3] = dimRgb[i * 3];
@@ -580,6 +596,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
     applyPalette();
     recolor();
     applyVisibility();
+    diffLayer.set(view.diff ?? null);
     rebuildBlocks();
     rebuildSection();
     if (view.highlight.length) pulsing = !reduced;
@@ -613,15 +630,18 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
             const cutChanged = layerMax !== view.layerMax;
             const highlightChanged = !sameList(next.highlight, view.highlight);
             const flagsChanged = next.showGhost !== view.showGhost || next.showCog !== view.showCog;
-            if (!colorChanged && !cutChanged && !highlightChanged && !flagsChanged) return false;
+            const diffChanged = (next.diff ?? null) !== (view.diff ?? null);
+            if (!colorChanged && !cutChanged && !highlightChanged && !flagsChanged && !diffChanged) return false;
             view.colorBy = next.colorBy;
             view.layerMax = layerMax;
             view.showGhost = next.showGhost;
             view.showCog = next.showCog;
             view.highlight = [...next.highlight];
+            view.diff = next.diff ?? null;
             if (colorChanged) recolor();
             applyVisibility();
-            if (colorChanged || cutChanged || highlightChanged) rebuildBlocks();
+            if (diffChanged) diffLayer.set(view.diff);
+            if (colorChanged || cutChanged || highlightChanged || diffChanged) rebuildBlocks();
             if (cutChanged) rebuildSection();
             if (hover.index >= 0 && !shownSet.has(hover.index)) handle.setHover(null);
             if (highlightChanged && view.highlight.length) {
@@ -636,6 +656,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
             if (next === theme) return;
             theme = next;
             applyPalette();
+            diffLayer.setTheme(next);
             recolor();
             rebuildBlocks();
             options.onChange?.();
@@ -717,6 +738,7 @@ export function createBlocksScene(options: BlocksSceneOptions): BlocksScene {
 
         dispose() {
             for (const mesh of instanced) mesh.dispose();
+            diffLayer.dispose();
             for (const geometry of geometries) geometry.dispose();
             for (const material of materials) material.dispose();
             instanced.length = 0;

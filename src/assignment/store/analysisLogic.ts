@@ -463,11 +463,15 @@ export function stepBlocks(result: Pick<AnalysisResult, "blocks">, step: number)
     return out;
 }
 
-/** The unsaved stabilized result the stage shows while a run is under way (or waiting to be saved). */
+/** Who put a preview on the stage: only that store takes it off again (store/workGuard.ts lets one of them work at a time). */
+export type PreviewOwner = "stabilize" | "blocks" | "optimize";
+
+/** The unsaved result the stage shows while a stabilizer run, a block edit or an optimizer run is under way (or waiting to be saved). */
 export interface PreviewState {
-    /** The model the run started from: the preview is drawn only while that model is the one on screen. */
+    /** The model the work started from: the preview is drawn only while that model is the one on screen. */
     modelId: string;
     result: AnalysisResult;
+    owner: PreviewOwner;
 }
 
 /** What the stage draws: the preview of a run while it is for the model on screen, else the model's own result. */

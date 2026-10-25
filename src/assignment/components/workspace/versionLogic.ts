@@ -1,16 +1,17 @@
-// Pure logic behind the version switcher in the workspace bar: when it is shown, what each half says about the
-// model's structure, the words on its buttons and menu, which model the "V" key (or a click) goes to, and which links the
-// Models list and the chat cards offer between the versions of a model. No React and no stores, so the components, the keyboard
-// shortcut and scripts/assignment/test-versions-ui.mjs share one copy.
+// Pure logic behind the version control in the workspace bar: when it is shown, what each half says about the model's structure, the
+// words on its buttons and in its tree, which model the "V", "[" and "]" keys (or a click) go to, and which links the chat cards offer
+// between the versions of a model. No React and no stores, so the components, the keyboard shortcuts and
+// scripts/assignment/test-versions-ui.mjs share one copy.
 
-import { addedBlocksLabel } from "@/assignment/components/workspace/format";
+import { versionDetail } from "@/assignment/components/workspace/format";
 import type { ModelAsset } from "@/assignment/shared/contract";
+import { treeRows, versionName, type TreeRow } from "@/assignment/shared/versionTree";
 import { stabilizeLabelOf, type AnalysisPhase, type Verdict } from "@/assignment/store/analysisLogic";
 import type { VersionFamily } from "@/assignment/store/versions";
 import type { WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 
-/** The two halves of a family: the model as it was made, and the corrected version with supports added. */
-export type VersionKind = "original" | "stabilized";
+/** The two halves of the control: the model as it was made, and the version you are working on (the head of the family). */
+export type VersionKind = "original" | "head";
 
 // ---------- what each half says about the structure ----------
 
@@ -37,31 +38,45 @@ export function statusMark(verdict: Pick<Verdict, "kind" | "errors" | "warnings"
     return { tone: "pass", text: "Stable", count: null };
 }
 
-/** Which of several stabilized versions a half stands for: `n` counts from the oldest. */
+/** "v4": the place of a version in its family, v1 being the original and the others counted from the oldest. */
 export interface VersionOrdinal {
     n: number;
-    of: number;
 }
 
-/** The accessible name of a half: "Show the original version (4 problems)", "Show the stabilized version 2 of 3 (Stable)". */
-export function segmentLabel(kind: VersionKind, mark: Pick<StatusMark, "text">, ordinal?: VersionOrdinal | null): string {
-    const which = ordinal ? ` ${ordinal.n} of ${ordinal.of}` : "";
-    return `Show the ${kind} version${which} (${mark.text})`;
+/** The place of a model in its family: 1 for the original, 2 for the oldest version, and so on; null for a model that is not in it. */
+export function versionOrdinal(family: Pick<VersionFamily, "root" | "versions"> | null, model: Pick<ModelAsset, "id">): VersionOrdinal | null {
+    if (!family || !family.root) return null;
+    if (family.root.id === model.id) return { n: 1 };
+    const at = family.versions.findIndex((m) => m.id === model.id);
+    return at < 0 ? null : { n: at + 2 };
+}
+
+/** "v4 · Lightest": the head's text in the control; the original is just "Original". */
+export function familyTitle(family: Pick<VersionFamily, "root" | "versions"> | null, model: ModelAsset): string {
+    const ordinal = versionOrdinal(family, model);
+    return ordinal ? `v${ordinal.n} · ${versionName(model)}` : versionName(model);
+}
+
+/** The accessible name of a half: "Show the original version (4 problems)", "Show v4 · Lightest (Stable)". */
+export function segmentLabel(kind: VersionKind, mark: Pick<StatusMark, "text">, title: string | null = null): string {
+    return kind === "original" ? `Show the original version (${mark.text})` : `Show ${title ?? "the latest version"} (${mark.text})`;
 }
 
 /**
  * The tooltip of a half: its state (the compact bar shows only a symbol and a number, so the words are here), what it shows, and
- * the key. The key works while the 3D view or the switch itself has focus, never as a bare key anywhere on the page.
+ * the keys. The keys work while the 3D view or the control itself has focus, never as a bare key anywhere on the page.
  */
-export function segmentTitle(kind: VersionKind, mark?: Pick<StatusMark, "text"> | null, ordinal?: VersionOrdinal | null): string {
+export function segmentTitle(kind: VersionKind, mark?: Pick<StatusMark, "text"> | null, head?: { title: string; detail: string | null } | null): string {
     const what =
         kind === "original"
             ? "The original model, as it was made"
-            : `The stabilized version${ordinal ? ` ${ordinal.n} of ${ordinal.of}` : ""}: the original plus the supports that were added`;
-    return `${mark ? `${what} · ${mark.text}` : what}. V switches while the 3D view or this switch has focus`;
+            : head
+              ? `${head.title}${head.detail ? ` (${head.detail})` : ""}`
+              : "The version you are working on";
+    return `${mark ? `${what} · ${mark.text}` : what}. V switches, [ and ] walk the versions, while the 3D view or this switch has focus`;
 }
 
-// ---------- the menu of several stabilized versions ----------
+// ---------- the tree of versions ----------
 
 /** "5:41 PM" for a version made today, "Oct 23, 5:41 PM" for an older one; null when the stamp does not parse. */
 export function clockTime(iso: string, now: Date = new Date(), locale?: string): string | null {
@@ -72,45 +87,41 @@ export function clockTime(iso: string, now: Date = new Date(), locale?: string):
     return sameDay ? time : `${at.toLocaleDateString(locale, { month: "short", day: "numeric" })}, ${time}`;
 }
 
-/** The place of a stabilized version among the family's, oldest first ("2 of 3"); null for a model that is not one of them. */
-export function versionOrdinal(family: Pick<VersionFamily, "stabilized"> | null, model: Pick<ModelAsset, "id">): VersionOrdinal | null {
-    if (!family) return null;
-    const at = family.stabilized.findIndex((m) => m.id === model.id);
-    return at < 0 ? null : { n: family.stabilized.length - at, of: family.stabilized.length };
+/** The rows of the tree popover: the original and every version below it, depth first. */
+export function familyRows(family: Pick<VersionFamily, "root" | "versions">): TreeRow<ModelAsset>[] {
+    return family.root ? treeRows([family.root, ...family.versions], family.root) : [];
 }
 
-/** "v2 · +16 blocks · Stable · 5:41 PM": one stabilized version in the menu, newest first (the "v2" tells two like versions apart). */
-export function versionMenuLine(
-    model: Pick<ModelAsset, "derived" | "created_at">,
+/** "v2 · +16 blocks · Stable · 5:41 PM": one version in the tree, the words a screen reader hears for the row. */
+export function versionRowLine(
+    model: ModelAsset,
+    title: string,
     mark: Pick<StatusMark, "text">,
     now: Date = new Date(),
     locale?: string,
-    ordinal?: VersionOrdinal | null,
 ): string {
-    const added = model.derived ? (model.derived.added_blocks === 0 ? "No blocks added" : addedBlocksLabel(model.derived.added_blocks)) : null;
-    const name = ordinal ? `v${ordinal.n}` : null;
-    return [name, added, mark.text, clockTime(model.created_at, now, locale)].filter((part): part is string => Boolean(part)).join(" · ");
+    return [title, versionDetail(model), mark.text, clockTime(model.created_at, now, locale)].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 // ---------- when the switcher is there ----------
 
 /**
- * "switch": the model has a stabilized version, so the bar offers Original | Stabilized.
- * "offer": the original has problems the stabilizer can act on and no stabilized version yet, so the bar offers a "Stabilize…" pill.
+ * "switch": the family has at least one version, so the bar offers Original | the version you are working on.
+ * "offer": the original has problems the stabilizer can act on and no version yet, so the bar offers a "Stabilize…" pill.
  * "none": nothing to switch to or to offer (a clean model, one whose only warning is thin parts left out, which the stabilizer cannot
- * fix, a model not analysed yet, a version whose original is gone, the Models tab with its own list).
+ * fix, a model not analysed yet, a version whose original is gone, the Models tab with its own tree).
  */
 export type SwitcherMode = "switch" | "offer" | "none";
 
 export function switcherMode(input: {
-    family: Pick<VersionFamily, "root" | "stabilized" | "active"> | null;
+    family: Pick<VersionFamily, "root" | "versions" | "active"> | null;
     /** The original's verdict (the summary of its newest analysis). */
     rootVerdict: (Pick<Verdict, "kind"> & Partial<Pick<Verdict, "fix">>) | null;
     tab: WorkspaceTab;
 }): SwitcherMode {
     const { family, rootVerdict, tab } = input;
     if (tab === "models" || !family || !family.root) return "none";
-    if (family.stabilized.length > 0) return "switch";
+    if (family.versions.length > 0) return "switch";
     // The pill leads to the Stabilize card, so it is there exactly when the card is (store/stabilizeLogic.ts stabilizeOffer).
     if (family.active.id === family.root.id && stabilizeLabelOf(rootVerdict) !== null) return "offer";
     return "none";
@@ -122,12 +133,12 @@ export function switcherMode(input: {
  * when the verdict lands.
  */
 export function switcherPending(input: {
-    family: Pick<VersionFamily, "root" | "stabilized"> | null;
+    family: Pick<VersionFamily, "root" | "versions"> | null;
     rootVerdict: Pick<Verdict, "kind"> | null;
     tab: WorkspaceTab;
 }): boolean {
     const { family, rootVerdict, tab } = input;
-    return tab !== "models" && Boolean(family?.root) && family?.stabilized.length === 0 && rootVerdict === null;
+    return tab !== "models" && Boolean(family?.root) && family?.versions.length === 0 && rootVerdict === null;
 }
 
 // ---------- where the switcher sits in the bar ----------
@@ -173,40 +184,21 @@ export function offerLabel(rootVerdict: (Pick<Verdict, "kind"> & Partial<Pick<Ve
 
 // ---------- where a click, an arrow or "V" goes ----------
 
-/** Which stabilized version of an original was on screen last, so going back and forth returns to the same one. */
-const lastStabilized = new Map<string, string>();
+type Walkable = Pick<VersionFamily, "root" | "versions" | "active" | "head" | "isVersion">;
 
-/** Note the stabilized version on screen (call it whenever a family is shown or left). */
-export function rememberStabilized(family: Pick<VersionFamily, "root" | "active" | "isStabilized"> | null): void {
-    if (family?.root && family.isStabilized) lastStabilized.set(family.root.id, family.active.id);
-}
-
-/** Forget what was remembered (tests; a project that was left). */
-export function forgetStabilized(): void {
-    lastStabilized.clear();
-}
-
-/** The stabilized version the "Stabilized" half stands for: the one on screen, else the one seen last, else the newest. */
-export function stabilizedTarget(family: Pick<VersionFamily, "root" | "stabilized" | "active" | "isStabilized"> | null): ModelAsset | null {
-    if (!family) return null;
-    if (family.isStabilized) return family.active;
-    const remembered = family.root ? lastStabilized.get(family.root.id) : undefined;
-    return family.stabilized.find((m) => m.id === remembered) ?? family.stabilized[0] ?? null;
-}
-
-/** The model "V" flips to: the original from a stabilized version, a stabilized version from the original. */
-export function toggleTarget(family: Pick<VersionFamily, "root" | "stabilized" | "active" | "isStabilized"> | null): ModelAsset | null {
+/** The model "V" flips to: the original from a version, the version you are working on (the head) from the original. */
+export function toggleTarget(family: Walkable | null): ModelAsset | null {
     if (!family || !family.root) return null;
-    return family.isStabilized ? family.root : stabilizedTarget(family);
+    return family.isVersion ? family.root : family.head;
 }
 
 /** The model a half opens. */
-export function targetOf(kind: VersionKind, family: Pick<VersionFamily, "root" | "stabilized" | "active" | "isStabilized"> | null): ModelAsset | null {
+export function targetOf(kind: VersionKind, family: Walkable | null): ModelAsset | null {
     if (!family) return null;
-    return kind === "original" ? family.root : stabilizedTarget(family);
+    return kind === "original" ? family.root : family.head;
 }
 
-// ---------- the "V" key ----------
+// ---------- the keys ----------
 
 /** The parts of a keydown the shortcut looks at. */
 export interface KeyLike {
@@ -220,13 +212,29 @@ export interface KeyLike {
     defaultPrevented: boolean;
 }
 
-/** A bare "V": no modifier (a chord belongs to the browser or another shortcut), not a held key, not an IME composition, not already handled. */
+/** A bare key: no modifier (a chord belongs to the browser or another shortcut), not a held key, not an IME composition, not already handled. */
+function isBare(e: KeyLike): boolean {
+    return !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.repeat && !e.isComposing && !e.defaultPrevented;
+}
+
+/** A bare "V": flips between the original and the version you are working on. */
 export function isVersionKey(e: KeyLike): boolean {
-    return e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.repeat && !e.isComposing && !e.defaultPrevented;
+    return e.key.toLowerCase() === "v" && isBare(e);
+}
+
+/** A bare "[" or "]": to the parent of the version on screen, or to its newest child. null: neither. */
+export function stepKeyOf(e: KeyLike): "parent" | "child" | null {
+    if (!isBare(e)) return null;
+    return e.key === "[" ? "parent" : e.key === "]" ? "child" : null;
+}
+
+/** A bare "O": flips between the 3D view and the Optimization tab. */
+export function isOptimizeKey(e: KeyLike): boolean {
+    return e.key.toLowerCase() === "o" && isBare(e);
 }
 
 /**
- * Where a bare letter must not act: a text field, a menu, a dialog or a list is being used. (The prompt box counts too: a letter
+ * Where a bare key must not act: a text field, a menu, a dialog or a list is being used. (The prompt box counts too: a letter
  * typed there is text.) Duck-typed on `closest`, so it runs without a DOM in tests.
  */
 export const TYPING_SELECTOR = "input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only'], [role='menu'], [role='dialog'], [role='listbox']";
@@ -236,38 +244,58 @@ export function inTypingContext(target: EventTarget | null): boolean {
     return Boolean(element && typeof element.closest === "function" && element.closest(TYPING_SELECTOR));
 }
 
+/** The composer's box carries this mark (Composer.tsx), whichever way it is set: "Prompt" for a new model, "Describe a change" for an edit. */
+export const COMPOSER_SELECTOR = "[data-composer]";
+
+const OPEN_DIALOG_SELECTOR = '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
+const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+
+/**
+ * Where a chord (⇧⌘O new project, ⌘\ hide the chat, ⌘. stop) must not act: in a dialog or a menu, or in a text field other than the
+ * composer's box (a chord typed into a rename, the access-code field or the "Change the blocks" field must not throw that work away). The
+ * composer's box is the one field they work from, in both of its modes: the person has just pressed Enter there, with the run going.
+ * Duck-typed on `closest`, like `inTypingContext`, so it runs without a DOM in tests; `root` is where an open dialog is looked for.
+ */
+export function shortcutBlocked(target: EventTarget | null, root: { querySelector(selector: string): unknown } = document): boolean {
+    if (root.querySelector(OPEN_DIALOG_SELECTOR)) return true;
+    const el = target as { closest?: (selector: string) => unknown; tagName?: string; isContentEditable?: boolean } | null;
+    if (!el || typeof el.closest !== "function") return false;
+    if (el.closest(OVERLAY_SELECTOR)) return true;
+    const tag = typeof el.tagName === "string" ? el.tagName.toUpperCase() : "";
+    if (tag === "TEXTAREA") return !el.closest(COMPOSER_SELECTOR);
+    if (tag === "INPUT" || tag === "SELECT") return true;
+    return el.isContentEditable === true;
+}
+
 // ---------- when the added supports did not come ----------
 
 /**
- * The 3D tab of a stabilized model is the original mesh with the added blocks on it, and the blocks come from the analysis of the
- * stabilized file. When that run fails (the file could not be fetched or read) the stage is the bare mesh, which looks like a
- * stabilizer that added nothing: this says why, or null when nothing went wrong (or the Stability tab, which has its own error).
+ * The 3D tab of a block version that sits on a mesh is the mesh with the blocks on it, and the blocks come from the analysis of the
+ * version's file. When that run fails (the file could not be fetched or read) the stage is the bare mesh, which looks like a
+ * version that added nothing: this says why, or null when nothing went wrong (or any other tab, which has its own error).
  */
 export function supportsFailure(input: { onSource: boolean; tab: WorkspaceTab; phase: AnalysisPhase; error: string | null }): string | null {
     if (!input.onSource || input.tab !== "3d" || input.phase !== "error") return null;
-    return input.error && input.error.trim() !== "" ? input.error : "The stabilized model's blocks could not be read.";
+    return input.error && input.error.trim() !== "" ? input.error : "This version's blocks could not be read.";
 }
 
-// ---------- the links between the versions of a model (Models list, chat cards) ----------
+// ---------- the links between the versions of a model (chat cards) ----------
 
 /** One link of a model's card: the model it opens and what it is called. */
 export interface PairLink {
     model: ModelAsset;
-    label: "Original" | "Stabilized" | "Previous";
+    label: "Original" | "Previous" | "Latest";
 }
 
 /**
- * The links a model's row or card offers, from the family of that model: the same two targets as the bar (an original links to the
- * stabilized version its "Stabilized" half opens, a version to the original), so the same words never open different models. A
- * version made from another version also gets "Previous", the one it was made from: an extra for walking a chain, never the
- * answer to "Original". `family` is `versionFamily(models, model.id)`.
+ * The links a model's card offers, from the family of that model: the same targets as the bar (an original links to the version its
+ * right half opens, "Latest"; a version to the original), so the same words never open different models. A version made from another
+ * version also gets "Previous", the one it was made from: an extra for walking a chain, never the answer to "Original".
+ * `family` is `versionFamily(models, model.id)`.
  */
-export function pairLinks(family: Pick<VersionFamily, "root" | "stabilized" | "active" | "isStabilized"> | null, models: readonly ModelAsset[]): PairLink[] {
+export function pairLinks(family: Walkable | null, models: readonly ModelAsset[]): PairLink[] {
     if (!family) return [];
-    if (!family.isStabilized) {
-        const stabilized = stabilizedTarget(family);
-        return stabilized ? [{ model: stabilized, label: "Stabilized" }] : [];
-    }
+    if (!family.isVersion) return family.head ? [{ model: family.head, label: "Latest" }] : [];
     const links: PairLink[] = [];
     if (family.root) links.push({ model: family.root, label: "Original" });
     const source = family.active.source_model_id ? models.find((m) => m.id === family.active.source_model_id) : undefined;

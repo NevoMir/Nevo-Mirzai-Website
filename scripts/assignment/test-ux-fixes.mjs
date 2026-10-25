@@ -91,6 +91,11 @@ await build({
                 b.onResolve({ filter: /^zustand$/ }, () => ({ path: "zustand-shim", namespace: "shim" }));
                 b.onResolve({ filter: /^@\/assignment\/components\/ui\/sonner$/ }, () => ({ path: "toast-shim", namespace: "shim" }));
                 // The stabilizer's runner (a Web Worker plus Vite's ?url import of the WASM) is replaced by the tests with fakes.
+                // The edit card (another owner's) is mounted by name; what it renders is its own tests' business.
+                b.onResolve({ filter: /components\/chat\/EditCard$/ }, () => ({ path: "edit-card-stub", namespace: "shim" }));
+                b.onLoad({ filter: /^edit-card-stub$/, namespace: "shim" }, () => ({ contents: "export function EditCard() { return null; } export function PendingEditCards() { return null; }", loader: "js" }));
+                b.onResolve({ filter: /components\/optimize\/OptimizePanel$/ }, () => ({ path: "optimize-panel-stub", namespace: "shim" }));
+                b.onLoad({ filter: /^optimize-panel-stub$/, namespace: "shim" }, () => ({ contents: "export default function OptimizePanel() { return null; }", loader: "js" }));
                 b.onResolve({ filter: /analysis\/stabilize\/runStabilize$/ }, () => ({ path: "stabilize-run-stub", namespace: "shim" }));
                 b.onLoad({ filter: /^stabilize-run-stub$/, namespace: "shim" }, () => ({
                     contents: 'export const runStabilize = async () => { throw new Error("the real stabilizer is not used here"); };',

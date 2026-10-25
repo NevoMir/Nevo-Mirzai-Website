@@ -2,7 +2,7 @@
 // An adapter only talks to its vendor. The job engine stores tasks in D1, copies results into R2,
 // and turns them into ModelAssets.
 
-import type { ProviderId, ProviderInfo } from "../../src/assignment/shared/contract.ts";
+import type { EditChanges, EditResult, ProviderId, ProviderInfo } from "../../src/assignment/shared/contract.ts";
 
 export interface Env {
     ASSETS: Fetcher;
@@ -18,21 +18,44 @@ export interface Env {
     ACCESS_CODE?: string; // when set, POST /generate needs it in the x-access-code header
     // Vars
     OPENROUTER_MODEL?: string; // default "meta/muse-spark-1.3-contributor"
+    OPENROUTER_EDIT_MODEL?: string; // the model of the edit and optimization-goal calls (default = OPENROUTER_MODEL)
     // Queue binding: the LLM call runs in the queue consumer (worker/llm.ts), not in the request that started the job.
     LLM_QUEUE?: Queue<LlmJob>;
     DAILY_GENERATION_LIMIT?: string;
-    DAILY_DERIVED_LIMIT?: string; // stabilized uploads per UTC day (default 300)
+    DAILY_DERIVED_LIMIT?: string; // stabilized, block-edited and optimized uploads per UTC day (default 300)
+    DAILY_LLM_LIMIT?: string; // AI calls per UTC day: edit jobs, /llm/voxel-edit, /llm/optimize-spec (default 400; usage.llm)
+    DAILY_EDIT_UPLOAD_LIMIT?: string; // mesh-edit uploads per UTC day (default 30; usage.edited; each is 15 to 28 MB of R2)
     ALLOW_OPEN_GENERATION?: string; // "1" lets paid generation run without an ACCESS_CODE (deliberate opt-out)
-    MOCK_PROVIDER?: string; // "1" enables the offline mock provider (local dev only)
+    MOCK_PROVIDER?: string; // "1" enables the offline mock provider (local dev only); it also answers edits with canned results (see providers/mock.ts)
+    MOCK_LLM?: string; // "0" with MOCK_PROVIDER=1 keeps the edits live (local dev with a real key)
 }
 
 export type Via = "fal" | "tripo" | "meshy" | "tencent" | "openrouter" | "mock";
 
-/** The queue message that asks the consumer to design one object (never carries a key). */
-export interface LlmJob {
-    taskId: string; // uuid; the staging objects in R2 are llm/<taskId>.json / .glb / .cancel
-    prompt: string;
+/**
+ * The queue message that asks the consumer to design one object (never carries a key). Without `edit` it is a generation. With it, the consumer
+ * edits: a Muse parts design (it reads the source GLB from the bucket and returns the new one) or plans an edit of a fused mesh (it reads the
+ * pictures from llm/<taskId>.in.json and leaves the plan in the status record). Pictures never travel in the message: it must stay small.
+ */
+export type LlmJob = {
+    taskId: string; // uuid; the staging objects in R2 are llm/<taskId>.json / .glb / .cancel / .in.json
+    prompt: string; // the design prompt, or the person's edit instruction
     model: string;
+    edit?:
+        | { target: "design"; source_glb_key: string; original_prompt?: string }
+        | { target: "mesh"; package_key: string; refine?: boolean };
+};
+
+/** What an edit job needs besides its instruction (the adapter stores it and puts the queue message together). */
+export type EditSubmit =
+    | { target: "design"; sourceGlbKey: string; originalPrompt: string | null }
+    /** `request`: the JSON text of { package, refine } (worker/edit.ts has validated it); stored as llm/<taskId>.in.json. */
+    | { target: "mesh"; request: string; refine: boolean };
+
+export interface SubmitContext {
+    edit?: EditSubmit;
+    /** The OpenRouter model for this task (edits: OPENROUTER_EDIT_MODEL); default OPENROUTER_MODEL. */
+    model?: string;
 }
 
 /** JSON-serialisable adapter state, persisted in jobs.provider_state between polls. */
@@ -41,6 +64,17 @@ export type AdapterState = Record<string, unknown> | null;
 export interface SubmitResult {
     taskId: string;
     state?: AdapterState;
+}
+
+/** What a design edit leaves for the job engine to build an EditMeta from (the new design is in the GLB). */
+export interface DesignEditSave {
+    summary: string;
+    changes: EditChanges;
+    notes: string[];
+    /** designHash of the new design: the same result made twice from one model is stored once. */
+    hash: string;
+    /** The OpenRouter model id that answered. */
+    engine: string;
 }
 
 export type PollResult =
@@ -56,14 +90,23 @@ export type PollResult =
           glbUrl: string;
           thumbnailUrl?: string | null;
           state?: AdapterState;
+          /** A design edit: what the new model changed (the job engine saves it as an "edited" version). */
+          edit?: DesignEditSave;
+      }
+    | {
+          /** An edit job that has no file to save: the plan of a mesh edit, or a design edit that changed nothing. Stored in jobs.plan, no model. */
+          status: "succeeded";
+          plan: EditResult;
+          state?: AdapterState;
+          glbUrl?: undefined;
       }
     | { status: "failed"; error: string }
     | { status: "canceled" };
 
 export interface ProviderAdapter {
     via: Via;
-    /** Starts the vendor task. Throw ProviderError with a readable message on failure. */
-    submit(env: Env, prompt: string): Promise<SubmitResult>;
+    /** Starts the vendor task. Throw ProviderError with a readable message on failure. `ctx.edit` (Muse only) makes it an edit job. */
+    submit(env: Env, prompt: string, ctx?: SubmitContext): Promise<SubmitResult>;
     poll(env: Env, taskId: string, state: AdapterState): Promise<PollResult>;
     /**
      * Best-effort: stop the vendor task so it stops costing credits. Never throws. A vendor that cannot stop a

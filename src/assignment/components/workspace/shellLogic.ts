@@ -4,8 +4,10 @@
 
 import type { AnalysisColorBy, AnalysisViewState } from "@/assignment/analysis/types";
 import type { Insets } from "@/assignment/components/workspace/useViewerInsets";
+import { TERMINAL_JOB_STATUSES, type Job } from "@/assignment/shared/contract";
 import { dockInset, type AnalysisPhase, type Verdict } from "@/assignment/store/analysisLogic";
 import type { WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
+import { WORK_CHIP_WORDS, type WorkHold } from "@/assignment/store/workGuard";
 
 // ---------- the tab ----------
 
@@ -29,22 +31,99 @@ export function sheetOnTabTap(input: { mobile: boolean; tapped: WorkspaceTab; cu
     return !input.sheetOpen;
 }
 
+/** The tab that holds the optimizer. Its id is "optimize"; its name is "Optimization". */
+export const OPTIMIZE_TAB_LABEL = "Optimization";
+
+/** The tabs that show the model as blocks, with a panel beside it: the report and the optimizer. */
+export const isBlockTab = (tab: WorkspaceTab): boolean => tab === "analysis" || tab === "optimize";
+
 /**
- * The tab a ?tab= link means: the ids "3d", "analysis" and "models" as ever (an opened example links to ?tab=analysis), and
- * "stability", the tab's name now, as another way to say "analysis". Anything else means no tab.
+ * The tab a ?tab= link means: the ids "3d", "analysis", "optimize" and "models" as ever (an opened example links to ?tab=analysis),
+ * "stability", the report tab's name now, as another way to say "analysis", and "optimization" for "optimize". Anything else means no tab.
  */
 export function tabFromParam(param: string | null): WorkspaceTab | null {
     switch (param) {
         case "3d":
         case "models":
+        case "optimize":
             return param;
         case "analysis":
         case "stability":
             return "analysis";
+        case "optimization":
+            return "optimize";
         default:
             return null;
     }
 }
+
+// ---------- the run chip ----------
+
+/** Work in progress that the bar shows beside the version control, on every tab: what it is, since when, and how to stop it. */
+export interface RunActivity {
+    /** What it is ("Muse is editing"). */
+    words: string;
+    /** When it began (epoch ms). */
+    since: number;
+    /** Stops it, when it can be stopped. */
+    stopKey: "job" | "stabilize" | "hold" | "mesh" | null;
+    /** For "mesh": the key of the run to stop (store/edit.ts stopEdit): its job's id once it has a job. */
+    stopId?: string;
+}
+
+/** The mesh edit this page is working on (store/edit.ts busyMeshRunOf), reduced to what the chip needs. */
+export interface MeshRunView {
+    key: string;
+    /** When it began (epoch ms). */
+    since: number;
+    /** False while the result is being saved: that cannot be taken back. */
+    stoppable: boolean;
+}
+
+/**
+ * The work the run chip announces: a change of a design or a mesh on the queue, the parts of a mesh edit that run in this page (before its job
+ * exists and after the plan is back), the stabilizer while it runs, and any other work that says it can be stopped (a block edit or an optimizer
+ * run that gave the work guard a `stop`). null when nothing is running.
+ */
+export function runActivityOf(input: {
+    jobs: Readonly<Record<string, Job>>;
+    projectId: string | null;
+    hold: WorkHold | null;
+    stabilizing: boolean;
+    /** A mesh edit that is under way in this page: its pictures are being made, its plan applied, its result saved (the job alone does not cover those). */
+    meshRun?: MeshRunView | null;
+}): RunActivity | null {
+    const edit = Object.values(input.jobs)
+        .filter((job) => job.project_id === input.projectId && job.kind === "edit" && !TERMINAL_JOB_STATUSES.includes(job.status))
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))[0];
+    if (edit) {
+        const since = Date.parse(edit.created_at);
+        return { words: "Muse is editing", since: Number.isFinite(since) ? since : Date.now(), stopKey: "job" };
+    }
+    const run = input.meshRun;
+    if (run) return { words: "Muse is editing", since: run.since, stopKey: run.stoppable ? "mesh" : null, stopId: run.key };
+    const { hold } = input;
+    if (hold && hold.projectId === input.projectId) {
+        if (hold.kind === "stabilize") return input.stabilizing ? { words: WORK_CHIP_WORDS.stabilize, since: hold.since, stopKey: "stabilize" } : null;
+        // Work that has ended and waits for a decision (a draft, a result) is not running, whatever it can still be stopped with.
+        if (hold.stop && !hold.waiting) return { words: hold.label ?? WORK_CHIP_WORDS[hold.kind], since: hold.since, stopKey: "hold" };
+    }
+    return null;
+}
+
+/** What the stage's chip calls a preview, by the store that put it there. */
+export function previewLabelOf(owner: "stabilize" | "blocks" | "optimize" | null | undefined): string {
+    if (owner === "blocks") return "Preview of your change";
+    if (owner === "optimize") return "Optimizer preview";
+    return "Stabilizer preview";
+}
+
+/**
+ * A draft of block edits waits for Save or Discard: the half of the version control that stands for the version the changes belong to says
+ * so with a "Draft" chip, whichever half is on screen. Only applied changes are a draft; a proposal nobody applied yet is not.
+ */
+export const draftIsOn = (editor: { sourceModelId: string | null; draft: { count: number } | null }, modelId: string): boolean =>
+    editor.sourceModelId === modelId && editor.draft !== null && editor.draft.count > 0;
 
 // ---------- what the floating panels cover ----------
 

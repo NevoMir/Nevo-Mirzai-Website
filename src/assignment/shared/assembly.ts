@@ -11,9 +11,14 @@
 
 import { BLOCK_ROLES, type BlockRole } from "./contract.ts";
 
-/** glTF key under scenes[0].extras that carries the descriptor / the stabilizer's log. */
+/**
+ * glTF keys under scenes[0].extras: the descriptor, and the log of the version the file is (at most ONE of the three logs per file:
+ * the stabilizer's, a block edit's, or the optimizer's; assemblyGlb.ts refuses a file with more).
+ */
 export const ASSEMBLY_EXTRAS_KEY = "nevo:assembly";
 export const STABILIZATION_EXTRAS_KEY = "nevo:stabilization";
+export const EDIT_EXTRAS_KEY = "nevo:edit";
+export const OPTIMIZATION_EXTRAS_KEY = "nevo:optimization";
 
 export const ASSEMBLY_BLOCK_MM = 100;
 export const ASSEMBLY_GRID = 10;
@@ -32,6 +37,7 @@ export const ROLE_NODE_NAMES: Record<BlockRole, string> = {
     bracket: "Brackets",
     bridge: "Bridges",
     reinforcement: "Reinforcement",
+    user: "Your edits",
 };
 
 /**
@@ -46,6 +52,7 @@ export const ROLE_HEX: Record<BlockRole, string> = {
     bracket: "#22c55e",
     bridge: "#06b6d4",
     reinforcement: "#ec4899",
+    user: "#0ea5e9", // sky: blocks the person's instructions created or moved
 };
 
 export interface AssemblyDescriptor {

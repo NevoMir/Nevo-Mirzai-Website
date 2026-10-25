@@ -1,0 +1,19 @@
+{
+ "id": "T10",
+ "variant": "hybrid",
+ "rec": {
+  "tag": "T10a",
+  "status": 200,
+  "ms": 10905,
+  "finish": "stop",
+  "prompt_tokens": 2600,
+  "completion_tokens": 938,
+  "reasoning_tokens": 790,
+  "cost": 0.0004476,
+  "system_chars": 4674,
+  "user_chars": 2577
+ },
+ "content": "{\"clarification\": \"\", \"notes\": \"\", \"ops\": [{\"amount\": null, \"at\": null, \"axis\": null, \"box\": null, \"dirs\": null, \"include_added\": false, \"offset\": [0, -1, 0], \"op\": \"shift\", \"plane\": null, \"region\": \"D\", \"wall\": null}], \"summary\": \"Moved backrest D one block toward the front from j7 to j6.\"}",
+ "user": "MODEL: pencil-leg-chair (stabilized). GRID 10x10x10, one block = 100 mm. A cell is (i,j,k).\nAXES (as seen in the app's Front view): i = left->right (i=0 is the LEFT side, i=9 the RIGHT). j = depth (j=0 is the FRONT, nearest the viewer; j=9 is the BACK). k = height (k=0 rests on the ground, k=9 is the top).\nCURRENT STATE: blocks 103, separate structures 1, floating blocks 0, longest cantilever 4 blocks (limit 4), over the limit 0; centre of gravity inside the base, margin 136 mm; peak joint stress 69% of allowable (0 blocks over 100%).\nISSUES: none.\nROOM (empty blocks the model can still grow into): left(-i) 2, right(+i) 2, front(-j) 2, back(+j) 2, up(+k) 0 (it already reaches the top of the grid).\nPARTS (names come from the model; letter = region id; trust the cell ranges, not the words left/right in a name):\nA \"Legs\": 12 blocks, i2-7 j2-7 k1-9\nB \"Seat frame\": 30 blocks, i2-7 j2-6 k4\nC \"Seat cushion\": 30 blocks, i2-7 j2-6 k5\nD \"Backrest\": 14 blocks, i2-7 j7 k7-9\nPIECES (region ids for blocks that are not in a named part):\nc1 column box: i2-3 j6 k1-2 (4)\nc2 column box: i7 j6 k0-2 (3)\nc3 column box: i7 j2 k0-1 (2)\nc4 column box: i2 j7 k5-6 (2)\nc5 column box: i6 j7 k5-6 (2)\nc6 column box: i2 j6 k0 (1)\nc7 column box: i3 j6 k3 (1)\ng1 bridge box: i4 j7 k5-6 (2)\nTOP HEIGHT of each (i,j) column = highest occupied k ('.' = empty column). Rows: back (high j) at the top, front (low j) at the bottom; columns i=2..7 left to right.\n   i234567\nj7|999999\nj6|555555\nj5|555555\nj4|555555\nj3|555555\nj2|555555\nLAYERS, one map per height k (empty layers above the top are not listed). Rows: back (high j) at the top, front (low j) at the bottom; columns i=2..7 left to right; the digits in the header are i. Letters A-Z = named parts. # = model block without a part, c = column, f = footing, b = bracket, g = bridge, r = reinforcement, u = user-added, . = empty.\n   i234567\nk=0\nj7|......\nj6|c....c\nj5|......\nj4|......\nj3|......\nj2|.....c\nk=1\nj7|A....A\nj6|cc...c\nj5|......\nj4|......\nj3|......\nj2|.....c\nk=2\nj7|......\nj6|cc...c\nj5|......\nj4|......\nj3|......\nj2|A....A\nk=3\nj7|......\nj6|Ac...A\nj5|......\nj4|......\nj3|......\nj2|A....A\nk=4\nj7|......\nj6|BBBBBB\nj5|BBBBBB\nj4|BBBBBB\nj3|BBBBBB\nj2|BBBBBB\nk=5\nj7|c.g.c.\nj6|CCCCCC\nj5|CCCCCC\nj4|CCCCCC\nj3|CCCCCC\nj2|CCCCCC\nk=6\nj7|c.g.c.\nj6|......\nj5|......\nj4|......\nj3|......\nj2|......\nk=7\nj7|ADDDDA\nj6|......\nj5|......\nj4|......\nj3|......\nj2|......\nk=8\nj7|DDDDDD\nj6|......\nj5|......\nj4|......\nj3|......\nj2|......\nk=9\nj7|ADDDDA\nj6|......\nj5|......\nj4|......\nj3|......\nj2|......\n\nINSTRUCTION: \"move the backrest one block towards the front\"",
+ "err": null
+}

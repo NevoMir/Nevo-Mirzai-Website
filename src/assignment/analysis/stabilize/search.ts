@@ -271,7 +271,7 @@ export function moveOf(roles: readonly AddedRole[]): AddedRole {
     let best: AddedRole = roles[0];
     let bestN = 0;
     for (const role of BLOCK_ROLES) {
-        if (role === "original") continue;
+        if (role === "original" || role === "user") continue;
         const n = roles.filter((r) => r === role).length;
         if (n > bestN) {
             best = role;

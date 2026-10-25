@@ -11,12 +11,19 @@
 //
 // The adapter is the producer and the poller; it never calls OpenRouter itself.
 //
+// The same queue and the same files carry the edit jobs (worker/edit.ts starts them, spec 3.3): a Muse DESIGN edit (the consumer reads the source
+// GLB, asks for a patch, applies it and leaves a new .glb), and the PLAN of a MESH edit (the pictures wait in llm/<taskId>.in.json, the answer is a
+// program that stays in the status record: no file; the browser applies it). Those two finish with a "plan" instead of a file when there is nothing
+// to build (the model said it cannot be done, or nothing changed).
+//
 // Clean-up: the engine calls cleanup() when a job is over, and purgeProjects deletes the files of purged projects. Nothing runs
 // when nobody polls (a closed tab) or a message is lost, so the bucket should also expire the whole llm/ prefix after a day (an R2
 // lifecycle rule, see worker/README.md). The cancel marker is the one file that must outlive cleanup() while the consumer might
 // still hold the message, because it is what stops a paid call.
 
+import type { EditChanges, EditResult } from "../../src/assignment/shared/contract.ts";
 import type { PartsDesign } from "../../src/assignment/shared/partsDesign.ts";
+import { mockLlmEnabled } from "./mock.ts";
 import {
     ProviderError,
     asNumber,
@@ -30,6 +37,7 @@ import {
     type LlmJob,
     type PollResult,
     type ProviderAdapter,
+    type SubmitContext,
     type SubmitResult,
 } from "./types.ts";
 
@@ -40,15 +48,19 @@ export const DEFAULT_MODEL = "meta/muse-spark-1.3-contributor";
  */
 export const DESIGN_TIMEOUT_MS = 10 * 60 * 1000;
 const PROMPT_LIMIT = 1000;
+/** jobs.plan (an edit job's result, from this adapter's record) holds at most this much (spec 2.2). */
+export const PLAN_LIMIT = 64 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export type LlmFile = "json" | "glb" | "cancel";
-const LLM_FILES: readonly LlmFile[] = ["json", "glb", "cancel"];
+/** json: the status record; glb: the finished model; cancel: the Stop marker; in: the pictures of a mesh edit (llm/<taskId>.in.json). */
+export type LlmFile = "json" | "glb" | "cancel" | "in";
+const LLM_FILES: readonly LlmFile[] = ["json", "glb", "cancel", "in"];
+const SUFFIX: Readonly<Record<LlmFile, string>> = { json: "json", glb: "glb", cancel: "cancel", in: "in.json" };
 
 /** The R2 key of one staging file of a task. Throws for anything that is not a task id. */
 export function llmKey(taskId: string, file: LlmFile): string {
     if (!UUID.test(taskId)) throw new Error("not a task id");
-    return `llm/${taskId}.${file}`;
+    return `llm/${taskId}.${SUFFIX[file]}`;
 }
 
 /** Every staging key of a task (none for anything that is not a task id). */
@@ -62,11 +74,26 @@ export function modelOf(env: Env): string {
     return wanted && /^[\w.~:/-]{3,100}$/.test(wanted) ? wanted : DEFAULT_MODEL;
 }
 
+/** The model of the edit calls: OPENROUTER_EDIT_MODEL when it looks like a model id, else the designer's model (same rule as modelOf). */
+export function editModelOf(env: Env): string {
+    const wanted = env.OPENROUTER_EDIT_MODEL?.trim();
+    return wanted && /^[\w.~:/-]{3,100}$/.test(wanted) ? wanted : modelOf(env);
+}
+
 export interface LlmUsage {
     prompt_tokens: number | null;
     completion_tokens: number | null;
     reasoning_tokens: number | null;
     cost_usd: number | null;
+}
+
+/** What a design edit did, as the record keeps it until the job engine saves the version. */
+export interface EditRecord {
+    summary: string;
+    changes: EditChanges;
+    notes: string[];
+    /** designHash of the new design. */
+    hash: string;
 }
 
 /** What the consumer leaves in llm/<taskId>.json. */
@@ -90,6 +117,12 @@ export interface LlmRecord {
     usage?: LlmUsage;
     /** Money spent on this task so far, across attempts (USD). */
     cost_usd?: number;
+    /** Some attempt may have been charged (it got an answer, or died without one): the daily AI-call slot of an edit is then kept, not handed back. */
+    charged?: boolean;
+    /** building and done, design edits: what the edit did. */
+    edit?: EditRecord;
+    /** done, edits without a file: the result of the job (a mesh plan, or a design edit that changed nothing). Becomes jobs.plan. */
+    plan?: EditResult;
 }
 
 const STATUSES: readonly LlmRecord["status"][] = ["designing", "building", "done", "failed"];
@@ -124,7 +157,16 @@ async function deleteQuietly(env: Env, keys: string[]): Promise<void> {
 
 /** What a finished record says to the job engine; null while the consumer is still at work (or has not started). */
 function verdictOf(record: LlmRecord | null, taskId: string): PollResult | null {
-    if (record?.status === "done") return { status: "succeeded", glbUrl: `r2:${llmKey(taskId, "glb")}`, thumbnailUrl: null };
+    if (record?.status === "done") {
+        if (isRecord(record.plan) && typeof record.plan.applied === "boolean") return { status: "succeeded", plan: record.plan };
+        const edit = record.edit;
+        return {
+            status: "succeeded",
+            glbUrl: `r2:${llmKey(taskId, "glb")}`,
+            thumbnailUrl: null,
+            ...(edit ? { edit: { summary: edit.summary, changes: edit.changes, notes: edit.notes, hash: edit.hash, engine: record.model ?? "" } } : {}),
+        };
+    }
     if (record?.status === "failed") return { status: "failed", error: asString(record.error) ?? "The designer could not make this model." };
     return null;
 }
@@ -132,21 +174,35 @@ function verdictOf(record: LlmRecord | null, taskId: string): PollResult | null 
 export const openRouterDesigner: ProviderAdapter = {
     via: "openrouter",
 
-    async submit(env, rawPrompt): Promise<SubmitResult> {
-        requireKey(env.OPENROUTER_API_KEY, "OPENROUTER_API_KEY");
+    async submit(env, rawPrompt, ctx?: SubmitContext): Promise<SubmitResult> {
+        const edit = ctx?.edit;
+        // The offline demo (MOCK_PROVIDER=1) answers edits with canned results and needs no key.
+        if (!(edit && mockLlmEnabled(env))) requireKey(env.OPENROUTER_API_KEY, "OPENROUTER_API_KEY");
         const queue = env.LLM_QUEUE;
         if (!queue) throw new ProviderError("The design queue is not set up on the server.", 503);
         const { prompt, trimmedTo } = preparePrompt(rawPrompt, PROMPT_LIMIT);
         const taskId = crypto.randomUUID();
-        const model = modelOf(env);
+        const model = ctx?.model ?? modelOf(env);
         const job: LlmJob = { taskId, prompt, model };
+        if (edit?.target === "design") {
+            job.edit = { target: "design", source_glb_key: edit.sourceGlbKey, ...(edit.originalPrompt ? { original_prompt: edit.originalPrompt } : {}) };
+        } else if (edit) {
+            // The pictures (hundreds of KB) go to the bucket; the message names them.
+            try {
+                await env.FILES.put(llmKey(taskId, "in"), edit.request, { httpMetadata: { contentType: "application/json" } });
+            } catch {
+                throw new ProviderError("Could not start the editor. Please try again.", 502);
+            }
+            job.edit = { target: "mesh", package_key: llmKey(taskId, "in"), ...(edit.refine ? { refine: true } : {}) };
+        }
         try {
             await queue.send(job);
         } catch {
             // Definitely not queued: no money was spent, and the engine hands the daily slot back.
+            if (edit?.target === "mesh") await deleteQuietly(env, [llmKey(taskId, "in")]);
             throw new ProviderError("Could not start the designer. Please try again.", 502);
         }
-        return { taskId, state: { queued_at: Date.now(), model, ...(trimmedTo !== null ? { prompt_trimmed_to: trimmedTo } : {}) } };
+        return { taskId, state: { queued_at: Date.now(), model, ...(edit ? { edit: edit.target } : {}), ...(trimmedTo !== null ? { prompt_trimmed_to: trimmedTo } : {}) } };
     },
 
     poll(env, taskId, state: AdapterState): Promise<PollResult> {
@@ -165,6 +221,9 @@ export const openRouterDesigner: ProviderAdapter = {
                 const minutes = Math.round(DESIGN_TIMEOUT_MS / 60_000);
                 return { status: "failed", error: `The designer took too long (over ${minutes} minutes) and was stopped. Please try again.` };
             }
+            const editing = isRecord(state) ? state.edit : undefined;
+            if (editing === "mesh") return { status: "running", stage: "Planning the edit" };
+            if (editing === "design") return { status: "running", stage: record?.status === "building" ? "Building the 3D model" : "Designing the change" };
             return { status: "running", stage: record?.status === "building" ? "Building the 3D model" : "Designing the parts…" };
         });
     },
@@ -174,7 +233,7 @@ export const openRouterDesigner: ProviderAdapter = {
             const record = await readRecord(env, taskId).catch(() => null);
             // Over already (done or failed): nothing runs any more, so no marker; just drop what was staged.
             if (record?.status === "done" || record?.status === "failed") {
-                await deleteQuietly(env, [llmKey(taskId, "json"), llmKey(taskId, "glb")]);
+                await deleteQuietly(env, [llmKey(taskId, "json"), llmKey(taskId, "glb"), llmKey(taskId, "in")]);
                 return;
             }
             await env.FILES.put(llmKey(taskId, "cancel"), "canceled");
@@ -189,7 +248,7 @@ export const openRouterDesigner: ProviderAdapter = {
             // stop. Before that (a time-out, a Stop) it may still come for the message and must find the marker.
             const record = await readRecord(env, taskId).catch(() => null);
             const finished = record?.status === "done" || record?.status === "failed";
-            await deleteQuietly(env, [llmKey(taskId, "json"), llmKey(taskId, "glb"), ...(finished ? [llmKey(taskId, "cancel")] : [])]);
+            await deleteQuietly(env, [llmKey(taskId, "json"), llmKey(taskId, "glb"), llmKey(taskId, "in"), ...(finished ? [llmKey(taskId, "cancel")] : [])]);
         } catch {
             // best effort
         }

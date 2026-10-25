@@ -1,20 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Home, Loader2, PanelRightClose, SquarePen, Box } from "lucide-react";
+import { Home, Loader2, PanelRightClose, PencilLine, Square, SquarePen, Box } from "lucide-react";
 
 import { AccessCodeGate } from "@/assignment/components/chat/AccessCodeGate";
 import { Composer, MAX_PROMPT_CHARS } from "@/assignment/components/chat/Composer";
+import { assistLimitReached, composerStateOf, placeholderFor } from "@/assignment/components/chat/composerLogic";
+import { ElapsedTime } from "@/assignment/components/chat/ElapsedTime";
 import { HeroStart } from "@/assignment/components/chat/HeroStart";
+import { PendingEditCards } from "@/assignment/components/chat/EditCard";
 import { JobCard } from "@/assignment/components/chat/JobCard";
 import { Markdown } from "@/assignment/components/chat/Markdown";
 import { ModelCard } from "@/assignment/components/chat/ModelCard";
+import { RegenerateDialog } from "@/assignment/components/chat/RegenerateDialog";
 import { BrandLockup } from "@/assignment/components/BrandLockup";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
+import { Button } from "@/assignment/components/ui/button";
 import { toast } from "@/assignment/components/ui/sonner";
 import { openVersion } from "@/assignment/components/workspace/versionActions";
 import { useTheme } from "@/assignment/hooks/useTheme";
 import { getAccessCode } from "@/assignment/lib/api";
 import type { ChatMessage, Job, ModelAsset, ProviderId, ProviderInfo } from "@/assignment/shared/contract";
+import { busyMeshRunOf, meshEditBusy, useEditStore } from "@/assignment/store/edit";
+import { submitEdit } from "@/assignment/store/editRouter";
+import { regeneratePrompt } from "@/assignment/store/editLogic";
 import { requestAccessCode, settleAccessPrompt, useAccessPrompt } from "@/assignment/store/access";
 import { retryJob, sendPrompt, startNewProject, stopGeneration } from "@/assignment/store/generation";
 import { isTerminalJob } from "@/assignment/store/jobs";
@@ -28,7 +36,16 @@ import {
     saveSelection,
 } from "@/assignment/store/providers";
 import { replyLine } from "@/assignment/store/replies";
-import { selectIsGenerating, useIsGenerating, useProjectHasContent, useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
+import {
+    queueMustWait,
+    selectIsGenerating,
+    useIsGenerating,
+    useProjectHasContent,
+    useWorkspaceStore,
+    type ComposerMode,
+    type QueuedPrompt,
+} from "@/assignment/store/useWorkspaceStore";
+import { useCurrentWork } from "@/assignment/store/workGuard";
 
 const EMPTY_QUESTION = "What do you want to build?";
 
@@ -73,7 +90,16 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     const queuedPrompt = useWorkspaceStore((s) => s.queuedPrompt);
     const providersInfo = useWorkspaceStore((s) => s.providers);
     const unstoppable = useWorkspaceStore((s) => s.unstoppable);
+    const tab = useWorkspaceStore((s) => s.workspaceTab);
+    const composerChoice = useWorkspaceStore((s) => s.composerChoice);
+    const setComposerChoice = useWorkspaceStore((s) => s.setComposerChoice);
+    const focusSerial = useWorkspaceStore((s) => s.composerFocusSerial);
     const generating = useIsGenerating();
+    // A mesh edit that is applying or saving has no job running any more but is still going: a change typed now waits for it, as it does for a job.
+    const meshBusy = useEditStore((s) => busyMeshRunOf(s.runs, activeProjectId) !== undefined);
+    // A request for a change to the blocks is out (the run chip's work, told in the chat too: on a phone the chip is on the other screen).
+    const work = useCurrentWork();
+    const blockRun = work !== null && work.kind === "blocks" && !work.waiting && work.projectId === activeProjectId ? work : null;
     // A model, a job or a message: this is no new chat, even when there are no messages (a project made through the API).
     const hasContent = useProjectHasContent();
 
@@ -97,6 +123,11 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         saveSelection(next);
     };
 
+    // ---- what the words do: a new model, or a change to the one on screen ----
+    const composer = composerStateOf({ models, activeModelId, tab, assist: providersInfo?.assist, choice: composerChoice });
+    const hunyuanReady = available.has("hunyuan");
+    const [regenerating, setRegenerating] = useState<string | null>(null);
+
     // ---- access code ----
     // One dialog for the whole page (store/access.ts), so the Stop shortcut can ask for the code too.
     const gateOpen = useAccessPrompt((s) => s.open);
@@ -105,10 +136,11 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     // Newest at the bottom. scrollIntoView is a no-op while the chat is display:none (phone canvas
     // view), so also re-run when the chat becomes the visible view again.
     const chatVisible = !mobile || mobile.active;
+    const blockRunning = blockRun !== null;
     useEffect(() => {
         if (!chatVisible) return;
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages, queuedPrompt, chatVisible]);
+    }, [messages, queuedPrompt, chatVisible, blockRunning]);
 
     // The empty state and the composer paint over the canvas (see heroSlot) until the first
     // message; after it they are back inside the panel. Same component instance either way, so the
@@ -139,6 +171,14 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         });
     }, []);
 
+    // The Models tab's "Edit..." wants the cursor here.
+    const seenFocus = useRef(focusSerial);
+    useEffect(() => {
+        if (seenFocus.current === focusSerial) return;
+        seenFocus.current = focusSerial;
+        focusPromptInput();
+    }, [focusSerial, focusPromptInput]);
+
     // Moving the textarea from the hero to the panel recreates its DOM node, which drops keyboard
     // focus mid-conversation. Only on the hero -> panel flip (focusing on plain mount would pop the
     // phone keyboard uninvited), and only when the user was in the box or just sent from it.
@@ -162,11 +202,12 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     }, [heroActive, focusPromptInput]);
 
     // ---- sending ----
-    // `queued`: the prompt that waited for the last run (sent by the effect below). If it cannot go
+    // `queued`: the prompt that waited for the last run (sent by the effect below), with the mode it was typed in. If it cannot go
     // out, it goes back to the box instead of vanishing: it was typed once already.
-    const submit = async (queued?: string) => {
+    const submit = async (queued?: QueuedPrompt) => {
         const fromQueue = queued !== undefined;
-        const text = (queued ?? input).trim();
+        const text = (queued?.text ?? input).trim();
+        const mode: ComposerMode = queued?.mode ?? composer.mode;
         if (!text) return;
         const giveBack = () => {
             if (fromQueue) restoreDraft(text);
@@ -175,7 +216,8 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         // A project from the URL is still being fetched: a send now would start a second, new one.
         if (state.sending || loading) return giveBack();
 
-        if (selectIsGenerating(state)) {
+        const waitsForMesh = mode === "edit" && state.activeProjectId !== null && meshEditBusy(state.activeProjectId);
+        if (selectIsGenerating(state) || waitsForMesh) {
             if (fromQueue) return giveBack();
             // One run at a time per chat: the prompt waits its turn and goes when this one ends.
             if (state.queuedPrompt) {
@@ -184,8 +226,36 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                 });
                 return;
             }
-            state.setQueuedPrompt(text);
+            state.setQueuedPrompt({ text, mode });
             setInput("");
+            return;
+        }
+
+        let info = state.providers;
+        if (!info) {
+            toast.error("The model list has not loaded", { description: "Check your connection and try again." });
+            void refreshProviders();
+            return giveBack();
+        }
+
+        if (mode === "edit") {
+            // The server's AI editor: the daily count is known from the last answer (and may be stale), the access code is asked for first,
+            // as for a new model, so a visitor without it leaves nothing half done.
+            if (assistLimitReached(info.assist)) {
+                await refreshProviders();
+                info = useWorkspaceStore.getState().providers ?? info;
+                if (assistLimitReached(info.assist) && info.assist) {
+                    toast.warning("Daily limit reached", {
+                        description: `${info.assist.used_today} of ${info.assist.daily_limit} AI changes are used today. Try again tomorrow.`,
+                        duration: 9000,
+                    });
+                    return giveBack();
+                }
+            }
+            if (info.access_required && !getAccessCode() && !(await askAccess())) return giveBack();
+            if (!fromQueue) setInput("");
+            const outcome = await submitEdit(text);
+            if (!outcome.ok && outcome.restorePrompt) restoreDraft(text);
             return;
         }
 
@@ -193,13 +263,8 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
             toast.error("That prompt is too long", { description: `Keep it under ${MAX_PROMPT_CHARS} characters.` });
             return giveBack();
         }
-        let info = state.providers;
-        if (!info) {
-            toast.error("The model list has not loaded", { description: "Check your connection and try again." });
-            void refreshProviders();
-            return giveBack();
-        }
-        if (chosen.length === 0) {
+        const targets = chosen;
+        if (targets.length === 0) {
             toast.error(
                 generationSwitchedOff(info.providers) ? "Generation is switched off" : "No text-to-3D model is available",
                 {
@@ -213,7 +278,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         // The daily cap is known from the last answer: refuse here instead of making a project the
         // server would then refuse to fill. The count may be stale (a new day, a refund), so ask again first.
         // The free demo takes no slot (the server only counts paid models).
-        const paid = chosen.filter((id) => id !== "mock").length;
+        const paid = targets.filter((id) => id !== "mock").length;
         if (paid > 0 && info.daily_limit !== null && info.used_today + paid > info.daily_limit) {
             await refreshProviders();
             info = useWorkspaceStore.getState().providers ?? info;
@@ -231,7 +296,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         if (!fromQueue) setInput("");
         const outcome = await sendPrompt({
             prompt: text,
-            providers: chosen,
+            providers: targets,
             tagId,
             requestAccessCode: askAccess,
         });
@@ -248,14 +313,18 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         // must not send the same prompt twice.
         const state = useWorkspaceStore.getState();
         const next = state.queuedPrompt;
-        if (!next || selectIsGenerating(state) || state.sending || loading) return;
+        if (!next) return;
+        // A change waits for a mesh edit that is still applying or saving too (its job has ended, the edit has not): sent now it would be
+        // refused and bounce back into the box.
+        const meshBusyNow = next.mode === "edit" && state.activeProjectId !== null && meshEditBusy(state.activeProjectId);
+        if (queueMustWait(state, { meshBusy: meshBusyNow, loading })) return;
         state.setQueuedPrompt(null);
         void submitRef.current(next);
-    }, [queuedPrompt, generating, sending, loading]);
+    }, [queuedPrompt, generating, sending, loading, meshBusy]);
 
     const unsendQueued = () => {
         if (!queuedPrompt) return;
-        restoreDraft(queuedPrompt);
+        restoreDraft(queuedPrompt.text);
         useWorkspaceStore.getState().setQueuedPrompt(null);
         focusPromptInput();
     };
@@ -287,6 +356,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     };
     const retry = (job: Job) => void retryJob(job, askAccess);
     const canRetry = (job: Job) =>
+        job.kind !== "edit" &&
         !sending &&
         !Object.values(jobs).some(
             (other) =>
@@ -331,20 +401,24 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
         [jobs, activeProjectId, providerList, unstoppable],
     );
 
-    // No cap configured: no "N/limit today" hint at all.
+    // No cap configured: no "N/limit today" hint at all. An edit counts against the AI editor's own cap.
+    const assist = providersInfo?.assist;
     const usage =
-        providersInfo && providersInfo.daily_limit !== null
-            ? { used: providersInfo.used_today, limit: providersInfo.daily_limit }
-            : null;
+        composer.mode === "edit"
+            ? assist && assist.daily_limit !== null
+                ? { used: assist.used_today, limit: assist.daily_limit }
+                : null
+            : providersInfo && providersInfo.daily_limit !== null
+              ? { used: providersInfo.used_today, limit: providersInfo.daily_limit }
+              : null;
     const hasMessages = messages.length > 0;
     // The conversation is under way, or the project already holds work: the panel is a chat now, not the new-chat hero.
     const started = hasMessages || hasContent;
     // Short on purpose: the box is one line tall, so a long placeholder would be cut off.
-    const placeholder = generating
-        ? "Queue the next prompt"
-        : started
-          ? "Describe another object"
-          : "Describe the object you want to build";
+    // (A change typed while a mesh edit is still being applied queues like one typed during a run: the send button says so.)
+    const busy = generating || (composer.mode === "edit" && meshBusy);
+    const placeholder = placeholderFor({ mode: composer.mode, generating: busy, started, target: composer.target, subject: composer.subject });
+    const activeModel = models.find((m) => m.id === activeModelId) ?? null;
 
     const brandMark = <BrandLockup size="lg" dark={isDark} />;
     // Ready-made example projects or example prompts, whichever the deployment can offer (components/chat/HeroStart.tsx).
@@ -352,7 +426,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
 
     // The composer, rendered exactly once: at the bottom of the panel or, before the first message,
     // portalled over the canvas (heroActive).
-    const composer = (
+    const composerBox = (
         <Composer
             input={input}
             onInput={setInput}
@@ -369,9 +443,21 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
             }}
             placeholder={placeholder}
             locked={loading}
-            generating={generating}
+            generating={busy}
             stoppable={stoppable}
-            canSend={input.trim().length > 0 && !sending && !loading && chosen.length > 0}
+            canSend={input.trim().length > 0 && !sending && !loading && (composer.mode === "edit" ? composer.canEdit : chosen.length > 0)}
+            mode={composer.mode}
+            onModeChange={setComposerChoice}
+            edit={
+                composer.hasModel
+                    ? { target: composer.target, canEdit: composer.canEdit, reason: composer.editReason, subject: composer.subject }
+                    : null
+            }
+            onRegenerate={
+                hunyuanReady && composer.target === "mesh" && activeModel && input.trim()
+                    ? () => setRegenerating(regeneratePrompt(activeModel, input, null))
+                    : null
+            }
             providers={providersInfo?.providers}
             selected={chosen}
             onSelectedChange={changeSelection}
@@ -524,12 +610,18 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                     </div>
                 )}
 
+                {/* A mesh edit whose job does not exist yet (the page is still looking at the model): its stage and Stop. */}
+                <PendingEditCards projectId={activeProjectId} />
+
+                {/* A request for a change to the blocks has no job and no card of its own (the proposal lives in the Stability tab): this says it is working. */}
+                {blockRun && <BlockEditWorking since={blockRun.since} stop={blockRun.stop} />}
+
                 {queuedPrompt && (
                     <div className="flex justify-end" data-testid="queued-prompt">
                         <div className="max-w-[85%] w-fit rounded-lg border border-dashed border-accent/70 bg-muted px-3 py-1.5 text-sm text-foreground">
-                            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{queuedPrompt}</p>
+                            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{queuedPrompt.text}</p>
                             <div className="mt-1 flex items-center gap-2 text-[11px] opacity-80">
-                                <span>Queued. Sends when this run finishes</span>
+                                <span>{queuedPrompt.mode === "edit" ? "Queued. Changes the model when this run finishes" : "Queued. Sends when this run finishes"}</span>
                                 <button type="button" className="underline" onClick={unsendQueued} aria-label="Unsend">
                                     Unsend
                                 </button>
@@ -548,7 +640,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
             </div>
 
             {/* Input area */}
-            {!heroActive && composer}
+            {!heroActive && composerBox}
 
             {/* The new-chat hero, over the canvas: brand + question + examples in the free space, the
                 composer alone at the bottom. pointer-events-none on the column so the viewer stays
@@ -567,12 +659,20 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                             className="pointer-events-auto mx-auto mt-auto w-full max-w-[42rem] pb-4"
                             data-testid="chat-hero-composer"
                         >
-                            {composer}
+                            {composerBox}
                         </div>
                     </div>,
                     heroSlot,
                 )}
 
+            {/* The route chip's second way for a mesh: Hunyuan again, with the change in its prompt (the dialog says what it costs and sends it). */}
+            <RegenerateDialog
+                open={regenerating !== null}
+                onOpenChange={(open) => {
+                    if (!open) setRegenerating(null);
+                }}
+                initialPrompt={regenerating ?? ""}
+            />
             <AccessCodeGate open={gateOpen} onResult={settleAccessPrompt} />
         </div>
     );
@@ -591,4 +691,33 @@ function AssistantLine({
     const mine = (message.job_ids ?? []).map((id) => jobs[id]).filter((job): job is Job => Boolean(job));
     const line = replyLine(message.content, mine, providers);
     return line ? <Markdown>{line}</Markdown> : null;
+}
+
+const chip = "rounded-full border border-border px-1.5 text-[10px] leading-4 text-muted-foreground";
+
+/**
+ * "Reading the blocks to plan the change… 6 s [Stop]": a change to the blocks while its request is out. The same work is the run chip in the
+ * bar, which a phone shows only on the canvas; the chat is where the person is waiting.
+ */
+function BlockEditWorking({ since, stop }: { since: number; stop: (() => void) | null }) {
+    return (
+        <div data-testid="block-edit-working" role="status" className="rounded-xl border border-border/70 bg-background/60 p-3">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <PencilLine className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                <span className="text-xs font-semibold text-foreground">Edit</span>
+                <span className={chip}>Muse Spark</span>
+                <span className={chip}>Changes the blocks</span>
+            </div>
+            <div className="mt-2">
+                <span className="text-[13px] font-medium text-shimmer">Reading the blocks to plan the change</span>
+                <ElapsedTime startedAt={since} className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground" />
+            </div>
+            {stop && (
+                <Button type="button" size="sm" variant="outline" className="mt-2 h-7 gap-1.5 px-2.5 text-xs" onClick={stop} data-testid="block-edit-stop">
+                    <Square />
+                    Stop
+                </Button>
+            )}
+        </div>
+    );
 }

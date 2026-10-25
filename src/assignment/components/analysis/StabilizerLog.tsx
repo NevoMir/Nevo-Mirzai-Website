@@ -2,19 +2,20 @@ import { useMemo } from "react";
 
 import type { AnalysisResult } from "@/assignment/analysis/types";
 import { ROLE_WORDS } from "@/assignment/components/analysis/vocabulary";
-import type { StabilizerLogData } from "@/assignment/components/analysis/useStabilizerLog";
+import { OPTIMIZE_STOP_WORDS, type StabilizerLogData } from "@/assignment/components/analysis/useStabilizerLog";
 import { StabilizeTimeline } from "@/assignment/components/analysis/StabilizeTimeline";
 import { TONE } from "@/assignment/components/analysis/style";
 import { cn } from "@/assignment/lib/utils";
 import { ROLE_HEX } from "@/assignment/shared/assembly";
-import { BLOCK_ROLES, type AddedRole } from "@/assignment/shared/contract";
+import { BLOCK_ROLES, type AddedRole, type EditMeta, type OptimizeSummary } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { fmtPct } from "@/assignment/store/analysisLogic";
 import { useStabilizeStore } from "@/assignment/store/stabilize";
 import { savedStepOffset, stepOffsetOf } from "@/assignment/store/stabilizeLogic";
 
 
-const ADDED: readonly AddedRole[] = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original");
+// "user" blocks come from edits, not from the stabilizer: they are not part of its log.
+const ADDED: readonly AddedRole[] = BLOCK_ROLES.filter((r): r is AddedRole => r !== "original" && r !== "user");
 
 /** One before -> after line of the summary. */
 function Row({ label, before, after, better }: { label: string; before: string; after: string; better: boolean }) {
@@ -29,12 +30,96 @@ function Row({ label, before, after, better }: { label: string; before: string; 
     );
 }
 
+/** A list of part names for a change of a design: "Added: seat, cup holder". */
+function NameLine({ label, names }: { label: string; names: readonly string[] }) {
+    if (names.length === 0) return null;
+    return (
+        <p className="text-[11px] leading-snug text-muted-foreground">
+            <span className="font-medium text-foreground">{label}: </span>
+            {names.join(", ")}
+        </p>
+    );
+}
+
+/** "What was changed": each request in the person's words, what the model said it did, and the parts or steps it touched. */
+function EditLog({ edit }: { edit: EditMeta }) {
+    return (
+        <div data-testid="analysis-edit-body" className="space-y-3">
+            <ol className="space-y-2">
+                {edit.entries.map((entry) => (
+                    <li key={entry.n} className="text-xs" data-testid="edit-entry">
+                        <p className="font-medium text-foreground [overflow-wrap:anywhere]">“{entry.instruction}”</p>
+                        <p className="text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{entry.summary}</p>
+                    </li>
+                ))}
+            </ol>
+            {edit.changes && (
+                <div className="space-y-0.5">
+                    <NameLine label="Added" names={edit.changes.added} />
+                    <NameLine label="Changed" names={edit.changes.changed} />
+                    <NameLine label="Removed" names={edit.changes.removed} />
+                </div>
+            )}
+            {edit.ops && edit.ops.length > 0 && <NameLine label="Steps" names={edit.ops.map((o) => o.label)} />}
+            {edit.notes.length > 0 && (
+                <ul className="space-y-0.5">
+                    {edit.notes.map((note, n) => (
+                        <li key={n} className="text-[11px] leading-snug text-muted-foreground">
+                            {note}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+const fmtKg = (kg: number): string => `${Math.round(kg * 10) / 10} kg`;
+
+/** "What the optimizer did": the goal in the person's words, the figures before and after, and why it stopped. */
+function OptimizerLog({ summary }: { summary: OptimizeSummary }) {
+    const { before, after } = summary;
+    return (
+        <div data-testid="analysis-optimizer-body" className="space-y-3">
+            <p className="text-xs font-medium text-foreground [overflow-wrap:anywhere]">“{summary.goal}”</p>
+            <dl className="space-y-1">
+                <Row label="Blocks" before={String(before.blocks)} after={String(after.blocks)} better={after.blocks < before.blocks} />
+                <Row label="Weight" before={fmtKg(before.weight_kg)} after={fmtKg(after.weight_kg)} better={after.weight_kg < before.weight_kg} />
+                <Row
+                    label="Strength used"
+                    before={before.max_utilisation === null ? "n/a" : fmtPct(before.max_utilisation)}
+                    after={after.max_utilisation === null ? "n/a" : fmtPct(after.max_utilisation)}
+                    better={before.max_utilisation !== null && after.max_utilisation !== null && after.max_utilisation < before.max_utilisation}
+                />
+                <Row
+                    label="Weight inside the base"
+                    before={before.cog_margin_mm === null ? "n/a" : `${Math.round(before.cog_margin_mm)} mm`}
+                    after={after.cog_margin_mm === null ? "n/a" : `${Math.round(after.cog_margin_mm)} mm`}
+                    better={before.cog_margin_mm !== null && after.cog_margin_mm !== null && after.cog_margin_mm > before.cog_margin_mm}
+                />
+                <Row label="Longest overhang" before={String(before.longest_cantilever)} after={String(after.longest_cantilever)} better={after.longest_cantilever < before.longest_cantilever} />
+            </dl>
+            <p className="text-[11px] leading-snug text-muted-foreground">
+                {summary.removed > 0 && `Took away ${summary.removed} ${summary.removed === 1 ? "block" : "blocks"}. `}
+                {summary.added > 0 && `Added ${summary.added} ${summary.added === 1 ? "block" : "blocks"}. `}
+                {OPTIMIZE_STOP_WORDS[summary.stop]}
+            </p>
+        </div>
+    );
+}
+
 /**
- * "What the stabilizer did": the figures before and after, the blocks it added by what they are for, and its steps one by one, each
+ * "How this version was made": for a stabilized version, "What the stabilizer did": the figures before and after, the blocks it added by what they are for, and its steps one by one, each
  * a button that lights up the blocks it added and flies the camera there. (Why a run stopped, the solver and the aim are on the
  * "How is this computed?" page.)
  */
 export function StabilizerLog({ log, result }: { log: StabilizerLogData; result: AnalysisResult }) {
+    if (log.kind === "edit" && log.edit) return <EditLog edit={log.edit} />;
+    if (log.kind === "optimizer" && log.optimization) return <OptimizerLog summary={log.optimization} />;
+    return <StabilizerSteps log={log} result={result} />;
+}
+
+function StabilizerSteps({ log, result }: { log: StabilizerLogData; result: AnalysisResult }) {
     const stepSelection = useAnalysisStore((s) => s.stepSelection);
     const selectStepBlocks = useAnalysisStore((s) => s.selectStepBlocks);
     const clearSelection = useAnalysisStore((s) => s.clearSelection);

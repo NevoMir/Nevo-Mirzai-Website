@@ -24,6 +24,7 @@ import { toast } from "@/assignment/components/ui/sonner";
 import { createDerivedModel } from "@/assignment/lib/api";
 import { CELL_STRIDE } from "@/assignment/shared/assembly";
 import { BLOCK_ROLES, type AddedRole, type ModelAsset, type StabilizeStepLog, type StepMetrics } from "@/assignment/shared/contract";
+import { stabilizationsOfModel } from "@/assignment/shared/versionTree";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import {
     DEFAULT_CHOICES,
@@ -44,6 +45,7 @@ import {
 } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 import { rootOf } from "@/assignment/store/versions";
+import { acquireWork, WORK_CHIP_WORDS, workBusyMessage } from "@/assignment/store/workGuard";
 
 export type StabilizeStatus = RunStatus;
 
@@ -150,6 +152,12 @@ interface RunContext {
 }
 let ctx: RunContext | null = null;
 let counter = 0;
+/** Gives the work guard back (store/workGuard.ts): the run holds it from its start until it is saved, thrown away or has failed. */
+let releaseWork: (() => void) | null = null;
+const giveBackWork = (): void => {
+    releaseWork?.();
+    releaseWork = null;
+};
 /**
  * The saved version the run switched to while its analysis has not landed: when it does, `endedAt` is renewed (see the field).
  * Not state: nothing renders from it.
@@ -201,7 +209,7 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
             const { sourceModelId } = get();
             if (!sourceModelId) return;
             set({ preview });
-            useAnalysisStore.getState().setPreview(sourceModelId, preview);
+            useAnalysisStore.getState().setPreview(sourceModelId, preview, "stabilize");
         } catch {
             // The log is what matters; the stage keeps its last picture.
         }
@@ -209,13 +217,14 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
 
     const clearPreview = (): void => {
         const { sourceModelId, preview } = get();
-        if (preview && sourceModelId) useAnalysisStore.getState().setPreview(sourceModelId, null);
+        if (preview && sourceModelId) useAnalysisStore.getState().setPreview(sourceModelId, null, "stabilize");
         set({ preview: null });
     };
 
     const reset = (): void => {
         ctx?.controller.abort();
         ctx = null;
+        giveBackWork();
         awaitingAnalysisOf = null;
         clearPreview();
         set({ ...INITIAL });
@@ -282,6 +291,8 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
             await finish(runId, result);
         } catch (error) {
             if (stale(runId) || isAbort(error)) return;
+            // A run that failed has nothing to decide: the work is over.
+            giveBackWork();
             set({
                 status: "error",
                 errorKind: "run",
@@ -304,8 +315,12 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
             if (s.status === "running" || s.status === "saving") return false;
             const projectId = useWorkspaceStore.getState().activeProjectId;
             if (!projectId || result.stats.blockCount === 0) return false;
+            // Another piece of work (a block edit, an optimizer run) is going: only one at a time.
+            if (workBusyMessage("stabilize", projectId) !== null) return false;
             // Whatever an earlier run left on the screen goes.
             reset();
+            releaseWork = acquireWork("stabilize", projectId, { label: WORK_CHIP_WORDS.stabilize, stop: () => get().cancel() });
+            if (!releaseWork) return false;
             // On a phone the report is a sheet over an 80% black overlay: fold it away, so the stage with the growing
             // preview is what the run shows (the summary pill carries Stop, and the sheet comes back when a decision waits).
             useAnalysisStore.getState().setSheetOpen(false);
@@ -321,7 +336,8 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
                     // A stabilized model keeps the role and step of its blocks when it is stabilized again.
                     assembly: result.assembly ? result.assembly.descriptor : null,
                 },
-                sourceDepth: model.derived?.depth ?? 0,
+                // The stabilizations on the way from the original to this version (edits and optimizations carry the count along).
+                sourceDepth: stabilizationsOfModel(model),
                 controller,
                 startedAt: deps.now(),
                 stoppedAfterMs: 0,
@@ -411,6 +427,7 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
                 if (switched) toast.success("Switched to the stabilized version");
                 else toast.success("Saved a stabilized version", { description: "Find it in the Models tab." });
                 clearPreview();
+                giveBackWork();
                 set({ status: "saved", savedModelId: model.id, endedAt: deps.now() });
             } catch (error) {
                 if (get().runId !== runId) return;

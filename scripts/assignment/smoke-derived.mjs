@@ -3,10 +3,11 @@
 //   npx wrangler dev --port 8787 --local          # the same server smoke-api.mjs uses
 //   node scripts/assignment/smoke-derived.mjs     # BASE=http://127.0.0.1:8787 by default
 //
-// Covers POST /models/:id/derived (validation, the log checked against the blocks, limits, idempotence, parallel requests
-// against the per-source and per-project caps, clock skew), DELETE /models/:id, the stress block of PUT /models/:id/analysis,
-// chat model_ids, GET /examples and POST /projects/from-example, and that purging a project never touches an example's
-// shared files.
+// Covers POST /models/:id/derived for all three kinds of version (stabilized, block-edited, optimized: validation, the log
+// checked against the blocks, limits that count every kind together, idempotence, parallel requests against the per-source and
+// per-project caps, the chain depth, clock skew), DELETE /models/:id with its subtree, the stress block of PUT /models/:id/analysis,
+// chat model_ids, GET /examples and POST /projects/from-example, editing and optimizing an example's stabilized twin, and that
+// purging a project never touches an example's shared files.
 //
 // The stabilized models it uploads are built here with the shared writer (src/assignment/shared) from a 21-block shelf
 // arm plus a 5-block column, with a consistent log, so no browser or stabilizer is needed. The examples section runs
@@ -36,7 +37,9 @@ const shared = (name) => import(`../../src/assignment/shared/${name}.ts`);
 const { descriptorFromBlocks, assemblyHash, CELL_STRIDE } = await shared("assembly");
 const { writeAssemblyGlb, readAssemblyGlb } = await shared("assemblyGlb");
 const { checkDerivedMeta } = await shared("derivedMeta");
-const { BLOCK_ROLES, DERIVED_GLB_LIMIT } = await shared("contract");
+const { BLOCK_ROLES, DERIVED_GLB_LIMIT, MAX_VERSIONS_PER_SOURCE: SRC, MAX_VERSIONS_PER_PROJECT: PRJ, MAX_VERSION_DEPTH: DEPTH_LIMIT } = await shared("contract");
+const FX = await import("./versions-fixtures.mjs");
+const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 
 let passed = 0;
 const failures = [];
@@ -209,7 +212,7 @@ const projectOf = async (id) => (await call("GET", `/projects/${id}`)).json?.pro
 
 // ======================================================================================================================
 async function main() {
-    // A run saves about 50 versions and the day's cap is 300, so a few runs in one UTC day would use it up and fail the
+    // A run saves about 150 versions and the day's cap is 300, so a few runs in one UTC day would use it up and fail the
     // run for nothing. On a local database the counter is zeroed for the run and put back at the end.
     if ((await sql("SELECT 1")) !== null) {
         created.counterAtStart = await derivedToday();
@@ -374,16 +377,16 @@ async function main() {
     }
 
     // ------------------------------------------------------------------------------------------------------------------
-    section("limits: 5 per source");
+    section(`limits: ${SRC} per source`);
     let last = null;
-    for (let n = 0; n < 4; n++) last = await upload(source.id, (await fresh()).glb);
-    check("four more are accepted (1 + 4 = 5)", last.status === 201, JSON.stringify(last.json)?.slice(0, 200));
+    for (let n = 0; n < SRC - 1; n++) last = await upload(source.id, (await fresh()).glb);
+    check(`${SRC - 1} more are accepted (1 + ${SRC - 1} = ${SRC})`, last.status === 201, JSON.stringify(last.json)?.slice(0, 200));
     r = await upload(source.id, (await fresh()).glb);
-    check("the 6th is refused: 429 {error}", r.status === 429 && /at most 5/.test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
+    check(`the ${SRC + 1}th is refused: 429 {error}`, r.status === 429 && new RegExp(`at most ${SRC}`).test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
     r = await upload(source.id, stabilizedSample);
     check("but the first one is still answered (idempotent, no cap involved): 200", r.status === 200 && r.json.model.id === derived.id);
     const listed = (await projectOf(project.id)).models.filter((m) => m.kind === "stabilized");
-    check("the list holds exactly five stabilized versions", listed.length === 5);
+    check(`the list holds exactly ${WORDS[SRC]} stabilized versions`, listed.length === SRC);
 
     // ------------------------------------------------------------------------------------------------------------------
     section("chain: a stabilized model can be stabilized again, to depth 3");
@@ -403,7 +406,7 @@ async function main() {
         const after = await projectOf(project.id);
         check("DELETE a stabilized model: 200, and its descendants go with it", r.status === 200 && r.json?.ok === true && after.models.every((m) => m.id !== derived.id && m.id !== second.id && m.id !== third.id));
         check("its files are gone", (await fetch(`${BASE}${derived.glb_url}`)).status === 404 && (await fetch(`${BASE}${second.glb_url}`)).status === 404 && (await fetch(`${BASE}${third.glb_url}`)).status === 404);
-        check("the other versions and the source are untouched", after.models.length === 5 && after.models[0].id === source.id);
+        check("the other versions and the source are untouched", after.models.length === SRC && after.models[0].id === source.id);
         check("deleting twice: 404", (await call("DELETE", `/models/${derived.id}`)).status === 404);
         r = await upload(source.id, stabilizedSample);
         check("a deleted version can be made again (the slot is free)", r.status === 201 && r.json.model.id !== derived.id);
@@ -426,25 +429,26 @@ async function main() {
     }
 
     // ------------------------------------------------------------------------------------------------------------------
-    section("limits: 20 per project, and the daily counter");
+    section(`limits: ${PRJ} per project, and the daily counter`);
     {
         const probe = await newProject("derived caps");
         const s = await insertSource(probe.id);
         if (!s) {
             note("the local database is not reachable: the per-project and daily limits are not checked");
         } else {
-            const firstFive = [];
-            for (let n = 0; n < 5; n++) firstFive.push((await upload(s, (await fresh()).glb)).json.model);
-            // Three of them take five children each (depth 2): 5 + 15 = 20 versions in the project.
-            for (const parent of firstFive.slice(0, 3)) {
-                for (let n = 0; n < 5; n++) {
+            const firstLevel = [];
+            for (let n = 0; n < SRC; n++) firstLevel.push((await upload(s, (await fresh()).glb)).json.model);
+            // Some of them take a full source's worth of children each (depth 2): SRC + parents * SRC = PRJ versions in the project.
+            const parents = (PRJ - SRC) / SRC;
+            for (const parent of firstLevel.slice(0, parents)) {
+                for (let n = 0; n < SRC; n++) {
                     const out = await upload(parent.id, (await variant({ more: freshCells(), depth: 2 })).glb);
                     if (out.status !== 201) throw new Error(`expected 201 filling the project, got ${out.status} ${JSON.stringify(out.json)}`);
                 }
             }
-            check("the project holds 20 stabilized versions", (await projectOf(probe.id)).models.filter((m) => m.kind === "stabilized").length === 20);
-            r = await upload(firstFive[3].id, (await variant({ more: freshCells(), depth: 2 })).glb);
-            check("the 21st is refused: 429 {error} naming the project", r.status === 429 && /project/.test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
+            check(`the project holds ${PRJ} stabilized versions`, (await projectOf(probe.id)).models.filter((m) => m.kind === "stabilized").length === PRJ);
+            r = await upload(firstLevel[parents].id, (await variant({ more: freshCells(), depth: 2 })).glb);
+            check(`the ${PRJ + 1}st is refused: 429 {error} naming the project`, r.status === 429 && /project/.test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
 
             // The daily counter: pretend the day is nearly used up.
             const real = await derivedToday();
@@ -471,31 +475,32 @@ async function main() {
         if (!s) {
             note("the local database is not reachable: the parallel-limit checks are skipped");
         } else {
-            // Per source: 12 different valid files at once, room for 5. A count read before the insert lets them all through.
+            // Per source: SRC + 4 different valid files at once, room for SRC. A count read before the insert lets them all through.
             const dailyBefore = await derivedToday();
-            const files = await Promise.all(Array.from({ length: 12 }, () => fresh()));
+            const files = await Promise.all(Array.from({ length: SRC + 4 }, () => fresh()));
             let outs = await Promise.all(files.map((f) => upload(s, f.glb)));
             const kept = outs.filter((x) => x.status === 201);
             const turned = outs.filter((x) => x.status === 429);
-            check("12 parallel uploads to one source: exactly 5 are stored and the other 7 are 429", kept.length === 5 && turned.length === 7, outs.map((x) => x.status).join(","));
-            check("...the refusals name the source's limit", turned.every((x) => /at most 5/.test(x.json?.error ?? "")));
-            check("...the project holds exactly 5 versions", (await projectOf(probe.id)).models.filter((m) => m.kind === "stabilized").length === 5);
-            check("...and only the 5 stored ones used a daily slot (the others were given back)", (await derivedToday()) === dailyBefore + 5 || (await sql("SELECT 1")) === null, `${dailyBefore} -> ${await derivedToday()}`);
+            check(`${SRC + 4} parallel uploads to one source: exactly ${SRC} are stored and the other 4 are 429`, kept.length === SRC && turned.length === 4, outs.map((x) => x.status).join(","));
+            check("...the refusals name the source's limit", turned.every((x) => new RegExp(`at most ${SRC}`).test(x.json?.error ?? "")));
+            check(`...the project holds exactly ${SRC} versions`, (await projectOf(probe.id)).models.filter((m) => m.kind === "stabilized").length === SRC);
+            check(`...and only the ${SRC} stored ones used a daily slot (the others were given back)`, (await derivedToday()) === dailyBefore + SRC || (await sql("SELECT 1")) === null, `${dailyBefore} -> ${await derivedToday()}`);
 
-            // Per source again, in the shape that always races: 3 versions are there (room for 2) and 8 files arrive at once.
+            // Per source again, in the shape that always races: SRC - 2 versions are there (room for 2) and 8 files arrive at once.
             const room = await newProject("derived race room");
             const r2 = await insertSource(room.id);
-            await seedVersions(room.id, r2, 3, sample.meta);
+            await seedVersions(room.id, r2, SRC - 2, sample.meta);
             outs = await Promise.all(Array.from({ length: 8 }, async () => upload(r2, (await fresh()).glb)));
             check("8 parallel uploads with room for 2 in the source: exactly 2 are stored and 6 are 429", outs.filter((x) => x.status === 201).length === 2 && outs.filter((x) => x.status === 429).length === 6, outs.map((x) => x.status).join(","));
-            check("...the source has exactly 5 children", (await sql(`SELECT COUNT(*) AS n FROM models WHERE source_model_id = ${q(r2)}`))?.[0]?.n === 5);
+            check(`...the source has exactly ${SRC} children`, (await sql(`SELECT COUNT(*) AS n FROM models WHERE source_model_id = ${q(r2)}`))?.[0]?.n === SRC);
 
-            // Per project: 15 versions put in by hand (three sources, five each), then 8 uploads at once to two other sources,
+            // Per project: PRJ - 5 versions put in by hand (five sources, seven each), then 8 uploads at once to two other sources,
             // 4 each (under the per-source limit): room for exactly 5 more.
             const full = await newProject("derived race project");
-            const seedSources = [await insertSource(full.id), await insertSource(full.id), await insertSource(full.id)];
-            for (const src of seedSources) await seedVersions(full.id, src, 5, sample.meta);
-            check("15 versions are in the project before the race", (await projectOf(full.id)).models.filter((m) => m.kind === "stabilized").length === 15);
+            const seedSources = [];
+            for (let n = 0; n < 5; n++) seedSources.push(await insertSource(full.id));
+            for (const src of seedSources) await seedVersions(full.id, src, (PRJ - 5) / 5, sample.meta);
+            check(`${PRJ - 5} versions are in the project before the race`, (await projectOf(full.id)).models.filter((m) => m.kind === "stabilized").length === PRJ - 5);
             const a = await insertSource(full.id);
             const b = await insertSource(full.id);
             outs = await Promise.all([a, a, a, a, b, b, b, b].map(async (src) => upload(src, (await fresh()).glb)));
@@ -507,19 +512,198 @@ async function main() {
             const opened = await projectOf(full.id);
             const ms = performance.now() - t0;
             const versions = opened.models.filter((m) => m.kind === "stabilized");
-            check("...the project holds exactly 20 versions and opens with every log", versions.length === 20 && versions.every((m) => m.derived?.steps?.length >= 1 && m.derived.assembly_hash.length === 64), `${versions.length} versions`);
-            note(`GET /projects/:id with 20 stabilized versions: ${ms.toFixed(0)} ms wall (includes the HTTP round trip)`);
+            check(`...the project holds exactly ${PRJ} versions and opens with every log`, versions.length === PRJ && versions.every((m) => m.derived?.steps?.length >= 1 && m.derived.assembly_hash.length === 64), `${versions.length} versions`);
+            note(`GET /projects/:id with ${PRJ} stabilized versions: ${ms.toFixed(0)} ms wall (includes the HTTP round trip)`);
 
             // Identical files at once with room for exactly one: one is stored and the others get that model back (200), not a 429.
             const edge = await newProject("derived race edge");
             const e = await insertSource(edge.id);
-            await seedVersions(edge.id, e, 4, sample.meta);
+            await seedVersions(edge.id, e, SRC - 1, sample.meta);
             const same = await fresh();
             const before = await derivedToday();
             outs = await Promise.all([1, 2, 3, 4, 5].map(() => upload(e, same.glb)));
             const ids = new Set(outs.map((x) => x.json?.model?.id));
             check("5 identical uploads with room for one: one 201, four 200 with the same model, no 429", outs.filter((x) => x.status === 201).length === 1 && outs.filter((x) => x.status === 200).length === 4 && ids.size === 1, outs.map((x) => x.status).join(","));
             check("...and exactly one daily slot used", (await derivedToday()) === before + 1 || (await sql("SELECT 1")) === null);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------
+    section("block edits and optimizations: POST /models/:id/derived with a nevo:edit or nevo:optimization log");
+    {
+        const probe = await newProject("version uploads");
+        const root = await insertSource(probe.id);
+        if (!root) {
+            note("the local database is not reachable: the edit and optimization uploads are skipped");
+        } else {
+            const plain = FX.plainDescriptor();
+            const dailyBefore = await derivedToday();
+            const rows = async () => (await sql(`SELECT COUNT(*) AS n FROM models WHERE project_id = ${q(probe.id)}`))?.[0]?.n;
+            // 1. an edit of the (voxelised) mesh
+            const shelf = FX.freshCells(3);
+            const ed = await FX.editedFixture({ source: plain, edits: [{ add: shelf, instruction: "add a shelf under the seat", summary: "Added a shelf." }], baseSteps: 0 });
+            r = await upload(root, ed.glb);
+            const e1 = r.json?.model;
+            check("an edit log: 201, kind edited, provider editor, pointing at its source", r.status === 201 && e1?.kind === "edited" && e1.provider === "editor" && e1.source_model_id === root && e1.derived === null && e1.optimization === null, `${r.status} ${JSON.stringify(r.json)?.slice(0, 240)}`);
+            check("...with the Worker's own EditMeta: target voxel, depth 1, the label from the instruction, the slim entry", e1?.edit?.target === "voxel" && e1.edit.depth === 1 && e1.edit.label === "Add a shelf under the seat" && e1.edit.entries[0].added === 3 && e1.edit.base_steps === 0 && e1.edit.stabilized_depth === 0);
+            check("...and the verdict of the result, 24 blocks of two roles", e1?.analysis?.blocks === 24 && e1.part_count === 2 && e1.size_bytes === ed.glb.length);
+            const served = await fetch(`${BASE}${e1.glb_url}`);
+            check("its GLB is served byte for byte, as model/gltf-binary", Buffer.compare(Buffer.from(await served.arrayBuffer()), Buffer.from(ed.glb)) === 0 && served.headers.get("content-type") === "model/gltf-binary");
+            const stored = (await sql(`SELECT assembly_hash, meta, provider FROM models WHERE id = ${q(e1.id)}`))?.[0];
+            check("the row keeps the blocks' hash and a slim meta without operations", stored?.assembly_hash === ed.hash && stored.provider === "editor" && JSON.parse(stored.meta).ops === null && JSON.parse(stored.meta).entries.every((e) => e.ops === undefined) && stored.meta.length < 8 * 1024, stored?.meta?.slice(0, 120));
+            check("the daily counter moved by one", (await derivedToday()) === dailyBefore + 1);
+            r = await upload(root, ed.glb);
+            check("the same edit again: 200 and the same model", r.status === 200 && r.json.model.id === e1.id && (await derivedToday()) === dailyBefore + 1);
+            const reworded = await FX.editedFixture({ source: plain, edits: [{ add: shelf, instruction: "other words", summary: "Something else." }], baseSteps: 0 });
+            r = await upload(root, reworded.glb);
+            check("the same blocks with other words: 200 and the model stored first, with its own words", r.status === 200 && r.json.model.id === e1.id && r.json.model.edit.entries[0].instruction === "add a shelf under the seat");
+
+            // 2. what is refused leaves nothing behind
+            const rowsBefore = await rows();
+            const dailyRefusals = await derivedToday();
+            const refuse = async (name, bytes, pattern) => {
+                const out = await upload(root, bytes);
+                check(`${name}: 400`, out.status === 400 && (!pattern || pattern.test(out.json?.error ?? "")), `${out.status} ${JSON.stringify(out.json)?.slice(0, 200)}`);
+            };
+            const other = await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0 });
+            await refuse("a file with an edit log and a stabilizer log", FX.patchJson(other.glb, (d) => { d.scenes[0].extras["nevo:stabilization"] = sample.meta; }), /more than one log/);
+            await refuse("a file with no log at all", writeAssemblyGlb(other.descriptor), /does not carry a log/);
+            await refuse("an edit log with another hash", (await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0, overrides: { assembly_hash: "0".repeat(64) } })).glb, /does not match the blocks/);
+            await refuse("an edit of a mesh that claims earlier steps (base_steps 3)", (await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 3 })).glb, /does not match the model/);
+            await refuse("an edit that claims a stabilization above a mesh", (await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0, stabilizedDepth: 1 })).glb, /stabilization count/);
+            const lie = await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(3) }], baseSteps: 0 });
+            await refuse("an edit log whose counts are not the cells' (says 5 added, the file has 3)", writeAssemblyGlb(lie.descriptor, null, { ...lie.log, edits: [{ ...lie.log.edits[0], added: 5 }] }), /do not add up|made fewer/);
+            const binAt = FX.binStart(other.glb);
+            await refuse("a changed vertex in an edit file", FX.flipBit(other.glb, binAt + 40));
+            await refuse("a changed index in an edit file", FX.flipBit(other.glb, other.glb.length - 3));
+            const cellAt = FX.logSpan(other.glb, "nevo:edit");
+            await refuse("a changed byte inside the log's numbers", FX.flipBit(other.glb, cellAt[0] + 30, 1));
+            check("the refusals stored nothing and took no daily slot", (await rows()) === rowsBefore && (await derivedToday()) === dailyRefusals);
+
+            // 3. an edit of the edit, an optimization of that, a stabilization of that
+            const ed2 = await FX.editedFixture({ source: ed.descriptor, edits: [{ add: FX.freshCells(2) }, { add: FX.freshCells(1), remove: [[0, 0, 0]] }], depth: 2 });
+            check("the second edit starts at the highest step of the first", ed2.log.base_steps === 1);
+            r = await upload(e1.id, ed2.glb);
+            const e2 = r.json?.model;
+            check("an edit of an edited version: 201, depth 2 counted by the Worker, base_steps 1, two entries", r.status === 201 && e2?.edit?.depth === 2 && e2.edit.base_steps === 1 && e2.edit.entries.length === 2, `${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}`);
+            const op = await FX.optimizedFixture({ source: ed2.descriptor, remove: [[1, 0, 0], [2, 0, 0]], sourceHash: ed2.hash });
+            r = await upload(e2.id, op.glb);
+            const o1 = r.json?.model;
+            check("an optimization: 201, kind optimized, provider optimizer, summary with the goal and the before/after blocks", r.status === 201 && o1?.kind === "optimized" && o1.provider === "optimizer" && o1.optimization?.goal === "Lightest" && o1.optimization.before.blocks === 26 && o1.optimization.after.blocks === 24 && o1.edit === null && o1.derived === null, `${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}`);
+            check("...its verdict is the log's after_summary", o1?.analysis?.blocks === 24);
+            const wrongSource = await FX.optimizedFixture({ source: ed2.descriptor, remove: [[1, 0, 0], [0, 1, 0]], sourceHash: "f".repeat(64) });
+            r = await upload(e2.id, wrongSource.glb);
+            check("an optimization that names another source hash: 400", r.status === 400 && /different model/.test(r.json?.error ?? ""), JSON.stringify(r.json));
+            const noHash = await FX.optimizedFixture({ source: ed2.descriptor, remove: [[1, 0, 0], [0, 2, 0]], sourceHash: null });
+            check("an optimization of a block version that names no source hash: 400", (await upload(e2.id, noHash.glb)).status === 400);
+            // The same blocks with a log that claims 298 more removed cells (empty ones): well-formed, but its `before` is not the model it is saved on.
+            const noop = await FX.optimizedFixture({ source: ed2.descriptor, remove: [[1, 0, 0], [0, 1, 0]], sourceHash: ed2.hash });
+            const present = new Set(FX.blocksOf(noop.descriptor).map((b) => FX.codeOf(b.cell)));
+            const phantoms = [];
+            for (let code = 0; code < 1000 && phantoms.length < 298; code++) if (!present.has(code) && !noop.meta.removed.includes(code)) phantoms.push(code);
+            const claim = structuredClone(noop.meta);
+            claim.removed = [...claim.removed, ...phantoms].sort((a, b) => a - b);
+            claim.removed_at = claim.removed.map(() => 1);
+            claim.before = FX.optMetricsFor(claim.after.blocks + claim.removed.length);
+            r = await upload(e2.id, writeAssemblyGlb(noop.descriptor, null, null, claim));
+            check("an optimization whose log claims 300 removed blocks that were never there (its `before` is not the saved model's): 400", r.status === 400 && /different model/.test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)?.slice(0, 160)}`);
+            // The stabilizer's steps carry over a block edit: roles and steps of the edit's blocks stay, this run's steps come after them.
+            const carried = FX.descriptorFromBlocks([...FX.blocksOf(ed2.descriptor), { cell: [5, 5, 5], role: "reinforcement", step: 4 }, { cell: [5, 5, 6], role: "reinforcement", step: 4 }]);
+            const carriedMeta = await FX.metaFor(carried, 1, {}, FX.highestStep(ed2.descriptor));
+            r = await upload(e2.id, writeAssemblyGlb(carried, carriedMeta));
+            check("stabilizing an edited version (steps carried over): 201, and the edit did not use up a stabilization (depth 1)", r.status === 201 && r.json.model.kind === "stabilized" && r.json.model.derived.depth === 1, `${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}`);
+            const detail = await projectOf(probe.id);
+            const kinds = detail.models.map((m) => m.kind).join();
+            check("the project lists the root and its four versions, each with only its own record", detail.models.length === 5 && kinds === "generated,edited,edited,optimized,stabilized" && detail.models.filter((m) => m.edit).length === 2 && detail.models.filter((m) => m.optimization).length === 1 && detail.models.filter((m) => m.derived).length === 1, kinds);
+            note(`GET /projects/:id with 4 versions of three kinds: ${(JSON.stringify(detail).length / 1024).toFixed(1)} KB`);
+
+            // 4. the stabilization count follows the chain through edits and optimizations: S1 > E > S2 > O > S3 > (S4 refused)
+            const s1f = await FX.stabilizedFixture();
+            const s1 = (await upload(root, s1f.glb)).json.model;
+            const eE = await FX.editedFixture({ source: s1f.descriptor, edits: [{ add: FX.freshCells(1) }], stabilizedDepth: 1, depth: 2 });
+            const e = (await upload(s1.id, eE.glb)).json.model;
+            const s2f = await FX.stabilizedFixture({ more: FX.freshCells(1), depth: 2 });
+            const s2 = (await upload(e.id, s2f.glb)).json?.model;
+            check("a stabilization above an edit above a stabilization is depth 2", s2?.derived?.depth === 2);
+            const oO = await FX.optimizedFixture({ source: s2f.descriptor, remove: [[2, 0, 0]], sourceHash: s2f.hash, stabilizedDepth: 2 });
+            const o = (await upload(s2.id, oO.glb)).json?.model;
+            check("an optimization records the 2 stabilizations above it", o?.optimization?.stabilized_depth === 2);
+            const s3 = (await upload(o.id, (await FX.stabilizedFixture({ more: FX.freshCells(1), depth: 3 })).glb)).json?.model;
+            check("the third stabilization (above an optimization) is depth 3", s3?.derived?.depth === 3);
+            r = await upload(s3.id, (await FX.stabilizedFixture({ more: FX.freshCells(1), depth: 3 })).glb);
+            check("a fourth: 409 {error}", r.status === 409 && /at most twice/.test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
+            r = await upload(s3.id, (await FX.editedFixture({ source: s2f.descriptor, edits: [{ add: FX.freshCells(1) }], stabilizedDepth: 2 })).glb);
+            check("an edit with the wrong stabilization count above that: 400", r.status === 400 && /stabilization count/.test(r.json?.error ?? ""));
+            check("an edit with the right count is still fine above the third", (await upload(s3.id, (await FX.editedFixture({ source: s2f.descriptor, edits: [{ add: FX.freshCells(1) }], stabilizedDepth: 3, depth: 6 })).glb)).status === 201);
+
+            // 5. undo: the whole subtree goes, the files with it, the root stays
+            const keysBefore = (await projectOf(probe.id)).models.length;
+            r = await call("DELETE", `/models/${e1.id}`);
+            const after = await projectOf(probe.id);
+            check("DELETE of the first edit: 200, and the edit of it, the optimization and the stabilization made from it go too", r.status === 200 && after.models.every((m) => ![e1.id, e2.id, o1.id].includes(m.id)) && after.models.length < keysBefore, `${keysBefore} -> ${after.models.length}`);
+            check("their files are gone", (await fetch(`${BASE}${e1.glb_url}`)).status === 404 && (await fetch(`${BASE}${e2.glb_url}`)).status === 404 && (await fetch(`${BASE}${o1.glb_url}`)).status === 404);
+            check("the source and the other chain are untouched", after.models.some((m) => m.id === root) && after.models.some((m) => m.id === s3.id) && (await fetch(`${BASE}${s3.glb_url}`)).status === 200);
+            r = await upload(root, ed.glb);
+            check("the freed edit can be saved again as a new version", r.status === 201 && r.json.model.id !== e1.id);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------
+    section("limits count every kind of version together, also in parallel, and the chain is bounded");
+    {
+        const probe = await newProject("mixed caps");
+        const s = await insertSource(probe.id);
+        if (!s) {
+            note("the local database is not reachable: the mixed-kind limits are skipped");
+        } else {
+            const plain = FX.plainDescriptor();
+            const dailyBefore = await derivedToday();
+            // SRC + 4 files of all three kinds at once into one source: exactly SRC are stored
+            const makers = Array.from({ length: SRC + 4 }, (_, n) => (n % 3 === 0 ? FX.stabilizedFixture({ more: FX.freshCells(1) }) : n % 3 === 1 ? FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0 }) : FX.optimizedFixture({ source: plain, remove: [FX.ARM[n]], sourceHash: null })));
+            const files = await Promise.all(makers);
+            const outs = await Promise.all(files.map((f) => upload(s, f.glb)));
+            const kept = outs.filter((x) => x.status === 201);
+            const turned = outs.filter((x) => x.status === 429);
+            check(`${SRC + 4} parallel uploads of three kinds to one source: exactly ${SRC} are stored, 4 are 429`, kept.length === SRC && turned.length === 4, outs.map((x) => x.status).join(","));
+            check("...the refusals name the source's limit", turned.every((x) => new RegExp(`at most ${SRC}`).test(x.json?.error ?? "")));
+            check("...the stored ones are a mixture of kinds", new Set(kept.map((x) => x.json.model.kind)).size === 3, [...new Set(kept.map((x) => x.json.model.kind))].join());
+            check("...only the stored ones used a daily slot", (await derivedToday()) === dailyBefore + SRC, `${dailyBefore} -> ${await derivedToday()}`);
+            check(`${SRC} versions of a source are a full source for every kind: a further edit is refused too`, (await upload(s, (await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0 })).glb)).status === 429);
+
+            // 40 per project, counted over the three kinds
+            const full = await newProject("mixed project cap");
+            const sources = [];
+            for (let n = 0; n < 5; n++) sources.push(await insertSource(full.id));
+            for (const src of sources.slice(0, 4)) await seedVersions(full.id, src, SRC, sample.meta);
+            const lastOut = await upload(sources[4], (await FX.editedFixture({ source: plain, edits: [{ add: FX.freshCells(1) }], baseSteps: 0 })).glb);
+            check(`the ${PRJ + 1}st version of a project, an edit this time: 429 naming the project`, lastOut.status === 429 && /project/.test(lastOut.json?.error ?? ""), `${lastOut.status} ${JSON.stringify(lastOut.json)}`);
+            check("...and an optimization: 429", (await upload(sources[4], (await FX.optimizedFixture({ source: plain, remove: [[2, 0, 0]], sourceHash: null })).glb)).status === 429);
+
+            // the chain: 12 ancestors is the most
+            const chainProject = await newProject("chain depth");
+            const chainRoot = await insertSource(chainProject.id);
+            const stamp = new Date().toISOString();
+            const slim = (n) => JSON.stringify({ version: 1, target: "design", depth: n, label: "Step", summary: "x", entries: [{ n: 1, instruction: "x", summary: "x", added: 0, removed: 0, moved: 0 }], engine: "", changes: null, ops: null, notes: [], stabilized_depth: 0, base_steps: 0, job_id: null, created_at: stamp });
+            const ids = [];
+            let parent = chainRoot;
+            for (let n = 1; n <= DEPTH_LIMIT; n++) {
+                const id = crypto.randomUUID();
+                await sql(`INSERT INTO models (id, project_id, job_id, provider, prompt, glb_key, size_bytes, created_at, kind, source_model_id, assembly_hash, meta) VALUES (${q(id)}, ${q(chainProject.id)}, 'j', 'muse', 'a chair', ${q(`models/${id}.glb`)}, 10, ${q(stamp)}, 'edited', ${q(parent)}, ${q(`${n}`.padStart(64, "d"))}, ${q(slim(n))})`);
+                ids.push(id);
+                parent = id;
+            }
+            check(`a version made from the ${DEPTH_LIMIT - 1}th level (${DEPTH_LIMIT} ancestors) is accepted`, (await upload(ids[DEPTH_LIMIT - 2], (await FX.stabilizedFixture({ more: FX.freshCells(1) })).glb)).status === 201);
+            r = await upload(ids[DEPTH_LIMIT - 1], new Uint8Array(64));
+            check(`a version made from the ${DEPTH_LIMIT}th level would have ${DEPTH_LIMIT + 1} ancestors: 409 before the body is even read`, r.status === 409 && new RegExp(`${DEPTH_LIMIT} deep`).test(r.json?.error ?? ""), `${r.status} ${JSON.stringify(r.json)}`);
+            r = await call("DELETE", `/models/${ids[0]}`);
+            check("deleting the first level takes the whole chain", r.status === 200 && (await projectOf(chainProject.id)).models.length === 1);
+
+            // the mesh-edit count (the SQL B2's upload handler uses): works on the real D1, damaged meta included
+            const counted = await sql(`SELECT COUNT(*) AS n FROM models WHERE project_id = ${q(chainProject.id)} AND kind = 'edited' AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.target') END = 'mesh'`);
+            check("the mesh-edit counting SQL runs on D1", counted?.[0]?.n === 0);
+            await sql(`INSERT INTO models (id, project_id, job_id, provider, prompt, glb_key, size_bytes, created_at, kind, source_model_id, meta) VALUES (${q(crypto.randomUUID())}, ${q(chainProject.id)}, 'j', 'muse', 'p', 'k', 1, ${q(stamp)}, 'edited', ${q(chainRoot)}, 'not { json')`);
+            const damaged = await sql(`SELECT COUNT(*) AS n FROM models WHERE project_id = ${q(chainProject.id)} AND kind = 'edited' AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.target') END = 'mesh'`);
+            check("...and a row with damaged meta does not break it", damaged?.[0]?.n === 0);
         }
     }
 
@@ -539,6 +723,74 @@ async function main() {
             check("...and a generated model's glb_url is still the files URL", m.glb_url === `/api/assignment_alex/files/models/${id}.glb`);
             check("...and a model of kind generated cannot be deleted through DELETE /models/:id", (await call("DELETE", `/models/${id}`)).status === 409);
         }
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------
+    section("versions of every kind: edited and optimized rows, edit jobs, and the routes that are still stubs");
+    {
+        const probe = await newProject("version kinds");
+        const root = await insertSource(probe.id);
+        const stamp = new Date().toISOString();
+        const editSlim = (target, extra = {}) => JSON.stringify({ version: 1, target, depth: 1, label: "Taller back", summary: "Made the back taller.", entries: [{ n: 1, instruction: "make the back taller", summary: "Made the back taller.", added: 0, removed: 0, moved: 1 }], engine: "meta/muse-spark-1.3-contributor", changes: null, ops: null, notes: [], stabilized_depth: 0, base_steps: 0, job_id: null, created_at: stamp, ...extra });
+        const optSlim = JSON.stringify({ version: 1, title: "Lightest stable", goal: "Lightest", objective: ["blocks"], stop: "converged", shape_changed: false, stabilized_depth: 0, removed: 5, added: 0, before: { blocks: 26, weight_kg: 62, errors: 0, warnings: 0, floating_blocks: 0, over_limit: 0, longest_cantilever: 3, cog_margin_mm: 40, max_utilisation: 0.3, max_deflection_um: 12 }, after: { blocks: 21, weight_kg: 50, errors: 0, warnings: 0, floating_blocks: 0, over_limit: 0, longest_cantilever: 3, cog_margin_mm: 40, max_utilisation: 0.4, max_deflection_um: 14 }, iterations: 4, solves: 9, duration_ms: 120, solver: "awatif-ts", material: "concrete", created_at: stamp });
+        const [eDesign, eVoxel, opt, stab] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+        const row = (id, source, kind, provider, meta, hash) => `(${q(id)}, ${q(probe.id)}, ${q(crypto.randomUUID())}, ${q(provider)}, 'a chair', ${q(`models/${id}.glb`)}, 1000, 3, ${q(stamp)}, ${q(kind)}, ${q(source)}, ${q(hash)}, ${q(meta)})`;
+        const inserted = await sql(
+            `INSERT INTO models (id, project_id, job_id, provider, prompt, glb_key, size_bytes, part_count, created_at, kind, source_model_id, assembly_hash, meta) VALUES
+             ${row(eDesign, root, "edited", "muse", editSlim("design"), "d1")},
+             ${row(eVoxel, eDesign, "edited", "editor", editSlim("voxel"), "v1")},
+             ${row(opt, eVoxel, "optimized", "optimizer", optSlim, "o1")},
+             ${row(stab, eDesign, "stabilized", "stabilizer", JSON.stringify(sample.meta), "s1")}`,
+        );
+        const jobId = crypto.randomUUID();
+        const doneJob = crypto.randomUUID();
+        if (inserted === null) note("the local database is not reachable: the version-kind rows are not checked");
+        else {
+            const plan = JSON.stringify({ target: "mesh", applied: true, summary: "Stretched the backrest.", notes: [], program: { summary: "Stretched the backrest.", applied: true, ops: [] } });
+            await sql(
+                `INSERT INTO jobs (id, project_id, provider, via, prompt, status, progress, stage, created_at, updated_at, finished_at, model_id, kind, source_model_id, edit_target, plan) VALUES
+                 (${q(jobId)}, ${q(probe.id)}, 'muse', 'openrouter', 'make the back taller', 'succeeded', 100, 'Plan ready', ${q(stamp)}, ${q(stamp)}, ${q(stamp)}, NULL, 'edit', ${q(root)}, 'mesh', ${q(plan)}),
+                 (${q(doneJob)}, ${q(probe.id)}, 'muse', 'openrouter', 'make the back taller', 'succeeded', 100, 'Done', ${q(stamp)}, ${q(stamp)}, ${q(stamp)}, ${q(eDesign)}, 'edit', ${q(root)}, 'design', ${q(plan.replace('"mesh"', '"design"'))})`,
+            );
+            const detail = await projectOf(probe.id);
+            const by = Object.fromEntries(detail.models.map((m) => [m.id, m]));
+            check("an edited row carries its EditMeta, a voxel one too, and nothing else is filled", by[eDesign].kind === "edited" && by[eDesign].edit?.target === "design" && by[eDesign].edit.label === "Taller back" && by[eDesign].derived === null && by[eDesign].optimization === null && by[eVoxel].edit?.target === "voxel");
+            check("an optimized row carries its OptimizeSummary", by[opt].kind === "optimized" && by[opt].optimization?.title === "Lightest stable" && by[opt].optimization.after.blocks === 21 && by[opt].edit === null && by[opt].derived === null);
+            check("a stabilized row still carries its log and no edit record", by[stab].derived?.assembly_hash === sample.meta.assembly_hash && by[stab].edit === null && by[stab].optimization === null);
+            check("a generated row has no version records", by[root].edit === null && by[root].optimization === null && by[root].derived === null);
+            check("every model of the project names its source (the tree)", by[eDesign].source_model_id === root && by[eVoxel].source_model_id === eDesign && by[opt].source_model_id === eVoxel);
+            const planReady = detail.jobs.find((j) => j.id === jobId);
+            const finished = detail.jobs.find((j) => j.id === doneJob);
+            check("an edit job is kind edit with its source and target", planReady.kind === "edit" && planReady.edit?.source_model_id === root && planReady.edit.target === "mesh" && finished.kind === "edit" && finished.edit.target === "design");
+            check("the project payload carries the plan only of a mesh job without a model (Plan ready, apply?)", planReady.edit.result?.summary === "Stretched the backrest." && finished.edit.result === null && finished.model?.id === eDesign);
+            r = await call("GET", `/jobs/${doneJob}`);
+            check("GET /jobs/:id always carries the result", r.status === 200 && r.json.job.kind === "edit" && r.json.job.edit.result?.target === "design", JSON.stringify(r.json)?.slice(0, 200));
+            const plain = detail.jobs.find((j) => j.kind === "generate");
+            check("a generation job is kind generate with no edit", plain === undefined || (plain.edit === null && plain.kind === "generate"));
+            // Undo of a version takes its whole subtree, whatever the kinds are.
+            r = await call("DELETE", `/models/${eDesign}`);
+            const left = (await projectOf(probe.id)).models.map((m) => m.id);
+            check("DELETE of an edited version: 200, and the voxel edit, the optimization and the stabilization made from it go too", r.status === 200 && left.length === 1 && left[0] === root, left.join());
+            check("DELETE of the same version again: 404", (await call("DELETE", `/models/${eDesign}`)).status === 404);
+            check("DELETE of a root is still 409", (await call("DELETE", `/models/${root}`)).status === 409);
+        }
+        // The routes the other features fill in answer 501 until they land (and keep their method and id checks).
+        const probeId = root ?? UNKNOWN_ID;
+        const json = { "content-type": "application/json" };
+        for (const [what, method, path, body] of [
+            ["start an edit", "POST", `/models/${probeId}/edits`, "{}"],
+            ["upload an edited mesh", "POST", `/models/${probeId}/edited?job=${UNKNOWN_ID}`, new Uint8Array(4)],
+            ["ask for block operations", "POST", "/llm/voxel-edit", "{}"],
+            ["ask for an optimization spec", "POST", "/llm/optimize-spec", "{}"],
+        ]) {
+            r = await call(method, path, body, what === "upload an edited mesh" ? GLB : json);
+            if (r.status !== 501) note(`${what}: ${r.status} (the stub from the foundation commit has been replaced)`);
+            else check(`${what}: 501 {error} until its handler lands`, typeof r.json?.error === "string");
+        }
+        check("GET /llm/voxel-edit is 405 with Allow: POST", await call("GET", "/llm/voxel-edit").then((x) => x.status === 405 && /POST/.test(x.headers.get("allow") ?? "")));
+        check("GET /models/:id/edits is 405", (await call("GET", `/models/${probeId}/edits`)).status === 405);
+        check("an unknown /llm path is 404", (await call("POST", "/llm/other", "{}", json)).status === 404);
+        check("/llm alone is 404", (await call("POST", "/llm", "{}", json)).status === 404);
     }
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -706,6 +958,30 @@ async function examples() {
         const forked = await upload(stab.id, (await variant({ more: freshCells(), depth: 2 })).glb);
         check("the stabilized twin can be stabilized again (depth 2)", forked.status === 201, `${forked.status} ${JSON.stringify(forked.json)?.slice(0, 200)}`);
         check("...a version of the original: its depth-1 log is accepted", (await upload(orig.id, (await fresh(1)).glb)).status === 201);
+        // The twin can be edited by words and optimized too (its file is shipped with the site: nothing of it is ever written or deleted in R2).
+        {
+            const twin = readAssemblyGlb(await readBack(stab), null);
+            const occupied = new Set(FX.blocksOf(twin.descriptor).map((b) => FX.codeOf(b.cell)));
+            const free = [];
+            for (const b of [...FX.blocksOf(twin.descriptor)].sort((a, c) => c.cell[2] - a.cell[2])) {
+                for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const cell = [b.cell[0] + di, b.cell[1] + dj, b.cell[2]];
+                    if (cell.every((v) => v >= 0 && v <= 9) && !occupied.has(FX.codeOf(cell)) && !free.some((c) => c.join() === cell.join()) && free.length < 2) free.push(cell);
+                }
+            }
+            const edit = await FX.editedFixture({ source: twin.descriptor, edits: [{ add: free, instruction: "add a ledge", summary: "Added a ledge." }], stabilizedDepth: 1, depth: 2 });
+            const edited = await upload(stab.id, edit.glb);
+            check("the stabilized twin can be edited by words: 201, kind edited, depth 2 (twin and original above it), base steps from the twin", edited.status === 201 && edited.json.model.kind === "edited" && edited.json.model.edit.depth === 2 && edited.json.model.edit.base_steps === twin.meta.steps.length && edited.json.model.edit.stabilized_depth === 1, `${edited.status} ${JSON.stringify(edited.json)?.slice(0, 240)}`);
+            const optimize = await FX.optimizedFixture({ source: edit.descriptor, remove: [FX.blocksOf(edit.descriptor).find((b) => b.role === "original").cell], sourceHash: edit.hash, stabilizedDepth: 1 });
+            const optimized = await upload(edited.json.model.id, optimize.glb);
+            check("...and the edit optimized: 201, kind optimized", optimized.status === 201 && optimized.json.model.kind === "optimized", `${optimized.status} ${JSON.stringify(optimized.json)?.slice(0, 200)}`);
+            const fromTwin = await upload(stab.id, (await FX.optimizedFixture({ source: twin.descriptor, remove: [FX.blocksOf(twin.descriptor).find((b) => b.role === "original").cell], sourceHash: twin.meta.assembly_hash, stabilizedDepth: 1 })).glb);
+            check("...the twin itself optimized (its cell hash is the source hash): 201", fromTwin.status === 201, `${fromTwin.status} ${JSON.stringify(fromTwin.json)?.slice(0, 200)}`);
+            const del = await call("DELETE", `/models/${edited.json.model.id}`);
+            const left = (await projectOf(made.id)).models.map((m) => m.id);
+            check("deleting the edit takes the optimization with it and leaves the twin and its shared file", del.status === 200 && !left.includes(edited.json.model.id) && !left.includes(optimized.json.model.id) && left.includes(stab.id) && (await fetch(`${BASE}${stab.glb_url}`)).status === 200);
+            await call("DELETE", `/models/${fromTwin.json.model.id}`);
+        }
         check("...the original example model itself cannot be deleted: 409", (await call("DELETE", `/models/${orig.id}`)).status === 409);
         check("deleting the stabilized twin removes the row (and its derived version) but not the shared file", await (async () => {
             const del = await call("DELETE", `/models/${stab.id}`);

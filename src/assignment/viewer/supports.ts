@@ -9,13 +9,16 @@
 // mmToDisplay the block view uses and lands on the mesh.
 import type { AnalysisResult, AnalysisSettings, AnalysisTransform, Block, Vec3 } from "../analysis/types.ts";
 import { ROLE_HEX } from "../shared/assembly.ts";
-import { BLOCK_ROLES, type AddedRole } from "../shared/contract.ts";
+import { BLOCK_ROLES, type AddedRole, type BlockRole } from "../shared/contract.ts";
 import { ROLE_LABELS, mmToDisplay } from "./analysisGeometry.ts";
 
 // ---------- which blocks ----------
 
-/** A block the stabilizer added: it has a role and the role is not "original". */
-export const isAddedBlock = (block: Pick<Block, "role">): boolean => !!block.role && block.role !== "original";
+/** A role the stabilizer (or the optimizer, as "reinforcement") adds: not "original" and not "user" (blocks the person's edits made). */
+export const isSupportRole = (role: BlockRole | undefined): role is AddedRole => !!role && role !== "original" && role !== "user";
+
+/** A block the stabilizer added: it has a role and the role is not "original" or "user". */
+export const isAddedBlock = (block: Pick<Block, "role">): boolean => isSupportRole(block.role);
 
 /** Indices (into `AnalysisResult.blocks`) of the added blocks, ascending. */
 export function addedBlockIndices(blocks: readonly Pick<Block, "role">[]): number[] {
@@ -94,12 +97,12 @@ export interface SupportCount {
 export function supportCounts(blocks: readonly Pick<Block, "role">[]): SupportCount[] {
     const counts = new Map<AddedRole, number>();
     for (const block of blocks) {
-        if (!block.role || block.role === "original") continue;
+        if (!isSupportRole(block.role)) continue;
         counts.set(block.role, (counts.get(block.role) ?? 0) + 1);
     }
     const out: SupportCount[] = [];
     for (const role of BLOCK_ROLES) {
-        if (role === "original") continue;
+        if (!isSupportRole(role)) continue;
         const count = counts.get(role) ?? 0;
         if (count > 0) out.push({ role, count, label: `${count} ${ROLE_NOUNS[role][count === 1 ? 0 : 1]}`, color: ROLE_HEX[role] });
     }
@@ -140,7 +143,7 @@ export interface SupportInfo {
  * is numbered in the run on screen from 1 (as analysisGeometry.addedWhen does for the block view). Null for an original block.
  */
 export function describeSupport(block: Block, settings: Pick<AnalysisSettings, "blockSizeMm">, stepOffset = 0): SupportInfo | null {
-    if (!isAddedBlock(block) || !block.role || block.role === "original") return null;
+    if (!isSupportRole(block.role)) return null;
     const role = block.role;
     const roleLabel = ROLE_LABELS[role];
     const own = (block.step ?? stepOffset + 1) - stepOffset;

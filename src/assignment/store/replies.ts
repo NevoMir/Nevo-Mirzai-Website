@@ -29,6 +29,22 @@ export function replyContent(
 const running = (job: Job): boolean => job.status === "queued" || job.status === "running" || job.status === "finalizing";
 
 /**
+ * The line for a change of a design or a mesh, worded for how the job stands. An edit has one job, run by one model: the reply says whether
+ * the model made the change, planned it (a mesh edit waits for the browser to apply it), declined it, or failed.
+ */
+export function editReplyLine(job: Job, providers: readonly ProviderInfo[] | undefined): string {
+    const who = bold(providers, job.provider);
+    if (job.status === "succeeded") {
+        if (job.model) return `Changed with ${who}.`;
+        const result = job.edit?.result ?? null;
+        if (result && !result.applied) return `${who} could not make that change.`;
+        return `${who} planned the change.`;
+    }
+    if (job.status === "canceled") return `Stopped ${who}.`;
+    return `${who} could not make this change.`;
+}
+
+/**
  * What to show for a saved reply, given the jobs it points at (those that still exist). While any is
  * running the saved text stands; once all have ended, the line says how it went.
  */
@@ -38,6 +54,7 @@ export function replyLine(
     providers: readonly ProviderInfo[] | undefined,
 ): string {
     if (jobs.length === 0 || jobs.some(running)) return content;
+    if (jobs.length === 1 && jobs[0].kind === "edit") return editReplyLine(jobs[0], providers);
     const names = joinNames(jobs.map((job) => bold(providers, job.provider)));
     const made = jobs.filter((job) => job.status === "succeeded").length;
     if (jobs.length === 1) {

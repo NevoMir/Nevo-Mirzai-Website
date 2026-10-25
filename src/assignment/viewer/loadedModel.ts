@@ -4,8 +4,10 @@
 // viewer is torn down or the component goes away, the handle is retired and reading it THROWS: an empty triangle
 // soup would look like a valid (empty) model, and the analysis of it, "No blocks", would be cached and saved as if
 // it were the model's verdict.
+import type { PartSoup } from "../analysis/partLabels.ts";
 import type { LoadedModel } from "../analysis/types.ts";
 import type { AssemblyDescriptor } from "../shared/assembly.ts";
+import { partSoupsOf } from "./partSoups.ts";
 
 export interface ModelHandle {
     model: LoadedModel;
@@ -35,4 +37,13 @@ export function createModelHandle(url: string, read: () => Float32Array | null, 
             return was;
         },
     };
+}
+
+/**
+ * The model cut into its glTF parts (one triangle soup each, in the same frame as extractTriangles), for labelling the blocks by part
+ * (analysis/partLabels.ts). Null when the handle was not made over a viewer scene. Reads the model like extractTriangles does: it THROWS
+ * once the handle is retired.
+ */
+export function partSoupsOfModel(model: LoadedModel): PartSoup[] | null {
+    return partSoupsOf(model.extractTriangles().positions);
 }

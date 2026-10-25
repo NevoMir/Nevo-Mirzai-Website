@@ -5,7 +5,8 @@
 // reports and what the panel and the viewer read. Pure rules live in analysisLogic.ts.
 //
 // Two results can be on the stage: `result` (the model's own analysis, which the report panel always reads) and the
-// `preview` (the stabilizer's work in progress, store/stabilize.ts). stageResultOf says which one the viewer draws; block
+// `preview` (the work in progress of the stabilizer, a block edit or the optimizer; each puts it there under its own name, and
+// takes off only its own). stageResultOf says which one the viewer draws; block
 // numbers differ between them, so a pick made against the report is translated by grid cell (mapBlockIndices). Which VERSION of
 // a model is on the stage is not decided here: the top bar's Original | Stabilized switch changes the active model
 // (components/workspace/versionActions.ts), and the analysis follows it.
@@ -40,6 +41,7 @@ import {
     selectionView,
     stageResultOf,
     stepBlocks,
+    type PreviewOwner,
     type PreviewState,
     type RunState,
     type SelectionState,
@@ -155,7 +157,7 @@ interface AnalysisState {
      * stabilizer's live preview forces its own (the role colours).
      */
     colorChoice: AnalysisColorBy;
-    /** The stabilizer's work in progress (store/stabilize.ts), drawn instead of `result` while it is for the model on screen. */
+    /** The work in progress of the stabilizer, a block edit or the optimizer, drawn instead of `result` while it is for the model on screen. */
     preview: PreviewState | null;
     selection: AnalysisSelection | null;
     /** The stabilizer step whose blocks are shown (a timeline click), else null. */
@@ -204,8 +206,11 @@ interface AnalysisState {
      * point shows the heat map the point belongs to instead of a highlight on status colours.
      */
     showStress: () => void;
-    /** The stabilizer's work in progress for `modelId`; null removes it. */
-    setPreview: (modelId: string, result: AnalysisResult | null) => void;
+    /**
+     * The work in progress of `owner` for `modelId` (the stabilizer by default). A result puts it on the stage in place of whatever preview
+     * there was; null takes it off, but only when it is `owner`'s own: a store never clears another store's picture.
+     */
+    setPreview: (modelId: string, result: AnalysisResult | null, owner?: PreviewOwner) => void;
     setLayerMax: (layerMax: number) => void;
     setShowGhost: (show: boolean) => void;
     setShowCog: (show: boolean) => void;
@@ -330,10 +335,12 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
         if (s.preview !== null && s.preview.modelId === s.resultModelId) return;
         get().setColorBy("stress");
     },
-    setPreview: (modelId, result) =>
+    setPreview: (modelId, result, owner = "stabilize") =>
         set((s) => {
             if (!s.preview && !result) return {};
-            const preview = result ? { modelId, result } : null;
+            // Not another store's picture.
+            if (!result && s.preview && s.preview.owner !== owner) return {};
+            const preview: PreviewState | null = result ? { modelId, result, owner } : null;
             // Entering or leaving the preview changes whose block numbers the pick refers to; inside it, a step
             // selection follows the growing assembly (its blocks move up in the list as blocks are added).
             const entering = !s.preview !== !preview;

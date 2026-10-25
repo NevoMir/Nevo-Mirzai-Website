@@ -9,7 +9,7 @@ import { plural, type Verdict } from "@/assignment/store/analysisLogic";
 
 /** What the line says about a model's stability, as words: "Stable · 237 blocks", "2 problems · open stability check", "Check stability". */
 function stabilityLineText(verdict: Verdict | null, analysing: boolean, lead: string | null = null): string {
-    // A stabilized version leads with what the stabilizer added; its block count is that, so it is not repeated.
+    // A version leads with what it did (the blocks the stabilizer added, the weight saved); its block count is not repeated.
     const state = verdict
         ? verdict.kind === "pass"
             ? lead
@@ -40,7 +40,7 @@ export function StabilityLine({ model, lead = null }: { model: Pick<ModelAsset, 
             data-testid="verdict-line"
             data-verdict={verdict?.kind ?? "none"}
             aria-label={
-                verdict ? `${lead ? "Stabilized version" : "Stability"}: ${text}. Open the stability check.` : "Check the stability of this model in the Stability tab"
+                verdict ? `${lead ? "This version" : "Stability"}: ${text}. Open the stability check.` : "Check the stability of this model in the Stability tab"
             }
             className={cn(
                 "group flex w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-xs transition-colors",

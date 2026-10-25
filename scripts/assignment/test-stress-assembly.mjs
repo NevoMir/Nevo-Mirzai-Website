@@ -96,7 +96,7 @@ await test("original-only subset: the stabilized model's source blocks analyse o
     assert.equal(orig.blocks.length, base.length);
     assert.equal(full.stats.overLimitCount, 0);
     assert.ok(orig.stats.overLimitCount > 0, "the original still has its long arm");
-    assert.deepEqual(full.assembly.roleCounts, [base.length, 5, 0, 0, 0, 0]);
+    assert.deepEqual(full.assembly.roleCounts, [base.length, 5, 0, 0, 0, 0, 0]);
     // Inside the stabilized model's frame the subset keeps the whole's transform (so the stage does not jump between views).
     const soup = { min: [0.01, -0.99, 0.005], max: [0.89, -0.01, 0.595] };
     const whole = asm.analyzeAssembly(desc, soup, settings);
@@ -398,7 +398,7 @@ await test("report: stress block, assembly counts, per-block role/step/utilisati
     assert.equal(json.version, 1);
     assert.equal(json.model.modelName, "Shelf"); assert.equal(json.model.derived, undefined, "the log is its own key, not part of model");
     assert.deepEqual(json.stabilization, { marker: "log" });
-    assert.deepEqual(json.assembly, { blocks: blocks.length, added_blocks: 5, steps: 1, role_counts: { original: SHAPES.shelfArm.length, column: 5, footing: 0, bracket: 0, bridge: 0, reinforcement: 0 } });
+    assert.deepEqual(json.assembly, { blocks: blocks.length, added_blocks: 5, steps: 1, role_counts: { original: SHAPES.shelfArm.length, column: 5, footing: 0, bracket: 0, bridge: 0, reinforcement: 0, user: 0 } });
     assert.equal(json.stress.load_case, "self-weight");
     assert.equal(json.stress.material.id, "concrete"); assert.equal(json.stress.material.joint_tension_mpa, 0.2); assert.equal(json.stress.material.density_kg_m3, 2400);
     assert.deepEqual(json.stress.thresholds, { warn: 0.75, fail: 1 });

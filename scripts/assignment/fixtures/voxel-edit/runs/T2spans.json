@@ -1,0 +1,19 @@
+{
+ "id": "T2",
+ "variant": "spans",
+ "rec": {
+  "tag": "T2spans",
+  "status": 200,
+  "ms": 7457,
+  "finish": "stop",
+  "prompt_tokens": 2541,
+  "completion_tokens": 894,
+  "reasoning_tokens": 733,
+  "cost": 0.0004329,
+  "system_chars": 4674,
+  "user_chars": 2042
+ },
+ "content": "{\"clarification\": \"\", \"notes\": \"\", \"ops\": [{\"amount\": null, \"at\": null, \"axis\": null, \"box\": [2, 2, 0, 2, 2, 1], \"dirs\": null, \"include_added\": false, \"offset\": null, \"op\": \"add\", \"plane\": null, \"region\": null, \"wall\": null}], \"summary\": \"Added a 2-block column under the front left seat corner at i2 j2 k0-1.\"}",
+ "user": "MODEL: pencil-leg-chair (stabilized). GRID 10x10x10, one block = 100 mm. A cell is (i,j,k).\nAXES (as seen in the app's Front view): i = left->right (i=0 is the LEFT side, i=9 the RIGHT). j = depth (j=0 is the FRONT, nearest the viewer; j=9 is the BACK). k = height (k=0 rests on the ground, k=9 is the top).\nCURRENT STATE: blocks 103, separate structures 1, floating blocks 0, longest cantilever 4 blocks (limit 4), over the limit 0; centre of gravity inside the base, margin 136 mm; peak joint stress 69% of allowable (0 blocks over 100%).\nISSUES: none.\nROOM (empty blocks the model can still grow into): left(-i) 2, right(+i) 2, front(-j) 2, back(+j) 2, up(+k) 0 (it already reaches the top of the grid).\nPARTS (names come from the model; letter = region id; trust the cell ranges, not the words left/right in a name):\nA \"Legs\": 12 blocks, i2-7 j2-7 k1-9\nB \"Seat frame\": 30 blocks, i2-7 j2-6 k4\nC \"Seat cushion\": 30 blocks, i2-7 j2-6 k5\nD \"Backrest\": 14 blocks, i2-7 j7 k7-9\nPIECES (region ids for blocks that are not in a named part):\nc1 column box: i2-3 j6 k1-2 (4)\nc2 column box: i7 j6 k0-2 (3)\nc3 column box: i7 j2 k0-1 (2)\nc4 column box: i2 j7 k5-6 (2)\nc5 column box: i6 j7 k5-6 (2)\nc6 column box: i2 j6 k0 (1)\nc7 column box: i3 j6 k3 (1)\ng1 bridge box: i4 j7 k5-6 (2)\nCOLUMNS (each occupied (i,j) with its vertical runs: glyph + k range). Glyphs: # = model block without a part, c = column, f = footing, b = bracket, g = bridge, r = reinforcement, u = user-added, . = empty.\n(2,2) A2-3 B4 C5\n(3,2) B4 C5\n(4,2) B4 C5\n(5,2) B4 C5\n(6,2) B4 C5\n(7,2) c0-1 A2-3 B4 C5\n(2,3) B4 C5\n(3,3) B4 C5\n(4,3) B4 C5\n(5,3) B4 C5\n(6,3) B4 C5\n(7,3) B4 C5\n(2,4) B4 C5\n(3,4) B4 C5\n(4,4) B4 C5\n(5,4) B4 C5\n(6,4) B4 C5\n(7,4) B4 C5\n(2,5) B4 C5\n(3,5) B4 C5\n(4,5) B4 C5\n(5,5) B4 C5\n(6,5) B4 C5\n(7,5) B4 C5\n(2,6) c0-2 A3 B4 C5\n(3,6) c1-3 B4 C5\n(4,6) B4 C5\n(5,6) B4 C5\n(6,6) B4 C5\n(7,6) c0-2 A3 B4 C5\n(2,7) A1 c5-6 A7 D8 A9\n(3,7) D7-9\n(4,7) g5-6 D7-9\n(5,7) D7-9\n(6,7) c5-6 D7-9\n(7,7) A1 A7 D8 A9\n\nINSTRUCTION: \"add a column under the front left corner of the seat\"",
+ "err": null
+}

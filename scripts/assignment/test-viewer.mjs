@@ -2664,7 +2664,7 @@ await test("fixtures: the arm is overstressed, the stabilized model is not, and 
     assert.ok(ORIGINAL.stress.maxUtilisation > 1.4, "overstressed");
     assert.ok(STABILIZED.stress.maxUtilisation < geom.STRESS_WARN_SHARE, "stabilized");
     assert.equal(STABILIZED.blocks.length, ARM.length + ADDED.length);
-    assert.deepEqual(STABILIZED.assembly.roleCounts, [12, 5, 0, 1, 0, 0]);
+    assert.deepEqual(STABILIZED.assembly.roleCounts, [12, 5, 0, 1, 0, 0, 0]);
     near(ONLY_ORIGINAL.stress.maxUtilisation, ORIGINAL.stress.maxUtilisation, 1e-6, "the original subset");
 });
 
@@ -2740,7 +2740,7 @@ await test("roles: original blocks are the theme's slate, each added role has on
     assert.equal(geom.roleColor("original", "light"), geom.statusColor("supported", "light"));
     assert.equal(geom.roleColor("original", "dark"), geom.statusColor("supported", "dark"));
     assert.notEqual(geom.roleColor("original", "light"), geom.roleColor("original", "dark"));
-    const hues = { column: "#f59e0b", footing: "#8b5cf6", bracket: "#22c55e", bridge: "#06b6d4", reinforcement: "#ec4899" };
+    const hues = { column: "#f59e0b", footing: "#8b5cf6", bracket: "#22c55e", bridge: "#06b6d4", reinforcement: "#ec4899", user: "#0ea5e9" };
     for (const [role, hex] of Object.entries(hues)) {
         assert.equal(geom.roleColor(role, "light"), hex, role);
         assert.equal(geom.roleColor(role, "dark"), hex, role);
@@ -2749,17 +2749,19 @@ await test("roles: original blocks are the theme's slate, each added role has on
     const ctx = { theme: "dark", limit: 4, layers: 6 };
     for (const b of STABILIZED.blocks) assert.equal(geom.blockColor(b, "role", ctx), geom.roleColor(b.role, "dark"));
     assert.equal(geom.blockColor({ ...STABILIZED.blocks[0], role: undefined }, "role", ctx), geom.roleColor("original", "dark"), "a mesh's blocks have no role: original");
-    assert.deepEqual(geom.countByRole(STABILIZED.blocks), { original: 12, column: 5, footing: 0, bracket: 1, bridge: 0, reinforcement: 0 });
+    assert.deepEqual(geom.countByRole(STABILIZED.blocks), { original: 12, column: 5, footing: 0, bracket: 1, bridge: 0, reinforcement: 0, user: 0 });
     assert.equal(geom.ROLE_LABELS.column, "Column");
     assert.equal(geom.ROLE_PLURALS.original, "Original blocks");
     assert.equal(geom.ROLE_LABELS.reinforcement, "Thicker joint");
     assert.equal(geom.ROLE_PLURALS.reinforcement, "Thicker joints");
     assert.equal(geom.ROLE_PLURALS.footing, "Footings");
+    assert.equal(geom.ROLE_LABELS.user, "Your edit");
+    assert.equal(geom.ROLE_PLURALS.user, "Your edits");
     // The legend, the parts list and the panel say the roles with one set of words; only the GLB's node names (the file keeps them) are older.
     assert.deepEqual(geom.ROLE_PLURALS, vocab.ROLE_WORDS, "the legend and the panel name the roles alike");
     assert.deepEqual(geom.STATUS_LABELS, vocab.STATUS_WORDS);
     assert.deepEqual(geom.COLOR_MODE_LABELS, vocab.COLOR_WORDS);
-    assert.deepEqual(Object.values(sharedAssembly.ROLE_NODE_NAMES), ["Original blocks", "Columns", "Footing", "Brackets", "Bridges", "Reinforcement"], "the stored files keep their node names: renaming them would break reading a saved model");
+    assert.deepEqual(Object.values(sharedAssembly.ROLE_NODE_NAMES), ["Original blocks", "Columns", "Footing", "Brackets", "Bridges", "Reinforcement", "Your edits"], "the stored files keep their node names: renaming them would break reading a saved model");
 });
 
 await test("the colouring the stage uses: the view's, unless the result cannot do it; a preview is in role colours", () => {
@@ -3029,10 +3031,16 @@ await test("an assembly's GLB shows as its roles in the parts list (names, colou
         [["p8", "Footings"], ["p9", "Thicker joints"]],
         "the pick ids are the rows' identity; only the shown name changes",
     );
-    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED_DESC), { original: 12, added: 6 });
-    assert.deepEqual(assemblyParts.assemblyCounts(ORIGINAL_DESC), { original: 12, added: 0 });
+    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED_DESC), { original: 12, added: 6, edited: 0 });
+    assert.deepEqual(assemblyParts.assemblyCounts(ORIGINAL_DESC), { original: 12, added: 0, edited: 0 });
     assert.equal(assemblyParts.roleOfPart("Columns"), "column");
     assert.equal(assemblyParts.roleOfPart("Gear"), undefined);
+    // The blocks of a person's own edit are counted on their own: they were not added by a stabilizer step.
+    const edited = sharedAssembly.descriptorFromBlocks([...Array.from({ length: 4 }, (_, k) => ({ cell: [0, 0, k] })), { cell: [1, 0, 0], role: "column", step: 1 }, { cell: [2, 0, 0], role: "user", step: 2 }, { cell: [3, 0, 0], role: "user", step: 2 }]);
+    assert.deepEqual(assemblyParts.assemblyCounts(edited), { original: 4, added: 1, edited: 2 });
+    assert.equal(assemblyParts.assemblyNote({ added: 1, edited: 2 }), " (1 added, 2 from your edits)");
+    assert.equal(assemblyParts.assemblyNote({ added: 0, edited: 2 }), " (2 from your edits)");
+    assert.equal(assemblyParts.assemblyNote({ added: 0, edited: 0 }), "");
 
     // Explode moves the roles apart and back without leaving anything behind; the triangles (what the analysis reads) are the same.
     const soup0 = scene.extractTriangles();
@@ -3783,7 +3791,7 @@ await test("the block view of a stabilized result over its source mesh: the ghos
     t.hook.unmount();
     source.geometry.dispose();
     // The numbers the stage names a stabilized model by when the model on stage is a mesh come from the result's assembly.
-    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED.assembly.descriptor), { original: 12, added: 6 });
+    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED.assembly.descriptor), { original: 12, added: 6, edited: 0 });
 });
 
 // ---------- fixes found in review (V1-V5) ----------

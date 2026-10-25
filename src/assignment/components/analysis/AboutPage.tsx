@@ -88,6 +88,23 @@ export function AboutPage({ model, result }: { model: ModelAsset | null; result:
                 </p>
             </Section>
 
+            <Section title="What the AI editor does">
+                <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="analysis-editor-note">
+                    When you describe a change in words, your words are sent to Muse Spark, an AI model made by Meta and reached through OpenRouter. For a change to a
+                    fused mesh, three pictures of the model go with them. It answers with a short list of edits; they are checked, then made on a copy, so the version
+                    you started from stays as it was. This is the &ldquo;contributor&rdquo; offering of the model: its maker may use the words and pictures sent to it to
+                    improve its models, as it may with a model you generate.
+                </p>
+            </Section>
+
+            <Section title="What the optimizer does">
+                <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="analysis-optimizer-note">
+                    The optimizer takes blocks away, or adds some, a small group at a time. After each group it checks the whole structure again and keeps the change
+                    only if every limit still holds. Like the strength estimate it counts only the structure&apos;s own weight and assumes perfectly bonded joints. It is
+                    an estimate, not a certificate.
+                </p>
+            </Section>
+
             <Section title="What the stabilizer does">
                 <p className="text-[11px] leading-relaxed text-muted-foreground">{DEFINITIONS.find((d) => d.key === "stabilizer")?.text}</p>
                 {meta && (

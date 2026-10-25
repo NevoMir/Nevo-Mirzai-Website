@@ -10,7 +10,6 @@ import { useFocusOnEnd } from "@/assignment/components/analysis/useFocusOnEnd";
 import { Button } from "@/assignment/components/ui/button";
 import { toast } from "@/assignment/components/ui/sonner";
 import { addedBlocksLabel } from "@/assignment/components/workspace/format";
-import { stabilizedTarget } from "@/assignment/components/workspace/versionLogic";
 import { cn } from "@/assignment/lib/utils";
 import type { DerivedMeta, ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
@@ -19,6 +18,7 @@ import { useStabilizeStore } from "@/assignment/store/stabilize";
 import { partialHeadline, stabilizeOffer } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 import { versionFamily } from "@/assignment/store/versions";
+import { workBusyMessage } from "@/assignment/store/workGuard";
 
 /** 44 px on a phone, 40 beside a mouse: the one button of the action. */
 const primary = "h-11 w-full gap-2 text-sm font-medium md:h-10";
@@ -160,13 +160,17 @@ export function StabilizeAction({ model, result, verdict, analysing, compact = f
     const savedModelId = useStabilizeStore((s) => s.savedModelId);
     const endedAt = useStabilizeStore((s) => s.endedAt);
     const [optionsOpen, setOptionsOpen] = useState(false);
-    // The version the bar's "Stabilized" half opens: the one seen last, else the newest of the family.
-    const offer = stabilizeOffer({ model, models, result, verdict, analysing, opens: stabilizedTarget(versionFamily(models, model.id)) });
+    // The version the bar's right half opens: the one seen last, else the newest of the family (the card only offers it when it is stabilized).
+    const offer = stabilizeOffer({ model, models, result, verdict, analysing, opens: versionFamily(models, model.id)?.head ?? null });
     const version = model.kind === "stabilized" && model.derived !== null ? model.derived : null;
     if (!offer && !version) return null;
 
     const run = () => {
-        if (!start(model, result)) toast.error("Could not start", { description: "Another run is going, or the model has no blocks." });
+        if (!start(model, result)) {
+            toast.error("Could not start", {
+                description: workBusyMessage("stabilize", useWorkspaceStore.getState().activeProjectId) ?? "Another run is going, or the model has no blocks.",
+            });
+        }
     };
     // A run that was saved a moment ago, and this is its version: the row takes the focus.
     const justSaved = status === "saved" && savedModelId === model.id ? endedAt : null;

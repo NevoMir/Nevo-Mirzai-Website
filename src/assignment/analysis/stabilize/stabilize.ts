@@ -96,8 +96,8 @@ interface Prepared {
     env: MeasureEnv;
 }
 
-/** A solver handle that falls back to the TypeScript solver for good if the WASM one throws (the module is dead then). */
-function resilient(real: SolverHandle): SolverHandle {
+/** A solver handle that falls back to the TypeScript solver for good if the WASM one throws (the module is dead then). The optimizer uses it too. */
+export function resilient(real: SolverHandle): SolverHandle {
     let backend = real.backend;
     return {
         get backend() {
