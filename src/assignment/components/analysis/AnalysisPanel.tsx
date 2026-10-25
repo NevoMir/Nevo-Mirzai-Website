@@ -11,6 +11,7 @@ import { PanelHeader } from "@/assignment/components/analysis/PanelHeader";
 import { bringsReportForward, checksSummary, strengthSummary, type PanelPage } from "@/assignment/components/analysis/panelLogic";
 import { ProblemList } from "@/assignment/components/analysis/ProblemList";
 import { SettingsPage } from "@/assignment/components/analysis/SettingsPage";
+import { StabilityVersionToggle } from "@/assignment/components/analysis/StabilityVersionToggle";
 import { StabilizeCard } from "@/assignment/components/analysis/StabilizeCard";
 import { StabilizerLog } from "@/assignment/components/analysis/StabilizerLog";
 import { StrengthDetails } from "@/assignment/components/analysis/StrengthDetails";
@@ -200,6 +201,7 @@ export function AnalysisPanel({ model, snapshot, variant, onCollapse }: Analysis
                     onPage={setPage}
                     onCollapse={onCollapse}
                 />
+                {page === "report" && <StabilityVersionToggle />}
                 <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="analysis-scroll">
                     {body}
                 </div>

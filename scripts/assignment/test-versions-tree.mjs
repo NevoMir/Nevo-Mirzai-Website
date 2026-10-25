@@ -96,17 +96,14 @@ await test("stage: a block edit, and everything made from it, shows its own bloc
     assert.equal(T.meshBaseOf(A, by(A, "s2")), null);
 });
 
-await test("stage: an optimization that changed the outside shows its own blocks, one that did not stays on the mesh", () => {
+await test("stage: an optimization stays on the original mesh whether or not it changed the outside (only a block edit by words leaves it)", () => {
     const p1 = T.stageOf(A, by(A, "p1"));
-    assert.deepEqual([p1.display.id, p1.own], ["p1", true]);
+    assert.deepEqual([p1.display.id, p1.own], ["e1", false]);
     const p2 = T.stageOf(A, by(A, "p2"));
     assert.deepEqual([p2.display.id, p2.own], ["e1", false]);
     assert.equal(T.meshBaseOf(A, by(A, "p2")).id, "e1");
-    // And a stabilization of the thinned one is thinned too.
     const L = [...A, stab("s3", "p1", 8, 2)];
-    assert.deepEqual([T.stageOf(L, by(L, "s3")).display.id, T.stageOf(L, by(L, "s3")).own], ["s3", true]);
-    // An optimization with an unreadable summary is shown as its own blocks (the safe picture).
-    assert.equal(T.stageOf([root("r", 1), { ...opt("q", "r", 2, false), optimization: null }], { ...opt("q", "r", 2, false), optimization: null }).own, true);
+    assert.deepEqual([T.stageOf(L, by(L, "s3")).display.id, T.stageOf(L, by(L, "s3")).own], ["e1", false]);
 });
 
 await test("stage: an optimization straight from the original sits on the original's mesh", () => {

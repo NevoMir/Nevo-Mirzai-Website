@@ -1087,7 +1087,8 @@ await test("panel: components/analysis has no way to open another version, a Com
     // The one place that moves between models is the strip of a run that belongs to another model ("Go to that model"): that is a
     // model, not a version of this one.
     // (And the block-edit card, which opens the version it has just saved: the model it made, not another version of this one.)
-    const moves = (pattern) => offenders(pattern).filter((f) => f !== "RunStrip.tsx" && f !== "EditBlocksCard.tsx");
+    // (And the Original | Stabilized switch at the top of the report, the panel's one way between this model's versions.)
+    const moves = (pattern) => offenders(pattern).filter((f) => f !== "RunStrip.tsx" && f !== "EditBlocksCard.tsx" && f !== "StabilityVersionToggle.tsx");
     assert.deepEqual(moves(/\bopenVersion\s*\(/), [], "versions are switched in the bar");
     assert.deepEqual(moves(/\bsetActiveModel\s*\(/), [], "and so are models, except from the other-model strip");
     assert.deepEqual(offenders(/\b(requestCompare|setCompare|ensureOriginal|CompareNotice|CompareChip)\b/), [], "the compare machinery is gone");
@@ -1159,53 +1160,19 @@ await test("bar: a window too narrow for it beside the tabs puts the switcher on
     assert.doesNotMatch(clean, /min-h-10/, "a stable model has nothing to switch to: no row");
 });
 
-await test("bar: the 3D tab of a stabilized model gives the viewer the source mesh, the stabilized file to download, and the step offset of its own run", async () => {
-    // Original m1 -> S1 (steps 1-2) -> S2 (steps 3-4, its own log has the two steps 1-2): S2's blocks are numbered 1-2 on screen.
+await test("bar: the 3D tab of a stabilized model shows the original mesh alone (no added blocks) and downloads the stabilized file", async () => {
     const log = (n) => ({ n, move: "column", at_mm: [0, 0, 0], added: 1 });
     const s1 = stab("s1", "m1", 2, 5, { derived: { added_blocks: 2, steps: [log(1), log(2)] } });
-    const s2 = stab("s2", "s1", 2, 10, { derived: { added_blocks: 2, steps: [log(1), log(2)] } });
-    const models = [model("m1"), s1, s2];
-    const cells = [[0, 0, 0], [1, 0, 0], [2, 0, 0]].map((cell) => ({ cell }));
-    const descriptor = lib.descriptorFromBlocks([...cells, { cell: [0, 0, 1], role: "column", step: 1 }, { cell: [1, 0, 1], role: "column", step: 2 }, { cell: [2, 0, 1], role: "column", step: 3 }, { cell: [0, 1, 0], role: "footing", step: 4 }]);
+    const models = [model("m1"), s1];
+    const cells = [[0, 0, 0], [1, 0, 0]].map((cell) => ({ cell }));
+    const descriptor = lib.descriptorFromBlocks([...cells, { cell: [0, 0, 1], role: "column", step: 1 }, { cell: [1, 0, 1], role: "column", step: 2 }]);
     const result = lib.analyzeAssembly(descriptor, null, lib.sanitizeSettings(null));
-    lib.useAnalysisStore.setState({ result, resultModelId: "s2", loaded: { url: "/m1.glb" } });
-    const html = await shellHtml({ models, active: "s2" });
+    lib.useAnalysisStore.setState({ result, resultModelId: "s1", loaded: { url: "/m1.glb" } });
+    const html = await shellHtml({ models, active: "s1" });
     assert.equal(attr(html, "data-url"), "/m1.glb", "the original mesh is on stage");
-    assert.equal(attr(html, "data-download-url"), "/s2.glb", "the download is the stabilized file");
-    assert.equal(attr(html, "data-supports"), "yes", "with its added blocks");
-    assert.equal(attr(html, "data-step-offset"), "2", "the 4 steps of the file minus the 2 of its own log");
-    // The original: its own mesh, nothing added, nothing to count.
+    assert.equal(attr(html, "data-download-url"), "/s1.glb", "the download is the stabilized file");
+    assert.equal(attr(html, "data-supports"), "no", "without the stabilizer's blocks");
     lib.useAnalysisStore.setState({ result: null, resultModelId: null });
-    const original = await shellHtml({ models, active: "m1" });
-    assert.equal(attr(original, "data-url"), "/m1.glb");
-    assert.equal(attr(original, "data-supports"), "no");
-    assert.equal(attr(original, "data-step-offset"), "(omitted)");
-    // A version with no log to count from is left to the viewer rather than guessed.
-    lib.useAnalysisStore.setState({ result, resultModelId: "s1" });
-    const noLog = await shellHtml({ models: [model("m1"), stab("s1", "m1", 2, 5, { derived: { added_blocks: 2 } })], active: "s1" });
-    assert.equal(attr(noLog, "data-step-offset"), "(omitted)");
-});
-
-await test("bar: when the blocks of a stabilized model fail to load, the 3D tab says so with Try again (not a bare mesh that looks like nothing was added), and the tab carries a failure mark", async () => {
-    const failed = { modelId: "s1", status: "error", error: "The stabilized model's file was not found.", stage: "", progress: 0 };
-    lib.useAnalysisStore.setState({ loaded: { url: "/m1.glb" }, run: failed, result: null, resultModelId: null });
-    const html = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
-    assert.match(html, /data-testid="supports-failed"/);
-    assert.match(html, /The stabilized model&#x27;s file was not found\./);
-    assert.match(html, /data-testid="supports-retry"/);
-    assert.match(html, /aria-label="Stability, failed"/, "the tab says it too");
-    assert.match(html, /lucide-triangle-alert/);
-    // The report has its own error card for the same failure; an original's own failure is the report's too.
-    const onAnalysis = await shellHtml({ models: PAIR, active: "s1", tab: "analysis" });
-    assert.doesNotMatch(onAnalysis, /data-testid="supports-failed"/);
-    assert.match(onAnalysis, /aria-label="Stability, failed"/);
-    lib.useAnalysisStore.setState({ run: { ...failed, modelId: "m1" } });
-    const original = await shellHtml({ models: PAIR, active: "m1", tab: "3d" });
-    assert.doesNotMatch(original, /data-testid="supports-failed"/);
-    // A run for another model, or none, is no failure of this one.
-    const other = await shellHtml({ models: PAIR, active: "s1", tab: "3d" });
-    assert.doesNotMatch(other, /data-testid="supports-failed"/);
-    assert.doesNotMatch(other, /Stability, failed/);
 });
 
 await test("bar: when the original mesh cannot be loaded, the stabilized version shows its own blocks (one file for the stage and the analysis), says so, and the original stays its own", async () => {

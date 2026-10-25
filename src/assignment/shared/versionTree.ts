@@ -194,7 +194,8 @@ export function meshBaseOf<T extends TreeModel>(models: readonly T[], m: T): T |
         if (seen.has(cur.id)) return null;
         seen.add(cur.id);
         if (representation(cur) === "mesh") return cur;
-        const breaks = (cur.kind === "edited" && cur.edit?.target === "voxel") || (cur.kind === "optimized" && (cur.optimization?.shape_changed ?? true));
+        // Only the person's own block edit changes what the 3D tab shows: an optimization (like a stabilization) keeps the original mesh there.
+        const breaks = cur.kind === "edited" && cur.edit?.target === "voxel";
         if (breaks) return null;
         cur = parentOf(models, cur);
     }

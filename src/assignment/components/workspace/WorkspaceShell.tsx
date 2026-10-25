@@ -28,7 +28,6 @@ import { GenerationOverlay } from "@/assignment/components/workspace/GenerationO
 import { InlineName } from "@/assignment/components/hub/InlineName";
 import { ModelsPanel } from "@/assignment/components/workspace/ModelsPanel";
 import { RunChip } from "@/assignment/components/workspace/RunChip";
-import { SupportsFailedNotice } from "@/assignment/components/workspace/SupportsFailedNotice";
 import { VersionSwitcher } from "@/assignment/components/workspace/VersionSwitcher";
 import { useRunActivity } from "@/assignment/components/workspace/useRunActivity";
 import { useVersionSwitcherState } from "@/assignment/components/workspace/useVersionSwitcherState";
@@ -47,8 +46,7 @@ import {
     type ViewPatch,
 } from "@/assignment/components/workspace/shellLogic";
 import { editVersion, handleVersionKey, openVersion, versionKeyEvent } from "@/assignment/components/workspace/versionActions";
-import { inTypingContext, isOptimizeKey, supportsFailure, switcherLayout } from "@/assignment/components/workspace/versionLogic";
-import { useShowSupports } from "@/assignment/components/workspace/useShowSupports";
+import { inTypingContext, isOptimizeKey, switcherLayout } from "@/assignment/components/workspace/versionLogic";
 import { stageColorBy, useHeldStage } from "@/assignment/components/workspace/stageHold";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { Button } from "@/assignment/components/ui/button";
@@ -78,7 +76,6 @@ import { dockFits } from "@/assignment/store/analysisLogic";
 import { completedThisSession, isTerminalJob, latestJobIds } from "@/assignment/store/jobs";
 import { deleteVersion } from "@/assignment/store/models";
 import { saveNow, whenSaved } from "@/assignment/store/persist";
-import { savedStepOffset } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 import { clearMeshFailures, markMeshFailed, useAssemblyFor, useVersionFamily } from "@/assignment/store/versions";
 import { useCurrentWork } from "@/assignment/store/workGuard";
@@ -181,7 +178,6 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     const displayModel = family && activeModel && family.active.id === activeModel.id ? family.display : activeModel;
     const displayUrl = displayModel?.glb_url ?? null;
     const onSource = Boolean(family?.isVersion && activeModel && displayModel && displayModel.id !== activeModel.id);
-    const [showSupports, setShowSupports] = useShowSupports();
     // Read the blocks of the version the switcher would open before it is asked for (a few KB, kept for the analysis run that needs
     // them): the first flip to it then waits for the analysis only, not for a download and a parse as well.
     useAssemblyFor(family ? family.head : null);
@@ -202,15 +198,6 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     useAnalysisRunner(activeModel);
     const snapshot = useAnalysisSnapshot(activeModel);
     const switcher = useVersionSwitcherState(tab);
-    // A version on its source mesh draws its added blocks from the analysis of the version's file. When that run fails the
-    // stage is the bare mesh, which reads as "nothing was added": the viewer says so, with a way to try again.
-    const supportsError = supportsFailure({ onSource, tab, phase: snapshot.phase, error: snapshot.run.error });
-    const retryAnalysis = useCallback(() => useAnalysisStore.getState().retry(), []);
-    // The tooltips and cards number the supports of the model's own run from 1 ("added in step 1"), as the Stabilize timeline does: a
-    // version made from another version carries its predecessors' steps, which the source mesh on stage has no log to count.
-    // (No log to count: left to the viewer, which then numbers from the file's top step rather than guess.)
-    const ownSteps = activeModel?.derived?.steps;
-    const stepOffset = onSource && Array.isArray(ownSteps) ? savedStepOffset(snapshot.result, ownSteps.length) : undefined;
     // The block view between two versions of a model (the bar's switch, or the switch a saved run makes by itself): the new version
     // has no result until its own analysis lands, and the viewer would drop to the plain mesh (the model chrome, a re-framed camera,
     // the blocks back a moment later). The stage keeps drawing the last picture over the same mesh meanwhile; the report does not:
@@ -500,17 +487,12 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                             title={stageTitle}
                             downloadName={stageDownloadName}
                             downloadUrl={activeModel?.glb_url ?? null}
-                            supports={onSource ? snapshot.result : null}
-                            stepOffset={stepOffset}
-                            showSupports={showSupports}
-                            onShowSupportsChange={setShowSupports}
+                            // The 3D tab is the model as it was made (or as the person changed it with words): the blocks the stabilizer
+                            // and the optimizer added are shown on the Stability and Optimization tabs only.
+                            supports={null}
                             insets={viewerInsets}
                             overlay={
-                                showOverlay ? (
-                                    <GenerationOverlay jobs={running} providers={providers} />
-                                ) : supportsError ? (
-                                    <SupportsFailedNotice message={supportsError} onRetry={retryAnalysis} />
-                                ) : null
+                                showOverlay ? <GenerationOverlay jobs={running} providers={providers} /> : null
                             }
                             emptyState={emptyState}
                             onThumbnail={handleThumbnail}
