@@ -24,74 +24,95 @@ import {
     type StabilizeStop,
     type StepMetrics,
 } from "@/assignment/shared/contract";
-import { fmtPct, plural, type Verdict } from "@/assignment/store/analysisLogic";
+import { fixOfIssues, fmtPct, plural, stabilizeLabelOf, type StabilizeLabel, type Verdict } from "@/assignment/store/analysisLogic";
+import { descendantsOf, type TreeModel } from "@/assignment/store/versionTree";
 import { STRESS_WARN_SHARE } from "@/assignment/viewer/analysisGeometry";
 
 // ---------- what the user can choose ----------
 
 /**
- * The Options popover: how far down the stress is pushed, and how many blocks may be used in all. The target stops at the
+ * What the stabilizer is told besides the analysis settings: how far down the stress is pushed. The target stops at the
  * warning level (not from materials.ts: that pulls in the solver): a higher one would let a run end "complete" while the
- * report still warns about the joints it left.
+ * report still warns about the joints it left. The number of blocks the model may have is not a choice of its own: the block
+ * budget of the analysis settings (`AnalysisSettings.maxBlocks`) is the one budget, for the verdict and for the stabilizer.
  */
 export const TARGET_RANGE = { min: 0.4, max: STRESS_WARN_SHARE, step: 0.05 } as const;
 
 export interface StabilizeChoices {
-    /** Share of the allowable stress the stabilizer aims under (0.4 up to the warning level, 0.75). */
+    /** Share of the strength the stabilizer aims under (0.4 up to the warning level, 0.75). */
     target: number;
-    /** The most blocks the stabilized model may have; null: the analysis budget, else the 1000 cells of the grid. */
-    maxBlocks: number | null;
 }
 
-export const DEFAULT_CHOICES: StabilizeChoices = { target: DEFAULT_TARGET_UTILISATION, maxBlocks: null };
+export const DEFAULT_CHOICES: StabilizeChoices = { target: DEFAULT_TARGET_UTILISATION };
 
 /** Anything -> valid choices (a half-typed field, a stored value). */
 export function sanitizeChoices(raw: unknown): StabilizeChoices {
     const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const t = typeof r.target === "number" && Number.isFinite(r.target) ? r.target : DEFAULT_CHOICES.target;
     const target = Math.round(Math.min(TARGET_RANGE.max, Math.max(TARGET_RANGE.min, t)) * 100) / 100;
-    const maxBlocks =
-        typeof r.maxBlocks === "number" && Number.isFinite(r.maxBlocks) && r.maxBlocks >= 1 ? Math.min(1000, Math.round(r.maxBlocks)) : null;
-    return { target, maxBlocks };
+    return { target };
 }
 
-/** What the stabilizer is given: the choices over the analysis settings in force. */
+/** What the stabilizer is given: the choices over the analysis settings in force (their block budget is the stabilizer's). */
 export function optionsFor(choices: StabilizeChoices, settings: Pick<AnalysisSettings, "maxBlocks">): StabilizeOptions {
     return {
         ...DEFAULT_STABILIZE_OPTIONS,
         targetUtilisation: choices.target,
-        maxBlocks: Math.min(choices.maxBlocks ?? settings.maxBlocks ?? 1000, 1000),
+        maxBlocks: Math.min(settings.maxBlocks ?? 1000, 1000),
     };
 }
 
 // ---------- may it be offered? ----------
 
 export interface StabilizeOffer {
-    /** The primary button: "Reduce stress" when nothing fails and only a stress warning is left. */
-    label: "Stabilize" | "Reduce stress";
-    /** The newest stabilized version of this model, when there is one: the card then offers to open it. */
+    /** The primary button: "Reduce stress" when nothing fails and only heavily loaded joints are left, else "Stabilize". */
+    label: StabilizeLabel;
+    /**
+     * The stabilized version the card offers to open, when there is one. For an original it is the version the bar's "Stabilized"
+     * half opens (`opens`, else the newest version of the whole family: a version made from a version counts); for a version
+     * it is the newest one made directly from it.
+     */
     child: Pick<ModelAsset, "id"> | null;
     /** Why a new run cannot start (shown instead of the button), else null. */
     blocked: string | null;
 }
 
 /**
- * Whether the Stabilize card is shown for this model, and in what state. null: nothing to fix (the card stays away).
- * `analysing`: an analysis of this model is running, so its numbers are about to change.
+ * Whether the Stabilize card is shown for this model, and in what state. null: nothing to fix (the card stays away), which includes
+ * a model whose only warning is thin parts left out: the stabilizer moves on floating parts, long arms, the balance and the joint
+ * stress, so it would run, add nothing and say so. `analysing`: an analysis of this model is running, so its numbers are about to change.
  */
 export function stabilizeOffer(input: {
     model: Pick<ModelAsset, "id" | "derived">;
-    models: ReadonlyArray<Pick<ModelAsset, "id" | "kind" | "source_model_id" | "created_at">>;
-    result: Pick<AnalysisResult, "stats" | "stress">;
-    verdict: Pick<Verdict, "kind"> | null;
+    models: ReadonlyArray<TreeModel>;
+    /** `issues` say what is left to fix (which warnings there are); without them the verdict's own `fix` does. */
+    result: Pick<AnalysisResult, "stats" | "stress"> & Partial<Pick<AnalysisResult, "issues">>;
+    verdict: (Pick<Verdict, "kind"> & Partial<Pick<Verdict, "fix">>) | null;
     analysing: boolean;
+    /**
+     * What the bar's "Stabilized" half opens for this model (components/workspace/versionLogic.ts stabilizedTarget: the version
+     * seen last, else the newest), so "Open stabilized version" and the bar are one action. Used for an original only, and only when
+     * it is one of its versions; left out, the newest version of the family is offered.
+     */
+    opens?: Pick<ModelAsset, "id"> | null;
 }): StabilizeOffer | null {
     const { model, models, result, verdict } = input;
     if (!verdict || result.stats.blockCount === 0) return null;
-    // Stress above the warning level is a warning (so the verdict covers it); "pass" means there is nothing to fix.
-    if (verdict.kind === "pass") return null;
+    // Stress above the warning level is a warning (so the verdict covers it); "pass" means there is nothing to fix, and so does a
+    // warning about thin parts alone. The result's issues are the authority on which warnings there are; the verdict only counts them.
+    const label = stabilizeLabelOf(result.issues ? { kind: verdict.kind, fix: fixOfIssues(result.issues) } : verdict);
+    if (label === null) return null;
     const children = models.filter((m) => m.kind === "stabilized" && m.source_model_id === model.id);
-    const child = children.length > 0 ? children[children.length - 1] : null;
+    const self = models.find((m) => m.id === model.id);
+    const original = self ? self.kind !== "stabilized" : model.derived === null;
+    // An original's versions are the whole family, not only the ones made directly from it: after generated -> A -> B the bar
+    // opens B, and so must the card (A is its only direct child). A version offers the one made from it.
+    const family = original ? descendantsOf(models, model.id) : [];
+    const child: Pick<ModelAsset, "id"> | null = original
+        ? (family.find((m) => m.id === input.opens?.id) ?? family[0] ?? null)
+        : children.length > 0
+          ? children[children.length - 1]
+          : null;
     let blocked: string | null = null;
     if (input.analysing) blocked = "Wait for the analysis to finish.";
     else if ((model.derived?.depth ?? 0) >= MAX_DERIVED_DEPTH) blocked = "This version has been stabilized the maximum number of times.";
@@ -100,7 +121,7 @@ export function stabilizeOffer(input: {
     } else if (models.filter((m) => m.kind === "stabilized").length >= MAX_DERIVED_PER_PROJECT) {
         blocked = `This project has ${MAX_DERIVED_PER_PROJECT} stabilized versions already. Delete some in the Models tab to make more.`;
     }
-    return { label: verdict.kind === "warn" ? "Reduce stress" : "Stabilize", child, blocked };
+    return { label, child, blocked };
 }
 
 // ---------- while it runs ----------
@@ -142,25 +163,62 @@ export function runChips(start: Pick<StepMetrics, "errors" | "max_utilisation">,
     };
 }
 
+/** What a move added, one of them: "a 4-block column". */
+const SUPPORT_NAMES: Record<AddedRole, string> = {
+    column: "column",
+    footing: "footing",
+    bracket: "bracket",
+    bridge: "bridge",
+    reinforcement: "thicker joint",
+};
+
+/** "a 4-block column" but "an 8-block column", "an 11-block", "an 18-block", "an 80-block": the article follows how the number is said. */
+const anBlock = (n: number): "a" | "an" => (n === 8 || n === 11 || n === 18 || (n >= 80 && n < 90) ? "an" : "a");
+
 /**
- * The chips under a step of the timeline: each figure the move changed, then how many blocks it added.
- * `errors 3 → 2`, `peak 198% → 72%`, `+5`.
+ * The sentence of one step in the panel's words: what was added, and what it was for. The step's stored `text` (the exported report
+ * and the example files keep it) names coordinates and the engine's terms; the timeline shows this one instead, and the figures
+ * the move changed come as chips (stepChips). No cell, no axis, no technical term.
+ */
+export function stepSentence(step: Pick<StabilizeStepLog, "move" | "reason" | "added" | "before" | "after">): string {
+    const what = `${anBlock(step.added)} ${step.added}-block ${SUPPORT_NAMES[step.move]}`;
+    switch (step.reason) {
+        case "floating":
+            return step.move === "bridge" ? `Joined a floating part to the rest of the model with ${what}.` : `Held up a floating part with ${what}.`;
+        case "cantilever":
+            // A column under an arm can also reach a floating part to the ground: the figures after it can rise before they fall.
+            return `Held up an arm that was too long with ${what}.${step.before.floating_blocks > 0 && step.after.floating_blocks < step.before.floating_blocks ? " It also joins the floating part to the ground, so other figures can rise before they fall." : ""}`;
+        case "cog": {
+            const margin = step.before.cog_margin_mm;
+            return margin !== null && margin < 0 ? `Widened the base with ${what} so the model no longer tips over.` : `Widened the base with ${what} so the model is no longer balanced on the edge.`;
+        }
+        case "stress":
+            return step.move === "reinforcement" ? `Thickened a joint that was carrying too much with ${plural(step.added, "block")}.` : `Held up a joint that was carrying too much with ${what}.`;
+    }
+}
+
+/**
+ * The chips under a step of the timeline: each figure the move changed, in the panel's words, then how many blocks it added.
+ * `problems 3 → 2`, `strength used 198% → 72%`, `+5`.
  */
 export function stepChips(step: StabilizeStepLog): string[] {
     const { before: b, after: a } = step;
     const chips: string[] = [];
-    if (b.errors !== a.errors) chips.push(`errors ${b.errors} → ${a.errors}`);
-    if (b.floating_blocks !== a.floating_blocks) chips.push(`floating ${b.floating_blocks} → ${a.floating_blocks}`);
-    if (b.longest_cantilever !== a.longest_cantilever) chips.push(`reach ${b.longest_cantilever} → ${a.longest_cantilever}`);
+    if (b.errors !== a.errors) chips.push(`problems ${b.errors} → ${a.errors}`);
+    if (b.floating_blocks !== a.floating_blocks) chips.push(`floating blocks ${b.floating_blocks} → ${a.floating_blocks}`);
+    if (b.longest_cantilever !== a.longest_cantilever) chips.push(`longest overhang ${b.longest_cantilever} → ${a.longest_cantilever}`);
     if (b.cog_margin_mm !== null && a.cog_margin_mm !== null && Math.round(b.cog_margin_mm) !== Math.round(a.cog_margin_mm)) {
-        chips.push(`margin ${Math.round(b.cog_margin_mm)} → ${Math.round(a.cog_margin_mm)} mm`);
+        chips.push(`balance ${balanceText(b.cog_margin_mm)} → ${balanceText(a.cog_margin_mm)}`);
     }
     if (b.max_utilisation !== null && a.max_utilisation !== null && Math.round(b.max_utilisation * 100) !== Math.round(a.max_utilisation * 100)) {
-        chips.push(`peak ${stressArrow(b.max_utilisation, a.max_utilisation)}`);
+        chips.push(`strength used ${stressArrow(b.max_utilisation, a.max_utilisation)}`);
     }
     chips.push(`+${step.added}`);
     return chips;
 }
+
+/** The balance margin the way the panel's chip says it, on both sides of the arrow: "40 mm outside", "110 mm inside". */
+const balanceText = (marginMm: number): string => `${Math.abs(Math.round(marginMm))} mm ${marginMm < 0 ? "outside" : "inside"}`;
 
 /** "198% → 21%" (or "n/a" where there is no stress). */
 export function stressArrow(a: number | null, b: number | null): string {
@@ -199,19 +257,19 @@ export function outcomeOf(result: Pick<StabilizeResult, "complete"> & { meta: Pi
     return result.complete ? "complete" : "partial";
 }
 
-/** What is left to fix after a run, in words ("2 floating blocks", "peak stress 130%"); empty when nothing is. */
+/** What is left to fix after a run, in plain words ("2 floating blocks", "strength used 130%"); empty when nothing is. */
 export function remainingProblems(after: StabilizationMetrics, target: number, limit: number): string[] {
     const out: string[] = [];
     if (after.floating_blocks > 0) out.push(plural(after.floating_blocks, "floating block"));
-    if (after.over_limit > 0) out.push(`a cantilever of ${after.longest_cantilever} blocks (limit ${limit})`);
-    if (after.cog_margin_mm !== null && after.cog_margin_mm < 0) out.push("the centre of gravity is outside the base");
+    if (after.over_limit > 0) out.push(`an arm of ${after.longest_cantilever} blocks is over the limit of ${limit}`);
+    if (after.cog_margin_mm !== null && after.cog_margin_mm < 0) out.push("it still tips over");
     if (after.max_utilisation !== null && after.max_utilisation > target) {
-        out.push(`peak stress ${fmtPct(after.max_utilisation)} against the ${fmtPct(target)} target`);
+        out.push(`strength used ${fmtPct(after.max_utilisation)}, aim for under ${fmtPct(target)}`);
     }
     return out;
 }
 
-/** "Improved, not fully stable: 1 problem remains (a cantilever of 5 blocks (limit 4))". */
+/** "Improved, not fully stable: 1 problem remains (an arm of 5 blocks is over the limit of 4)". */
 export function partialHeadline(after: StabilizationMetrics, target: number, limit: number): string {
     const left = remainingProblems(after, target, limit);
     // Errors are the problems; with none, whatever is still short of the target counts.
@@ -248,24 +306,24 @@ export function nothingLine(
     switch (result.stop) {
         case "stable": {
             const peak = result.before.max_utilisation;
-            return `This model already meets the target${peak !== null ? ` (peak stress ${fmtPct(peak)} against ${target})` : ""}. There is no problem left that the stabilizer can fix.`;
+            return `This model already meets the aim${peak !== null ? ` (strength used ${fmtPct(peak)}, aim under ${target})` : ""}. There is no problem left that the stabilizer can fix.`;
         }
         case "max-blocks":
-            return `The block budget (${budget}) leaves no room: the model has ${plural(result.before.blocks, "block")} already. Raise the budget in Options.`;
+            return `The block budget (${budget}) leaves no room: the model has ${plural(result.before.blocks, "block")} already. Raise the block budget in Settings.`;
         case "no-improving-move":
-            return `The stabilizer found no move that improves this model within the options (target stress ${target}, up to ${budget}).`;
+            return `The stabilizer found no move that improves this model within the options (aim for strength used under ${target}, up to ${budget}).`;
         default:
             return `The stabilizer stopped before it added anything. ${stopReason(result.stop)}`;
     }
 }
 
-/** "+14 blocks · all checks pass · peak stress 180% → 54%". */
+/** "+14 blocks · all checks pass · strength used 180% → 54%". */
 export function stabilizedLine(meta: Pick<DerivedMeta, "added_blocks" | "before" | "after">): string {
     const parts = [`+${plural(meta.added_blocks, "block")}`];
     const { after, before } = meta;
     const left = after.errors > 0 ? `${plural(after.errors, "problem")} ${after.errors === 1 ? "remains" : "remain"}` : plural(after.warnings, "warning");
     parts.push(after.errors === 0 && after.warnings === 0 ? "all checks pass" : left);
-    if (before.max_utilisation !== null && after.max_utilisation !== null) parts.push(`peak stress ${stressArrow(before.max_utilisation, after.max_utilisation)}`);
+    if (before.max_utilisation !== null && after.max_utilisation !== null) parts.push(`strength used ${stressArrow(before.max_utilisation, after.max_utilisation)}`);
     return parts.join(" · ");
 }
 
@@ -293,6 +351,28 @@ export function needsDecision(status: RunStatus, outcome: Outcome | null): boole
     if (status === "canceled" || status === "error") return true;
     // A run that reached its goal is saved at once: only a partial result (or none to speak of) waits.
     return status === "finished" && outcome !== "complete";
+}
+
+/**
+ * Is the answer on screen the model as it was BEFORE blocks the run holds? True while the run goes or saves, and while a finished
+ * result, a stopped run or a save that failed waits (those have blocks to keep); the report then dims the answer, labels it "Before
+ * stabilizing" and leaves the problem list to the strip. False when nothing was added: a run that failed, or one that found nothing to
+ * add. The report is as true as it was then, so it keeps its list: the strip's only exit is Dismiss and its words are about those problems.
+ * (The caller also checks that the run is about the model on screen.)
+ */
+export function answerIsBeforeRun(status: RunStatus, errorKind: "run" | "save" | null, outcome: Outcome | null): boolean {
+    switch (status) {
+        case "running":
+        case "saving":
+        case "canceled":
+            return true;
+        case "finished":
+            return outcome !== "nothing";
+        case "error":
+            return errorKind === "save";
+        default:
+            return false;
+    }
 }
 
 export interface RunBadge {

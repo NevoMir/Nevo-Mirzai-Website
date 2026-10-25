@@ -10,6 +10,11 @@ MESHY_API_KEY=
 # Tencent Cloud API key pair: Hunyuan 3D through Tencent's own API (HY 3D Global).
 TENCENTCLOUD_SECRET_ID=
 TENCENTCLOUD_SECRET_KEY=
+# OpenRouter: "Muse Spark 1.3", an AI assembly designer (a text model returns the parts of the object as JSON, the app builds the GLB).
+# It runs in a Cloudflare Queue consumer (wrangler.jsonc: LLM_QUEUE), which `wrangler dev` provides locally.
+OPENROUTER_API_KEY=
+# Optional: the OpenRouter model id (default meta/muse-spark-1.3-contributor).
+OPENROUTER_MODEL=
 # Optional: when set, generating needs this code (sent as the x-access-code header).
 ACCESS_CODE=
 # Without an ACCESS_CODE, paid models stay switched off unless this is 1 (wrangler.jsonc sets it: open access).

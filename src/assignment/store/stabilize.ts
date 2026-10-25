@@ -6,6 +6,10 @@
 //                  \-> finished (a partial result waits for Save / Discard)
 //   saving -> error (the upload failed: Retry, or Download GLB anyway)      running -> error (the run failed)
 //
+// A saved version is put on the stage at once (the tab stays where it is), painted by what was added (the Added blocks colouring, so
+// the supports stand out), with the toast "Switched to the stabilized version": the top bar's Original | Stabilized switch then goes
+// back and forth. The one block budget is the analysis settings' (optionsFor).
+//
 // One run at a time. A run belongs to the project it started in: leaving that project (or the workspace) stops it, and
 // a save that finishes after the user moved on is not put on the screen of whatever project is open by then (the server
 // has the model either way). The stabilizer itself is analysis/stabilize/runStabilize.ts (a Web Worker); it is loaded
@@ -39,6 +43,7 @@ import {
     type StoppedRun,
 } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
+import { rootOf } from "@/assignment/store/versions";
 
 export type StabilizeStatus = RunStatus;
 
@@ -70,12 +75,14 @@ interface StabilizeState {
     /**
      * When the run (or its save) last came to an end that the user should see: finished, stopped, failed or saved. The banner
      * takes the keyboard focus if this is fresh when it appears, so a keyboard user is not left on a button that is gone.
+     * A saved version that is switched to has no analysis yet, so its row appears only when that lands (a fetch of its file and a
+     * run): the stamp is renewed then, so the window counts from the row's appearance, not from the save.
      */
     endedAt: number | null;
     /** The analysis of the source when the run started, for the "problems a -> b" chips. */
     startMetrics: StepMetrics | null;
     options: StabilizeOptions | null;
-    /** The Options popover. */
+    /** What the stabilizer is asked besides the analysis settings (the strength it aims under). */
     choices: StabilizeChoices;
 
     setChoices: (patch: Partial<StabilizeChoices>) => void;
@@ -143,6 +150,11 @@ interface RunContext {
 }
 let ctx: RunContext | null = null;
 let counter = 0;
+/**
+ * The saved version the run switched to while its analysis has not landed: when it does, `endedAt` is renewed (see the field).
+ * Not state: nothing renders from it.
+ */
+let awaitingAnalysisOf: string | null = null;
 
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === "AbortError";
 
@@ -204,6 +216,7 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
     const reset = (): void => {
         ctx?.controller.abort();
         ctx = null;
+        awaitingAnalysisOf = null;
         clearPreview();
         set({ ...INITIAL });
     };
@@ -370,7 +383,21 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
                     return;
                 }
                 workspace.addModel(model);
-                workspace.setActiveModel(model.id);
+                // The new version goes on the stage, in the tab the user is in -- unless they have moved to another model in the
+                // meantime (the run belongs to the family it started from; do not pull them away from what they chose to look at).
+                const now = useWorkspaceStore.getState();
+                const active = now.models.find((m) => m.id === now.activeModelId);
+                const here = active ? rootOf(now.models, active) : null;
+                const family = rootOf(now.models, model);
+                const switched = active === undefined || (here !== null && family !== null && here.id === family.id);
+                if (switched) {
+                    workspace.setActiveModel(model.id);
+                    // The preview painted the added blocks by role; the version that replaces it keeps that colouring (the user can pick
+                    // another from the stage's Colour menu), so the supports do not turn into blocks that look like the original's the
+                    // moment the toast says the new version is shown. A model with no added blocks is drawn by status until it has some.
+                    useAnalysisStore.getState().setColorBy("role");
+                    if (useAnalysisStore.getState().resultModelId !== model.id) awaitingAnalysisOf = model.id;
+                }
                 // The same assembly saved twice comes back as the same model, which the chat already presents.
                 if (!workspace.messages.some((m) => m.model_ids?.includes(model.id))) {
                     workspace.addMessage({
@@ -381,7 +408,8 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
                         model_ids: [model.id],
                     });
                 }
-                toast.success("Saved as a stabilized version");
+                if (switched) toast.success("Switched to the stabilized version");
+                else toast.success("Saved a stabilized version", { description: "Find it in the Models tab." });
                 clearPreview();
                 set({ status: "saved", savedModelId: model.id, endedAt: deps.now() });
             } catch (error) {
@@ -418,12 +446,23 @@ export const useStabilizeStore = create<StabilizeState>()((set, get) => {
     };
 });
 
+// The saved version's analysis landed: its row is on screen now, so the end of the run counts from here (see `endedAt`).
+useAnalysisStore.subscribe((state, prev) => {
+    if (awaitingAnalysisOf === null || state.result === prev.result || state.resultModelId !== awaitingAnalysisOf) return;
+    const { status, savedModelId } = useStabilizeStore.getState();
+    const landed = status === "saved" && savedModelId === awaitingAnalysisOf;
+    awaitingAnalysisOf = null;
+    if (landed) useStabilizeStore.setState({ endedAt: deps.now() });
+});
+
 // A run belongs to its project: opening another one (or a new chat) stops it.
 useWorkspaceStore.subscribe((state, prev) => {
     if (state.activeProjectId !== prev.activeProjectId) {
         useStabilizeStore.getState().leave();
         return;
     }
+    // The user went to look at something else before the new version's analysis landed: it does not count as the run's end any more.
+    if (awaitingAnalysisOf !== null && state.activeModelId !== prev.activeModelId && state.activeModelId !== awaitingAnalysisOf) awaitingAnalysisOf = null;
     if (state.models === prev.models) return;
     // The version the "Stabilized" banner is about was deleted (the Models tab): it would offer to open what is gone.
     const { status, savedModelId, discard } = useStabilizeStore.getState();

@@ -107,8 +107,8 @@ function ExampleCard({
                     <StatusChip example={example} />
                     {chips.added && <span className={cn(chip, "border-accent/50 text-accent-hover dark:text-accent")}>{chips.added}</span>}
                     {grid && chips.stress && (
-                        <span className={cn(chip, "border-border text-muted-foreground")} title="Highest joint stress, as a share of what the joints take">
-                            stress {chips.stress}
+                        <span className={cn(chip, "border-border text-muted-foreground")} title="How much of what its weakest joint can take is used: before and after the stabilizer">
+                            strength used {chips.stress}
                         </span>
                     )}
                 </div>

@@ -19,6 +19,7 @@ import type {
     ProviderId,
 } from "../src/assignment/shared/contract.ts";
 import { readStoredAnalysis } from "./analysis.ts";
+import { stagingKeys } from "./providers/openrouter.ts";
 import type { Env } from "./providers/types.ts";
 import { DEFAULT_PROJECT_NAME, HttpError, errorSummary, isRecord, nowIso } from "./util.ts";
 
@@ -438,6 +439,12 @@ export async function purgeProjects(env: Env, ids: string[]): Promise<number> {
     )
         .bind(idList)
         .all<{ k: string }>();
+    // The Muse designer stages its files in R2 under the job's task id (llm/<id>.json / .glb / .cancel); the job rows are about to go.
+    const tasks = await env.DB.prepare(
+        `SELECT provider_task_id AS t FROM jobs WHERE via = 'openrouter' AND provider_task_id IS NOT NULL AND project_id IN ${trashed}`,
+    )
+        .bind(idList)
+        .all<{ t: string }>();
     const results = await env.DB.batch([
         env.DB.prepare(`DELETE FROM project_tags WHERE project_id IN ${trashed}`).bind(idList),
         env.DB.prepare(`DELETE FROM jobs WHERE project_id IN ${trashed}`).bind(idList),
@@ -449,7 +456,9 @@ export async function purgeProjects(env: Env, ids: string[]): Promise<number> {
     // Files go after the rows: a failed R2 delete leaves an orphan object, never a dangling row.
     // The SQL above already leaves out "static:" keys (files shipped with the site, shared by every project made from an
     // example); the filter is the second lock on the one door that deletes from R2.
-    const fileKeys = keys.results.map((r) => r.k).filter((k) => Boolean(k) && !isStaticKey(k));
+    const fileKeys = [...keys.results.map((r) => r.k), ...tasks.results.flatMap((r) => stagingKeys(r.t))].filter(
+        (k) => Boolean(k) && !isStaticKey(k),
+    );
     for (let i = 0; i < fileKeys.length; i += 500) {
         await env.FILES.delete(fileKeys.slice(i, i + 500)).catch(() => {});
     }

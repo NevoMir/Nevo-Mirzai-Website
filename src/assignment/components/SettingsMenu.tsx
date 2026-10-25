@@ -179,7 +179,8 @@ function AboutDialog({ open, onOpenChange }: DialogState) {
                         ) : failed ? (
                             <p className="text-muted-foreground">
                                 The live model list could not be loaded. The app can call Tripo H3.1 (including a
-                                multi-part assembly mode), Meshy 7.1, Hyper3D Rodin Gen-2.5 and Tencent Hunyuan 3D 3.1.
+                                multi-part assembly mode), Meshy 7.1, Hyper3D Rodin Gen-2.5, Tencent Hunyuan 3D 3.1 and
+                                Meta Muse Spark 1.3 (an AI designer that builds the object from named parts).
                             </p>
                         ) : (
                             <p className="text-muted-foreground">Loading…</p>

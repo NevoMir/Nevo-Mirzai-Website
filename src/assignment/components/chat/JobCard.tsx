@@ -1,16 +1,16 @@
 import { useState } from "react";
 import { Blocks, Box, Check, Download, Eye, RotateCcw } from "lucide-react";
 
-import { VerdictLine } from "@/assignment/components/analysis/VerdictBadge";
 import { Markdown } from "@/assignment/components/chat/Markdown";
 import { ElapsedTime } from "@/assignment/components/chat/ElapsedTime";
+import { StabilityLine } from "@/assignment/components/chat/StabilityLine";
 import { GenerationProgressBar } from "@/assignment/components/workspace/GenerationProgressBar";
 import { useShownProgress } from "@/assignment/components/workspace/useShownProgress";
 import { Button } from "@/assignment/components/ui/button";
 import { epochOf, exampleCoverUrl, formatBytes, modelFileName, partsLabel } from "@/assignment/components/workspace/format";
 import { cn } from "@/assignment/lib/utils";
 import type { Job, ModelAsset, ProviderInfo } from "@/assignment/shared/contract";
-import { providerInfo, providerLabel, viaLabel } from "@/assignment/store/providers";
+import { designerNote, providerInfo, providerLabel, stageText, viaLabel } from "@/assignment/store/providers";
 
 const chip = "rounded-full border border-border px-1.5 text-[10px] leading-4 text-muted-foreground";
 const small = "h-7 gap-1.5 px-2.5 text-xs";
@@ -68,15 +68,21 @@ export interface JobCardProps {
     active: boolean;
     /** Retry is offered unless the same model has already been run again on this prompt. */
     canRetry: boolean;
+    /**
+     * Quote the prompt under the name. For a job no chat message points at (a project made through the API, a run begun in another
+     * tab): there is no bubble above the card to say what was asked, and a failed one would show only its error and Retry.
+     */
+    showPrompt?: boolean;
     onView: (model: ModelAsset) => void;
     onRetry: (job: Job) => void;
 }
 
 /** One model's result for a prompt: progress while it runs, then the model or the reason it failed. */
-export function JobCard({ job, providers, active, canRetry, onView, onRetry }: JobCardProps) {
+export function JobCard({ job, providers, active, canRetry, showPrompt = false, onView, onRetry }: JobCardProps) {
     const info = providerInfo(providers, job.provider);
     const label = providerLabel(providers, job.provider);
     const via = viaLabel(info?.via);
+    const designer = designerNote({ id: job.provider });
     const running = job.status === "queued" || job.status === "running" || job.status === "finalizing";
     const startedAt = epochOf(job.created_at);
     const shown = useShownProgress({
@@ -102,12 +108,25 @@ export function JobCard({ job, providers, active, canRetry, onView, onRetry }: J
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="text-xs font-semibold text-foreground">{label}</span>
                 {via && <span className={chip}>{via}</span>}
-                {info?.parts && <span className={cn(chip, "border-accent/50 text-accent-hover dark:text-accent")}>parts</span>}
+                {info?.parts && <span className={cn(chip, "border-accent/50 text-accent-hover dark:text-accent")}>Parts</span>}
             </div>
+
+            {showPrompt && Boolean(job.prompt?.trim()) && (
+                <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]" title={job.prompt} data-testid="job-prompt">
+                    “{job.prompt}”
+                </p>
+            )}
 
             {running && (
                 <div className="mt-2">
-                    <span className="text-[13px] font-medium text-shimmer">{job.stage || "Queued"}</span>
+                    {/* An AI designer takes a while and shows no mesh until the end: say what it is doing. */}
+                    {designer && (
+                        <p className="mb-1 text-[11px] leading-snug text-muted-foreground" data-testid="job-designer-note">
+                            {designer}
+                        </p>
+                    )}
+                    {/* The dots below are the ellipsis: a stage that ends in one ("Designing the parts…") must not show both. */}
+                    <span className="text-[13px] font-medium text-shimmer" data-testid="job-stage">{stageText(job.stage)}</span>
                     {startedAt !== undefined && (
                         <ElapsedTime
                             startedAt={startedAt}
@@ -127,9 +146,9 @@ export function JobCard({ job, providers, active, canRetry, onView, onRetry }: J
                             {[parts, formatBytes(model.size_bytes)].filter(Boolean).join(" · ")}
                         </p>
                     </div>
-                    {/* The structural verdict: one line, and a way into the Analysis tab for this model. */}
+                    {/* The structural verdict: one line, and a way into the Stability tab for this model. */}
                     <div className="mt-2.5">
-                        <VerdictLine model={model} />
+                        <StabilityLine model={model} />
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                         <Button

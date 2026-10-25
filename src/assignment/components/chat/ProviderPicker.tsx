@@ -9,9 +9,41 @@ import {
     DropdownMenuTrigger,
 } from "@/assignment/components/ui/dropdown-menu";
 import type { ProviderId, ProviderInfo } from "@/assignment/shared/contract";
-import { MAX_PROVIDERS_PER_PROMPT, approxTime, generationSwitchedOff, viaLabel } from "@/assignment/store/providers";
+import { MAX_PROVIDERS_PER_PROMPT, approxTime, designerNote, generationSwitchedOff, viaLabel, viaSuffix } from "@/assignment/store/providers";
 
 const chip = "rounded-full border px-1.5 text-[10px] leading-4";
+
+/**
+ * What one model's row in the menu says: its name and badges, then one line of what it is: for an AI designer the helper ("AI
+ * designer · builds the object from named parts"), for any other model the server's one-liner; and who makes it, how long it
+ * takes and which key runs it.
+ */
+export function ProviderOption({ provider: p }: { provider: ProviderInfo }) {
+    // The vendor can say it already ("Meta via OpenRouter"): the row names the key once.
+    const via = viaSuffix(p.vendor, p.via);
+    const designer = designerNote(p);
+    return (
+        <div className="flex min-w-0 flex-col gap-0.5" data-testid="provider-option" data-provider={p.id}>
+            <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-foreground">{p.label}</span>
+                {p.parts && <span className={`${chip} border-accent/50 text-accent-hover dark:text-accent`}>Parts</span>}
+                {p.textured && <span className={`${chip} border-border text-muted-foreground`}>Textured</span>}
+            </div>
+            {designer ? (
+                <p className="text-[11px] leading-snug text-muted-foreground" data-testid="provider-designer-note">
+                    {designer}
+                </p>
+            ) : (
+                <p className="text-[11px] leading-snug text-muted-foreground">{p.description}</p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+                {p.vendor} · {approxTime(p.approx_seconds)}
+                {p.available && via ? ` · ${via}` : ""}
+                {!p.available && " · needs an API key"}
+            </p>
+        </div>
+    );
+}
 
 /**
  * The composer's model picker: a small pill with a checkbox menu. Several boxes ticked means the
@@ -40,7 +72,7 @@ export function ProviderPicker({
     const Icon = chosen.length > 1 ? Layers : Cuboid;
     const atMax = selected.length >= MAX_PROVIDERS_PER_PROMPT;
 
-    // A deployment with a single model (the public one has only Hunyuan) has nothing to pick: a plain
+    // A deployment with a single model (e.g. only Hunyuan, or only Muse) has nothing to pick: a plain
     // label says which model runs, without a menu of providers that are not set up.
     if (providers && usable.length <= 1) {
         const only = usable[0];
@@ -48,12 +80,14 @@ export function ProviderPicker({
         return (
             <div
                 data-testid="provider-picker"
-                title={only ? [only.description, via].filter(Boolean).join(" · ") : undefined}
+                title={only ? [designerNote(only), only.description, via].filter(Boolean).join(" · ") : undefined}
                 className="flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground"
             >
                 <Cuboid className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">
                     {only ? only.label : generationSwitchedOff(providers) ? "Generation is switched off" : "No model available"}
+                    {/* The one model left is a designer: say so where the menu would have (the full helper is in the tooltip). */}
+                    {designerNote(only) && <span className="opacity-70"> · AI designer</span>}
                 </span>
             </div>
         );
@@ -87,7 +121,6 @@ export function ProviderPicker({
                 </DropdownMenuLabel>
                 {providers?.map((p) => {
                     const checked = selected.includes(p.id);
-                    const via = viaLabel(p.via);
                     return (
                         <DropdownMenuCheckboxItem
                             key={p.id}
@@ -98,23 +131,7 @@ export function ProviderPicker({
                             onCheckedChange={(on) => toggle(p.id, on === true)}
                             className="items-start py-2"
                         >
-                            <div className="flex min-w-0 flex-col gap-0.5">
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                    <span className="text-xs font-medium text-foreground">{p.label}</span>
-                                    {p.parts && (
-                                        <span className={`${chip} border-accent/50 text-accent-hover dark:text-accent`}>parts</span>
-                                    )}
-                                    {p.textured && (
-                                        <span className={`${chip} border-border text-muted-foreground`}>textured</span>
-                                    )}
-                                </div>
-                                <p className="text-[11px] leading-snug text-muted-foreground">{p.description}</p>
-                                <p className="text-[11px] text-muted-foreground">
-                                    {p.vendor} · {approxTime(p.approx_seconds)}
-                                    {p.available && via ? ` · ${via}` : ""}
-                                    {!p.available && " · needs an API key"}
-                                </p>
-                            </div>
+                            <ProviderOption provider={p} />
                         </DropdownMenuCheckboxItem>
                     );
                 })}

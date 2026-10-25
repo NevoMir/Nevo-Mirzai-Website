@@ -4,7 +4,7 @@
 // stress estimate with Awatif's WebAssembly solver (withStress.ts). The solver is loaded once per worker.
 
 import { analyzeGrid } from "./analyze.ts";
-import { annotateRoles, gridFromAssembly, parseBounds } from "./assembly.ts";
+import { annotateRoles, gridFromAssembly, parseBounds, parseSize, parseTransform } from "./assembly.ts";
 import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 import { normalizeSettings } from "./settings.ts";
 import type { AnalysisResult } from "./types.ts";
@@ -63,7 +63,13 @@ scope.onmessage = async (event) => {
             if (!assembly) throw new Error("The block assembly is not valid.");
             const frame = request.frame ? parseAssemblyDescriptor(request.frame) : null;
             if (request.frame && !frame) throw new Error("The block assembly's frame is not valid.");
-            const grid = gridFromAssembly(assembly, parseBounds(request.soupBounds), settings, frame ?? assembly);
+            // A transform that is sent must be a good one: ignoring a bad one would draw the blocks in the wrong frame.
+            const sourceTransform = request.sourceTransform ? parseTransform(request.sourceTransform) : null;
+            if (request.sourceTransform && !sourceTransform) throw new Error("The source model's transform is not valid.");
+            // Likewise its size: a half-valid placement would put the blocks over the mesh and call the model another size.
+            const sourceSizeMm = request.sourceSizeMm ? parseSize(request.sourceSizeMm) : null;
+            if (request.sourceSizeMm && !sourceSizeMm) throw new Error("The source model's size is not valid.");
+            const grid = gridFromAssembly(assembly, parseBounds(request.soupBounds), settings, frame ?? assembly, sourceTransform, sourceSizeMm);
             result = annotateRoles(analyzeGrid(grid, settings, { onProgress: onAnalyzeProgress }), assembly);
         } else {
             let grid = request.gridKey !== null ? grids.get(request.gridKey) : undefined;

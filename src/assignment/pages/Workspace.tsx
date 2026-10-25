@@ -5,6 +5,7 @@ import type { ImperativePanelHandle } from "react-resizable-panels";
 import { ChatPanel } from "@/assignment/components/chat/ChatPanel";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/assignment/components/ui/resizable";
 import { WorkspaceShell } from "@/assignment/components/workspace/WorkspaceShell";
+import { tabFromParam } from "@/assignment/components/workspace/shellLogic";
 import { useMobileLayout } from "@/assignment/hooks/use-mobile";
 import { CHAT_MAX_PCT, useChatSizes } from "@/assignment/hooks/useChatSizes";
 import { useProjectRoute } from "@/assignment/hooks/useProjectRoute";
@@ -15,9 +16,7 @@ import { useJobPolling } from "@/assignment/store/jobs";
 import { useAnalysisStore } from "@/assignment/store/analysis";
 import { useAutosave } from "@/assignment/store/persist";
 import { refreshProviders } from "@/assignment/store/providers";
-import { selectIsGenerating, useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
-
-const WORKSPACE_TABS: readonly WorkspaceTab[] = ["3d", "analysis", "models"];
+import { selectIsGenerating, useProjectHasContent, useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 
 /**
  * Shortcuts stay out of dialogs, menus and text fields other than the prompt box: a chord typed
@@ -55,12 +54,13 @@ export default function Workspace() {
 
     // ?tab=analysis|3d|models (an opened example lands on the verdict): read once, then removed from the URL so a
     // reload or a shared link does not keep forcing the tab. Applied when the project has landed, because opening a
-    // project starts it on the 3D tab (store.setProject).
+    // project starts it on the 3D tab (store.setProject). The report's tab is called Stability now; its id, and so
+    // this link, stays "analysis", and ?tab=stability means the same tab (tabFromParam).
     const tabParam = searchParams.get("tab");
     const wantedTab = useRef<WorkspaceTab | null>(null);
     useEffect(() => {
         if (tabParam === null) return;
-        const tab = WORKSPACE_TABS.find((t) => t === tabParam);
+        const tab = tabFromParam(tabParam);
         // Only a project has tabs to choose from: on /app/new the parameter means nothing, and must not wait
         // around to hijack the project the first send creates.
         if (tab && routeProjectId) wantedTab.current = tab;
@@ -103,12 +103,13 @@ export default function Workspace() {
     const setChatHidden = useWorkspaceStore((s) => s.setChatHidden);
     const projectName = useWorkspaceStore((s) => s.project?.name);
 
-    // "The conversation has started" = there is a message. Not activeProjectId: the first message
-    // is appended synchronously on send, so this flips in the same tick. A project from the URL that
-    // is still being fetched counts as started too, so the panel opens around its spinner instead of
-    // flashing the new-chat hero for a frame.
-    const hasMessages = useWorkspaceStore((s) => s.messages.length > 0);
-    const chatStarted = hasMessages || opening;
+    // "The conversation has started" = the project has something in it: a message, a model or a job (selectProjectHasContent).
+    // Not activeProjectId: the first message is appended synchronously on send, so this flips in the same tick. Not messages
+    // alone either: a project made through the API has a model and no chat, and the hero (and the blank canvas it brings) must
+    // never cover it. A project from the URL that is still being fetched counts as started too, so the panel opens around its
+    // spinner instead of flashing the new-chat hero for a frame.
+    const hasContent = useProjectHasContent();
+    const chatStarted = hasContent || opening;
     const chatPanelOpen = chatStarted && !chatHidden;
     const showChatOwed = chatStarted && chatHidden;
 
@@ -211,7 +212,10 @@ export default function Workspace() {
         return () => window.removeEventListener("keydown", onKeyDown);
     }, []);
 
-    // A chat card asked to open the analysis: on a phone that means leaving the chat for the canvas.
+    // "V" (original <-> stabilized) is not here: a bare letter on `window` cannot be switched off and would fire from anywhere on the
+    // page. Like "A", it lives on the 3D view and on the version switch (WorkspaceShell, VersionSwitcher), where it has focus.
+
+    // A chat card asked to open the stability check: on a phone that means leaving the chat for the canvas.
     const analysisOpenRequest = useAnalysisStore((s) => s.openRequest);
     const seenOpenRequest = useRef(analysisOpenRequest);
     useEffect(() => {

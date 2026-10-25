@@ -50,17 +50,29 @@ export * from "@/assignment/store/access";
 export * from "@/assignment/store/providers";
 export * from "@/assignment/store/analysis";
 export * from "@/assignment/store/analysisLogic";
+export * from "@/assignment/store/analysisBrief";
+export * from "@/assignment/components/analysis/vocabulary";
+export { placeOf, placeAtPoint } from "@/assignment/analysis/plain";
 export * from "@/assignment/store/analysisSave";
 export * from "@/assignment/store/stabilize";
 export * from "@/assignment/store/stabilizeLogic";
-export { MATERIAL_FACTS, materialLine, pointLine, solverLine } from "@/assignment/components/analysis/stressText";
+export { MATERIAL_FACTS, materialLine, solverLine } from "@/assignment/components/analysis/stressText";
 export { STRESS_MATERIALS, STRESS_WARN, STRESS_FAIL } from "@/assignment/analysis/materials";
-export { analyzeAssembly, originalOf } from "@/assignment/analysis/assembly";
+export { analyzeAssembly, originalOf, soupBoundsOf, sourceTransformOf } from "@/assignment/analysis/assembly";
+export { buildReport, buildReportJson, technicalLine, technicalSummary } from "@/assignment/analysis/report";
+export { analyze } from "@/assignment/analysis/analyze";
+export { COVERAGE_WARN, EDGE_MARGIN_MM } from "@/assignment/analysis/issues";
+export { placementForBounds, transformForBounds } from "@/assignment/analysis/voxelize";
+export { describeSupport } from "@/assignment/viewer/supports";
+export { addedWhen } from "@/assignment/viewer/analysisGeometry";
+export * from "@/assignment/store/versions";
+export * from "@/assignment/store/versionTree";
 export { applyStress, computeStress } from "@/assignment/analysis/stress";
 export { solveFrameTs } from "@/assignment/analysis/fem/index";
 export { descriptorFromBlocks } from "@/assignment/shared/assembly";
-export { readAssemblyGlb } from "@/assignment/shared/assemblyGlb";
+export { readAssemblyGlb, writeAssemblyGlb } from "@/assignment/shared/assemblyGlb";
 export { useAnalysisRunner, NOT_READY_RETRY_MS } from "@/assignment/components/analysis/useAnalysisRunner";
+export { useAnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
 export { DEFAULT_ANALYSIS_SETTINGS, DEFAULT_ANALYSIS_VIEW } from "@/assignment/analysis/types";
 export * from "@/assignment/hooks/useChatSizes";
 export * from "@/assignment/lib/api";
@@ -129,6 +141,7 @@ const fake = {
     createFails: false,
     createDelay: 0,
     generateDelay: 0,
+    files: {}, // url -> { bytes, hits }: a file the fake server has (a stabilized model's GLB)
     putAnalysis: null, // (modelId, summary) => { status, json }
     putDelay: 0, // ms the analysis PUT is held before it answers
     providers: {
@@ -144,6 +157,12 @@ const fake = {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 globalThis.fetch = async (url, init = {}) => {
+    const file = fake.files[String(url)];
+    if (file) {
+        file.hits += 1;
+        const { bytes } = file;
+        return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    }
     const apiPath = String(url).replace("/api/assignment_alex", "");
     const method = init.method ?? "GET";
     const body = init.body ? JSON.parse(init.body) : undefined;
@@ -236,6 +255,8 @@ const reset = () => {
     fake.generateDelay = 0;
     fake.generate = () => ({ status: 200, json: { jobs: [] } });
     fake.jobReply = null;
+    fake.files = {};
+    lib.forgetAssemblies();
     storage.clear();
     S().setProviders(fake.providers);
 };
@@ -885,15 +906,15 @@ await test("polling backs off after errors and the tab coming back looks at once
 // ================= analysis report =================
 
 const AS = () => lib.useAnalysisStore.getState();
-const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
+const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], focus: null };
 const resetAnalysis = () => {
     lib.forgetSavedSummaries();
     fake.putDelay = 0;
     fake.putAnalysis = (id, summary) => ({ status: 200, json: { model: { ...(S().models.find((m) => m.id === id) ?? modelFor(makeJob(crypto.randomUUID()))), id, analysis: summary } } });
     lib.useAnalysisStore.setState({
         settings: lib.sanitizeSettings(null), loaded: null, viewerFailure: null, run: lib.IDLE_RUN, result: null, resultModelId: null,
-        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, colorChoice: "status", originalResult: null, originalFor: null,
-        originalState: "idle", pendingCompare: null, preview: null, selection: null, stepSelection: null, selectionSerial: 0, layerRaised: false,
+        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, colorChoice: "status",
+        preview: null, selection: null, stepSelection: null, selectionSerial: 0, layerRaised: false,
         hoverIssueId: null, attempt: 0, panelOpen: true, sheetOpen: false, openRequest: 0,
     });
 };
@@ -1041,13 +1062,13 @@ await test("the cantilevered-blocks row shows the blocks themselves, looks at th
     const r1 = withStatus({ 3: "cantilever", 4: "cantilever", 5: "overreach" });
     assert.deepEqual(lib.cantileveredBlocks(r1.blocks), [3, 4, 5]);
     AS().runSucceeded("m1", r1);
-    AS().selectBlocks(lib.cantileveredBlocks(r1.blocks), { check: "cantilevered", label: "Cantilevered blocks: 3 blocks" });
+    AS().selectBlocks(lib.cantileveredBlocks(r1.blocks), { check: "cantilevered", label: "Overhanging blocks: 3 blocks" });
     assert.deepEqual(AS().view.highlight, [3, 4, 5]);
     assert.deepEqual(AS().selection.ids, []);
     assert.deepEqual(AS().view.focus.mm, r1.blocks[4].centerMm, "the camera looks at the block nearest the group's centre");
     AS().runSucceeded("m1", withStatus({ 7: "cantilever", 8: "cantilever" }));
     assert.deepEqual(AS().view.highlight, [7, 8], "a re-run with other settings shows the new cantilevered blocks");
-    assert.equal(AS().selection.label, "Cantilevered blocks: 2");
+    assert.equal(AS().selection.label, "Overhanging blocks: 2 blocks", "the pick keeps its plain name when a re-run recounts it");
     AS().runSucceeded("m1", withStatus({}));
     assert.equal(AS().selection, null, "no cantilevered blocks left, nothing to show");
     AS().selectBlocks([], { check: "cantilevered", label: "x" });
@@ -1127,7 +1148,7 @@ await test("a layer cut that would hide the picked blocks is raised to show them
     assert.equal(AS().view.layerMax, 4, "blocks already in view leave the cut where the user put it (it is never lowered)");
     assert.equal(AS().layerRaised, false);
     AS().setLayerMax(0);
-    AS().selectBlocks([8, 9], { check: "cantilevered", label: "Cantilevered blocks: 2" });
+    AS().selectBlocks([8, 9], { check: "cantilevered", label: "Overhanging blocks: 2 blocks" });
     assert.equal(AS().view.layerMax, 9, "a group of blocks (the cantilevered row) is kept in view the same way");
     assert.equal(AS().layerRaised, true);
     // The camera's point counts too: a thin-features issue has no block, but its focus is up at 950 mm.
@@ -1211,7 +1232,7 @@ await test("a re-run that keeps the selection is not a new pick: the same object
     assert.equal(AS().selectionSerial, serial + 3);
     const prev = { ids: ["a"], check: null, label: "title a" };
     assert.equal(lib.reconcileSelection({ issues, blocks: mkResult().blocks }, prev).selection, prev, "reconcileSelection hands back the previous object when nothing changed");
-    const group = { ids: [], check: "cantilevered", label: "Cantilevered blocks: 2" };
+    const group = { ids: [], check: "cantilevered", label: "Overhanging blocks: 2 blocks" };
     const blocks = mkResult().blocks.map((b) => ({ ...b, status: b.index === 3 || b.index === 4 ? "cantilever" : "supported" }));
     assert.equal(lib.reconcileSelection({ issues: [], blocks }, group).selection, group, "so does a block group with the same count");
 });
@@ -1323,6 +1344,14 @@ await test("the report phase: no model, loading, running, failed, done; a run fo
     assert.equal(phase({ resultModelId: "m2" }), "loading", "a result for another model is not shown");
 });
 
+await test("stageWords: the panel speaks from the engine's step, so none of its labels reaches a student with a banned word", () => {
+    assert.deepEqual(["voxelize", "flood", "analyze", "stress"].map((step) => lib.stageWords(step, "ignored")), ["Building the blocks", "Filling the inside", "Checking the structure", "Estimating stress"]);
+    assert.equal(lib.stageWords("voxelize", "Voxelising the model"), "Building the blocks", "the engine's label is not shown");
+    for (const words of Object.values(lib.STAGE_WORDS)) assert.deepEqual(lib.technicalWordsIn(words), [], words);
+    assert.equal(lib.stageWords(undefined, "Placing the blocks"), "Placing the blocks", "a stage with no step keeps a label that is plain");
+    assert.equal(lib.stageWords("later", "Voxelising again"), "Checking the model", "a new stage with a technical label does not leak it");
+});
+
 await test("a run that fails is reported for its model only, and progress is only taken while running", () => {
     resetAnalysis();
     AS().runStarted("m1");
@@ -1421,9 +1450,7 @@ await test("two summaries are the same when the numbers agree, whatever the time
     assert.equal(lib.fmtMm(1234.4), "1,234");
     assert.equal(lib.scaleLine(mkResult()), "Scaled to 1000 × 640 × 820 mm · 20 blocks of 100 mm");
     assert.equal(lib.reportStem("a-lamp-meshy.glb"), "a-lamp-meshy-analysis");
-    const standing = mkResult({ stability: { inside: true, marginMm: 120.4 }, stats: { ...mkResult().stats, longestCantilever: 3 } });
-    assert.equal(lib.passingSentence(standing), "The centre of gravity sits 120 mm inside the support base. The longest cantilever is 3 blocks of the 4 allowed.");
-    assert.equal(lib.passingSentence(mkResult()), "Nothing hangs without support.");
+    assert.ok(!("passingSentence" in lib), "the passing state is the sentence 'Will stand.' (store/analysisBrief.ts), not a paragraph of numbers");
 });
 
 // The runner end to end: a real (synthetic) model through the real engine, on the main-thread fallback.
@@ -1465,10 +1492,16 @@ await test("the runner analyses the model once it is in the viewer, saves the su
     await sleep(60);
     assert.equal(AS().result, null, "a different model's geometry is never analysed for this one");
 
+    // Every stage the first-run panel is shown while the real engine works, in the panel's words (no "voxel": vocabulary.ts bans it).
+    const stagesSeen = new Set();
+    const unsubscribe = lib.useAnalysisStore.subscribe((state) => stagesSeen.add(state.run.stage));
     AS().setLoaded(loadedModel("/run-1.glb"));
     stop();
     stop = mountHook(() => lib.useAnalysisRunner(model));
     await until(() => AS().resultModelId === "run-1");
+    unsubscribe();
+    assert.ok(stagesSeen.has("Building the blocks"), `the first stage reads in plain words: ${[...stagesSeen].join(" | ")}`);
+    for (const stage of stagesSeen) assert.deepEqual(lib.technicalWordsIn(stage), [], `"${stage}" is shown to a student`);
     assert.equal(AS().run.status, "idle");
     assert.ok(AS().result.issues.some((i) => i.kind === "cantilever-too-long"), "the engine found the long arm");
     assert.equal(AS().summaries["run-1"].errors, AS().result.issues.filter((i) => i.severity === "error").length, "the summary counts the same problems the list shows");
@@ -1623,6 +1656,42 @@ const measured = (desc, settings = lib.sanitizeSettings(null)) => {
     return lib.applyStress(base, lib.computeStress(base, TS));
 };
 const TIP_COLUMN = [1, 2, 3, 4].map((k) => [5, 1, k]);
+const warnCells = () => uniq([...armCells(4), [4, 1, 6]]);
+/**
+ * The four chips against the sentence over the same result: a model the sentence passes has no failing or warning chip, one it fails
+ * has the chip of each reason it names failing (a floating part: no tick on balance or strength), and a warning has its chip amber.
+ */
+function assertChipsAgree(name, result) {
+    const sentence = lib.verdictSentence(result);
+    const mark = Object.fromEntries(lib.keyFigures(result).map((figure) => [figure.key, figure.mark]));
+    const where = `${name}: "${sentence.text}" with chips ${JSON.stringify(mark)}`;
+    if (sentence.kind === "pass") {
+        for (const [key, m] of Object.entries(mark)) assert.ok(m === "pass" || m === "none", `${where} (${key})`);
+        return;
+    }
+    if (sentence.kind === "empty") {
+        assert.ok(Object.values(mark).every((m) => m === "none"), where);
+        return;
+    }
+    const says = (re) => re.test(sentence.text);
+    if (sentence.kind === "fail") {
+        if (says(/tip over/)) assert.equal(mark.balance, "fail", where);
+        if (says(/nothing touches the ground/)) assert.equal(mark.balance, "fail", where);
+        if (says(/floating/)) {
+            assert.notEqual(mark.balance, "pass", where);
+            assert.notEqual(mark.strength, "pass", where);
+        }
+        if (says(/too long/)) assert.equal(mark.overhang, "fail", where);
+        if (says(/overloaded/)) assert.equal(mark.strength, "fail", where);
+        if (says(/block budget/)) assert.equal(mark.blocks, "fail", where);
+        // And a failing model never reads as four ticks.
+        assert.ok(Object.values(mark).some((m) => m !== "pass"), where);
+        return;
+    }
+    if (says(/very edge/)) assert.equal(mark.balance, "warn", where);
+    if (says(/heavily loaded/)) assert.equal(mark.strength, "warn", where);
+    for (const m of Object.values(mark)) assert.notEqual(m, "fail", where);
+}
 
 await test("the material is named when it is not concrete: the settings note and the verdict", () => {
     assert.equal(lib.customSettingsNote({ material: "timber" }), "material timber");
@@ -1642,9 +1711,7 @@ await test("two summaries differ when their stress differs; one saved before the
     assert.equal(lib.sameSummary(mkSummary(), mkSummary({ stress: null })), true, "nothing on the ground: no stress, nothing to add");
 });
 
-await test("the report's words: the passing sentence names the peak stress, a block assembly is not 'scaled'", () => {
-    const standing = mkResult({ stability: { inside: true, marginMm: 120.4 }, stats: { ...mkResult().stats, longestCantilever: 3 }, stress: { maxUtilisation: 0.543 } });
-    assert.equal(lib.passingSentence(standing), "The centre of gravity sits 120 mm inside the support base. The longest cantilever is 3 blocks of the 4 allowed. The highest joint stress is 54% of what the joints allow.");
+await test("a percentage is whole; a block assembly is not 'scaled'", () => {
     assert.equal(lib.fmtPct(0.734), "73%");
     assert.equal(lib.scaleLine(mkResult({ assembly: { roleCounts: [20, 0, 0, 0, 0, 0], steps: 0 } })), "Block assembly · 20 blocks of 100 mm");
     assert.equal(lib.scaleLine(mkResult({ assembly: { roleCounts: [16, 4, 0, 0, 0, 0], steps: 1 } })), "Block assembly built by the stabilizer · 20 blocks of 100 mm");
@@ -1669,12 +1736,6 @@ await test("the screen's material words are the solver's numbers (they are kept 
     assert.equal(lib.STRESS_FAIL, 1);
 });
 
-await test("stress points are described the way the list shows them", () => {
-    const line = lib.pointLine({ mode: "tension", joint: [[4, 5, 6], [5, 5, 6]], cell: [4, 5, 6], utilisation: 0.73, allowableKPa: 200 });
-    assert.equal(line, "Tension · joint (4, 5, 6)–(5, 5, 6) · 146 of 200 kPa");
-    assert.equal(lib.pointLine({ mode: "shear", joint: null, cell: [1, 2, 3], utilisation: 0.5, allowableKPa: 1000 }), "Shear · block (1, 2, 3) · 500 of 1000 kPa");
-});
-
 await test("the colour mode: stress and role fall back to status when they cannot be drawn, and come back when they can", () => {
     resetAnalysis();
     AS().runSucceeded("m1", mkResult());
@@ -1694,115 +1755,132 @@ await test("the colour mode: stress and role fall back to status when they canno
     assert.equal(lib.resolveColorBy("layer", { stress: false, roles: false, forceRole: true }), "role", "a forced role colouring beats the choice");
 });
 
-await test("compare: only a block assembly has it; Overlay paints by role and leaves with any other colouring; the choice survives", () => {
+await test("added blocks: only a block assembly has the role colouring; it is a colour choice like the others, it survives a model change and a pick stays through it", () => {
     resetAnalysis();
     AS().runSucceeded("m1", mkResult());
-    AS().setCompare("overlay");
-    assert.equal(AS().view.compare, "stabilized", "a mesh model has no overlay");
+    AS().setColorBy("role");
+    assert.equal(AS().view.colorBy, "status", "a mesh model has no added blocks to colour");
     const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
     assert.equal(lib.hasAddedBlocks(stab), true);
-    assert.deepEqual(lib.compareInfo(stab), { originalCount: 28, addedCount: 4, originalAvailable: true });
-    assert.equal(lib.compareInfo(mkResult()), null);
+    assert.equal(lib.addedBlockCount(stab), 4);
+    assert.equal(lib.addedBlockCount(mkResult()), 0);
     assert.equal(lib.hasAddedBlocks(measured(plainDesc(armCells(5)))), false, "an assembly with nothing added has no role colouring either");
+    assert.equal(lib.addedBlockCount(measured(plainDesc(armCells(5)))), 0);
     AS().runSucceeded("s1", stab);
+    assert.equal(AS().colorChoice, "role", "the choice made on the mesh takes effect where it can be drawn");
+    assert.equal(AS().view.colorBy, "role");
     AS().setColorBy("layer");
-    AS().setCompare("overlay");
-    assert.equal(AS().view.compare, "overlay");
-    assert.equal(AS().view.colorBy, "role", "Overlay forces the role colours");
-    assert.equal(AS().colorChoice, "layer", "without forgetting the user's choice");
+    assert.equal(AS().view.colorBy, "layer", "any other colouring simply replaces it");
     AS().setColorBy("stress");
-    assert.equal(AS().view.compare, "stabilized", "another colouring is the stabilized view");
     assert.equal(AS().view.colorBy, "stress");
-    AS().setCompare("overlay");
     AS().setColorBy("role");
-    assert.equal(AS().view.compare, "overlay", "the role colouring is what Overlay is");
-    AS().setCompare("stabilized");
-    assert.equal(AS().view.colorBy, "role", "the choice made inside Overlay stays");
-    AS().setColorBy("layer");
-    AS().setCompare("overlay");
-    AS().setCompare("stabilized");
-    assert.equal(AS().view.colorBy, "layer", "leaving Overlay gives the colouring back");
-    // Another model starts on its own view.
-    AS().setCompare("overlay");
-    AS().modelChanged("s2", "/s2.glb");
-    assert.equal(AS().view.compare, "stabilized");
-    assert.equal(lib.stageResultOf({ result: stab, resultModelId: "s1", compare: "overlay", originalResult: null, originalFor: null, preview: null }), stab);
+    assert.equal(AS().colorChoice, "role");
+    // A pick is not lost by changing the colours.
+    const withIssues = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
+    AS().runSucceeded("s3", withIssues);
+    AS().selectIssues([withIssues.issues[0].id]);
+    const picked = AS().view.highlight;
+    assert.ok(picked.length > 0);
+    AS().setColorBy("status");
+    assert.deepEqual(AS().view.highlight, picked, "the pick stays through a colour change");
+    assert.equal(AS().selection.ids[0], withIssues.issues[0].id);
+    assert.equal(lib.stageResultOf({ result: stab, resultModelId: "s1", preview: null }), stab);
 });
 
-await test("the original half of a stabilized model is analysed once, in the same frame, with its own stress; a re-run makes it again", async () => {
+await test("the store has no compare machinery any more: no Original half, no Overlay mode, no pending Compare; the original is a model of its own (the bar's switch)", () => {
     resetAnalysis();
-    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
+    const stab = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
     AS().runSucceeded("s1", stab);
-    AS().setCompare("original");
-    assert.equal(AS().view.compare, "original");
-    assert.equal(AS().originalState, "loading");
-    assert.equal(lib.selectStageResult(AS()), stab, "until it is ready the stage keeps the stabilized model");
-    await until(() => AS().originalResult !== null);
-    const orig = AS().originalResult;
-    assert.equal(AS().originalFor, stab);
-    assert.equal(orig.blocks.length, 28, "only the blocks the stabilizer was given");
-    assert.ok(orig.blocks.every((b) => b.role === "original" && b.step === 0));
-    assert.deepEqual(orig.transform, stab.transform, "the same frame, so the camera and the ghost do not move");
-    assert.ok(orig.stress && orig.stress.maxUtilisation > 1, "the original is overstressed: that is what Compare shows");
-    assert.ok(orig.issues.some((i) => i.kind === "cantilever-too-long"), "and its long arm");
-    assert.equal(lib.selectStageResult(AS()), orig);
-    assert.equal(stab.stats.blockCount, 32);
-    AS().ensureOriginal();
-    assert.equal(AS().originalResult, orig, "asked again: nothing is computed twice");
-    // Back and forth does not recompute either.
-    AS().setCompare("overlay");
-    AS().setCompare("original");
-    assert.equal(AS().originalResult, orig);
-    // A re-run (a setting moved) is another result: the stage falls back, the half is made again for it.
-    const rerun = measured(addedDesc(armCells(5), TIP_COLUMN), lib.sanitizeSettings({ material: "timber" }));
-    AS().runSucceeded("s1", rerun);
-    assert.equal(AS().view.compare, "original", "the compare mode stays through a re-run of the same model");
-    assert.equal(lib.selectStageResult(AS()), rerun);
-    await until(() => AS().originalFor === rerun);
-    assert.equal(AS().originalResult.settings.material, "timber");
-    assert.equal(lib.selectStageResult(AS()), AS().originalResult);
-    // Another model drops it.
-    AS().runSucceeded("other", mkResult());
-    assert.equal(AS().originalResult, null);
-    assert.equal(AS().view.compare, "stabilized");
+    assert.equal(lib.selectStageResult(AS()), stab, "the stage draws the model's own result");
+    assert.equal(AS().result, stab);
+    for (const gone of ["originalResult", "originalFor", "originalState", "ensureOriginal", "setCompare", "requestCompare", "pendingCompare"]) assert.ok(!(gone in AS()), `${gone} is gone from the store`);
+    assert.ok(!("compare" in AS().view), "and the view has no compare mode");
+    assert.ok(!("compare" in lib.DEFAULT_ANALYSIS_VIEW));
+    assert.ok(!("compareInfo" in lib), "and the Original | Stabilized | Overlay summary with it");
+    assert.equal(lib.openAnalysisFor.length, 1, "opening a model's analysis takes the model, nothing about a view");
+    // A pick the user made stays across a model change to the same result.
+    AS().selectIssues([stab.issues[0].id]);
+    assert.ok(AS().selection && AS().view.highlight.length > 0);
 });
 
-await test("a model with nothing left of its original has no Original half", () => {
+await test("the Added blocks colouring is the user's colouring: it stays through a re-run, and any other colouring replaces it", () => {
     resetAnalysis();
-    const stab = measured(addedDesc(armCells(5), TIP_COLUMN));
-    AS().runSucceeded("s1", { ...stab, assembly: { ...stab.assembly, roleCounts: [0, 32, 0, 0, 0, 0] } });
-    assert.equal(lib.compareInfo(AS().result).originalAvailable, false);
-    AS().setCompare("original");
-    assert.equal(AS().view.compare, "stabilized");
+    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
+    AS().setColorBy("role");
+    assert.equal(AS().view.colorBy, "role");
+    assert.equal(AS().colorChoice, "role", "it is the user's colouring now: it stays through a re-run");
+    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.equal(AS().view.colorBy, "role");
+    AS().setColorBy("layer");
+    assert.equal(AS().view.colorBy, "layer", "and any other colouring replaces it");
+    assert.ok(!("showAdded" in AS()), "one way in: setColorBy (the Colour menu, the row's button and the end of a run use it)");
 });
 
-await test("a block of another half is found by its cell: hovering and clicking in the Original view reach the issue of the stabilized model", async () => {
+await test("focusPoint: the camera and a callout at a point, no highlight; it is a pick (layer cut, phone sheet, clear) with an empty selection", () => {
+    resetAnalysis();
+    const stab = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
+    AS().runSucceeded("s1", stab);
+    AS().focusPoint([450, 250, 350], "Where the weight balances");
+    assert.deepEqual(AS().view.focus.mm, [450, 250, 350]);
+    assert.equal(AS().view.focus.label, "Where the weight balances");
+    assert.deepEqual(AS().view.highlight, [], "nothing is highlighted");
+    assert.deepEqual(AS().selection, { ids: [], check: null, label: "Where the weight balances" });
+    assert.equal(AS().selectionSerial, 1, "a new pick: a phone closes its sheet");
+    const token = AS().view.focus.token;
+    AS().focusPoint([450, 250, 350], "Where the weight balances");
+    assert.ok(AS().view.focus.token > token, "asking again flies again");
+    assert.equal(AS().selectionSerial, 2);
+    // A pick that was on show is let go of: the callout is the new one's.
+    AS().selectIssues([stab.issues[0].id]);
+    assert.ok(AS().view.highlight.length > 0);
+    AS().focusPoint([450, 250, 350], "Where the weight balances");
+    assert.deepEqual(AS().view.highlight, []);
+    assert.deepEqual(AS().selection.ids, []);
+    // The layer cut rises to show the point's layer (like any pick), and the panel says so.
+    AS().setLayerMax(1);
+    AS().focusPoint([450, 250, 450], "Where the weight balances");
+    assert.equal(AS().view.layerMax, 4);
+    assert.equal(AS().layerRaised, true);
+    // Esc / Clear lets go of it.
+    AS().clearSelection();
+    assert.equal(AS().view.focus, null);
+    assert.equal(AS().selection, null);
+    // A re-run drops it (a point of the old result is not a pick of the new one).
+    AS().focusPoint([450, 250, 350], "Where the weight balances");
+    AS().runSucceeded("s1", measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k]))));
+    assert.equal(AS().view.focus, null);
+    assert.equal(AS().selection, null);
+    // Nothing on screen: nothing to look at.
+    resetAnalysis();
+    AS().focusPoint([450, 250, 350], "Where the weight balances");
+    assert.equal(AS().view.focus, null);
+    assert.equal(AS().selection, null);
+});
+
+await test("a block of another result is found by its cell: hovering and clicking in the live preview reach the issue of the model's own result", () => {
     resetAnalysis();
     // A 7-block arm with a column under its tip: still too long at the root, so there are issues on original blocks.
     const stab = measured(addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k])));
     assert.ok(stab.issues.length > 0);
     AS().runSucceeded("s1", stab);
-    AS().setCompare("original");
-    await until(() => AS().originalResult !== null);
-    const orig = AS().originalResult;
+    // The preview of a run draws another assembly (its blocks are numbered differently), in the same frame.
+    const preview = { ...measured(addedDesc(armCells(7), [1, 2, 3].map((k) => [7, 1, k]))), transform: stab.transform };
+    AS().setPreview("s1", preview);
+    assert.equal(lib.selectStageResult(AS()), preview);
     const issue = stab.issues.find((i) => i.blocks.some((b) => stab.blocks[b].role === "original"));
     assert.ok(issue, "an issue with an original block");
     const sIndex = issue.blocks.find((b) => stab.blocks[b].role === "original");
     const cell = stab.blocks[sIndex].cell;
-    const oIndex = orig.blocks.findIndex((b) => b.cell.join() === cell.join());
-    assert.notEqual(oIndex, -1);
-    assert.deepEqual(lib.mapBlockIndices(orig, stab, [oIndex]), [sIndex]);
-    AS().hoverBlock(oIndex);
+    const pIndex = preview.blocks.findIndex((b) => b.cell.join() === cell.join());
+    assert.notEqual(pIndex, -1);
+    assert.deepEqual(lib.mapBlockIndices(preview, stab, [pIndex]), [sIndex]);
+    AS().hoverBlock(pIndex);
     assert.equal(AS().hoverIssueId, AS().blockIssues.get(sIndex), "the hover lights the issue of the same cell");
-    AS().clickBlock(oIndex);
+    AS().clickBlock(pIndex);
     assert.equal(AS().selection.ids.length, 1);
-    assert.equal(AS().view.compare, "original", "a click in the viewer stays on the half the user looks at");
-    const shown = AS().view.highlight.map((i) => orig.blocks[i].cell.join());
-    assert.ok(shown.length > 0 && shown.every((c) => stab.issues.some((it) => it.blocks.some((b) => stab.blocks[b].cell.join() === c))), "the highlight is in the original's own numbers");
-    // A card pressed in the panel is about the stabilized model: it shows that half.
-    AS().selectIssues([issue.id]);
-    assert.equal(AS().view.compare, "stabilized");
-    assert.deepEqual(AS().view.highlight, [...issue.blocks].sort((a, b) => a - b));
+    const shown = AS().view.highlight.map((i) => preview.blocks[i].cell.join());
+    assert.ok(shown.length > 0 && shown.every((c) => stab.issues.some((it) => it.blocks.some((b) => stab.blocks[b].cell.join() === c))), "the highlight is in the preview's own numbers");
+    AS().setPreview("s1", null);
 });
 
 await test("the stabilizer's preview: drawn by role while it is for the model on screen, a pick starts afresh, a step selection follows the growth", () => {
@@ -1863,32 +1941,6 @@ await test("a step that no block belongs to selects nothing; clearing the pick c
     assert.deepEqual(AS().view.highlight, []);
 });
 
-await test("a Compare asked for before the model is open takes effect when its analysis lands", () => {
-    resetAnalysis();
-    AS().runSucceeded("src", mkResult());
-    AS().requestCompare("s1", "overlay");
-    assert.deepEqual(AS().pendingCompare, { modelId: "s1", mode: "overlay" });
-    assert.equal(AS().view.compare, "stabilized");
-    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
-    assert.equal(AS().view.compare, "overlay");
-    assert.equal(AS().view.colorBy, "role");
-    assert.equal(AS().pendingCompare, null);
-    AS().requestCompare("s1", "stabilized");
-    assert.equal(AS().view.compare, "stabilized", "for the model already on screen it is immediate");
-});
-
-await test("a Compare asked for a model survives that model being opened, and is dropped when another model is opened instead", () => {
-    resetAnalysis();
-    AS().runSucceeded("src", mkResult());
-    AS().requestCompare("s1", "overlay");
-    AS().modelChanged("s1", "/s1.glb"); // the Compare button sets the request, then the workspace shows the model
-    assert.deepEqual(AS().pendingCompare, { modelId: "s1", mode: "overlay" }, "still wanted");
-    AS().modelChanged("src", "/src.glb"); // the user went somewhere else first
-    assert.equal(AS().pendingCompare, null, "no longer wanted");
-    AS().runSucceeded("s1", measured(addedDesc(armCells(5), TIP_COLUMN)));
-    assert.equal(AS().view.compare, "stabilized", "visiting s1 later does not jump to Overlay");
-});
-
 const mt = (over = {}) => ({ blocks: 28, errors: 2, floating_blocks: 0, over_limit: 1, longest_cantilever: 5, cog_margin_mm: 120, max_utilisation: 1.06, ...over });
 function stepLog(n, move, added, over = {}) {
     return {
@@ -1900,27 +1952,613 @@ function stepLog(n, move, added, over = {}) {
         ...over,
     };
 }
+// ================= the brief: the sentence, the four figures, the problem rows, the checks, in plain words =================
+
+/** Words and shapes that belong to the exported report and the glossary, not to the panel's default text. */
+const CELL_COORDS = /\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)/;
+const AXES = /(?:^|[\s(,/])[+\-−][XYZ]\b/;
+const assertPlainText = (text, where) => {
+    assert.deepEqual(lib.technicalWordsIn(text), [], `${where}: ${text}`);
+    assert.doesNotMatch(text, CELL_COORDS, `${where}: a cell coordinate in ${text}`);
+    assert.doesNotMatch(text, AXES, `${where}: an axis name in ${text}`);
+    assert.doesNotMatch(text, /\bkPa\b|\bMPa\b/, `${where}: ${text}`);
+};
+/** What the sentence reads: issues, the stability (null: nothing on the ground) and the block count. */
+const brief = (issues, { grounded = true, blocks = 28 } = {}) => ({ issues, stability: grounded ? { inside: true } : null, stats: { blockCount: blocks } });
+const iss = (kind, severity = "error", id = `${kind}-${Math.random().toString(36).slice(2, 6)}`) => ({ id, kind, severity, title: `title ${id}`, detail: `detail ${id}`, blocks: [], focusMm: [0, 0, 0] });
+const many = (n, kind, severity = "error") => Array.from({ length: n }, (_, i) => iss(kind, severity, `${kind}-${i}`));
+
+await test("verdictSentence: one plain sentence for every case of the spec", () => {
+    const say = (issues, opts) => lib.verdictSentence(brief(issues, opts));
+    assert.equal(say([iss("cog-outside")]).text, "Will tip over.");
+    assert.equal(say([iss("cog-outside"), ...many(2, "cantilever-too-long")]).text, "Will tip over and 2 arms are too long.");
+    assert.equal(say([...many(1, "floating"), ...many(2, "cantilever-too-long")]).text, "Won't stand: 1 part is floating and 2 arms are too long.");
+    assert.equal(say([...many(2, "floating")], { grounded: false }).text, "Won't stand: nothing touches the ground.", "nothing grounded says it once, not twice");
+    assert.equal(say([...many(1, "highly-stressed", "warning")]).text, "Will stand, but 1 joint is heavily loaded.");
+    assert.equal(say([...many(3, "highly-stressed", "warning")]).text, "Will stand, but 3 joints are heavily loaded.");
+    assert.equal(say([iss("cog-outside", "warning")]).text, "Will stand, but it is balanced on the very edge.");
+    assert.equal(say([iss("thin-features", "warning")]).text, "Will stand, but thin parts were left out.");
+    assert.deepEqual(say([]), { kind: "pass", text: "Will stand.", sub: "All checks pass.", pill: "Stable", more: 0 });
+    assert.deepEqual(lib.verdictSentence(brief([], { blocks: 0 })), { kind: "empty", text: "Nothing to check: the model has no blocks.", sub: null, pill: "No blocks", more: 0 });
+    assert.equal(lib.verdictSentence(brief([iss("empty")], { blocks: 0, grounded: false })).kind, "empty");
+    // The grammar follows the count.
+    // A long arm breaks a rule rather than gravity: alone it is not "won't stand"; next to a reason that is, the sentence says so.
+    assert.equal(say([...many(1, "cantilever-too-long")]).text, "1 arm is too long.");
+    assert.equal(say([...many(1, "overstressed")]).text, "Won't stand: 1 joint is overloaded.");
+    assert.equal(say([...many(2, "overstressed")]).text, "Won't stand: 2 joints are overloaded.");
+    assert.equal(say([...many(2, "floating")]).text, "Won't stand: 2 parts are floating.");
+});
+
+await test("verdictSentence: it names at most two reasons, the rest are '(+N more)'; errors speak for a failing model, warnings only for one that stands", () => {
+    const say = (issues, opts) => lib.verdictSentence(brief(issues, opts));
+    const everything = [iss("cog-outside"), ...many(1, "floating"), ...many(2, "cantilever-too-long"), ...many(1, "overstressed")];
+    const tip = say(everything);
+    assert.equal(tip.text, "Will tip over and 1 part is floating (+2 more).");
+    assert.equal(tip.more, 2);
+    assert.equal(tip.pill, "Will tip over");
+    const noTip = say(everything.slice(1));
+    assert.equal(noTip.text, "Won't stand: 1 part is floating and 2 arms are too long (+1 more).");
+    assert.equal(noTip.more, 1);
+    assert.equal(noTip.pill, "1 part floating");
+    // Warnings next to errors are not in the sentence, and not in the count.
+    const mixed = say([...many(2, "cantilever-too-long"), iss("cog-outside", "warning"), ...many(1, "highly-stressed", "warning")]);
+    assert.equal(mixed.text, "2 arms are too long.");
+    assert.equal(mixed.more, 0);
+    // Warnings: the edge first, then loaded joints, then thin parts; also at most two.
+    const warn = say([iss("thin-features", "warning"), ...many(2, "highly-stressed", "warning"), iss("cog-outside", "warning")]);
+    assert.equal(warn.text, "Will stand, but it is balanced on the very edge and 2 joints are heavily loaded (+1 more).");
+    assert.equal(warn.kind, "warn");
+    assert.equal(warn.pill, "Balanced on the edge");
+    // A budget alone is not "won't stand"; with a real problem it is one of the reasons.
+    assert.equal(say([iss("too-many-blocks")]).text, "It is over the block budget.");
+    assert.equal(say([iss("too-many-blocks")]).pill, "Over the block budget");
+    assert.equal(say([...many(2, "cantilever-too-long"), iss("too-many-blocks")]).text, "2 arms are too long and it is over the block budget.");
+    assert.equal(say([...many(2, "cantilever-too-long"), ...many(1, "overstressed")]).text, "Won't stand: 2 arms are too long and 1 joint is overloaded.");
+    // An error of a kind it does not know still fails the model.
+    const odd = say([iss("something-new")]);
+    assert.equal(odd.kind, "fail");
+    assert.match(odd.text, /^There are problems to fix\.$/);
+    // The pill forms.
+    assert.equal(say([...many(2, "cantilever-too-long")]).pill, "2 arms too long");
+    assert.equal(say([...many(1, "overstressed")]).pill, "1 joint overloaded");
+    assert.equal(say([...many(1, "highly-stressed", "warning")]).pill, "1 joint heavily loaded");
+    assert.equal(say([...many(2, "floating")], { grounded: false }).pill, "Nothing on the ground");
+});
+
+await test("verdictSentence on the engine's own results: the shelf with a long arm, the same shelf with a column under it, and a tipping lean", () => {
+    const shelf = measured(plainDesc(armCells(6)));
+    assert.equal(lib.verdictSentence(shelf).text, "Won't stand: 1 arm is too long and 1 joint is overloaded.");
+    const fixed = measured(addedDesc(armCells(5), TIP_COLUMN));
+    assert.equal(fixed.issues.length, 0);
+    assert.equal(lib.verdictSentence(fixed).text, "Will stand.");
+    const lean = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]]));
+    assert.match(lib.verdictSentence(lean).text, /^Will tip over/);
+    for (const r of [shelf, fixed, lean]) {
+        const sentence = lib.verdictSentence(r);
+        assertPlainText(sentence.text, "sentence");
+        assertPlainText(sentence.pill, "pill");
+        assertPlainText(sentence.sub ?? "", "sub");
+        assert.ok(sentence.text.endsWith("."), sentence.text);
+    }
+});
+
+await test("the snapshot carries the sentence of the model's result (null before there is one)", () => {
+    resetAnalysis();
+    const model = { id: "m1", glb_url: "/m1.glb", kind: "generated", source_model_id: null, derived: null };
+    S().setProject(detail(crypto.randomUUID()));
+    S().addModel({ ...modelFor(makeJob(crypto.randomUUID())), ...model });
+    S().setActiveModel("m1");
+    assert.equal(lib.useAnalysisSnapshot(model).sentence, null);
+    const shelf = measured(plainDesc(armCells(6)));
+    AS().runSucceeded("m1", shelf);
+    const snapshot = lib.useAnalysisSnapshot(model);
+    assert.equal(snapshot.sentence.text, "Won't stand: 1 arm is too long and 1 joint is overloaded.");
+    assert.equal(snapshot.sentence.pill, "1 arm too long");
+    assert.equal(snapshot.result, shelf);
+    assert.equal(snapshot.viewResult, shelf, "the stage draws the model's own result");
+    // Another model's result is not this one's.
+    assert.equal(lib.useAnalysisSnapshot({ ...model, id: "other" }).sentence, null);
+});
+
+/** A result with the parts keyFigures reads. */
+const figResult = ({ issues = [], stability = { inside: true, marginMm: 142, cogMm: [450, 300, 250] }, longest = 0, limit = 4, stress = undefined, blocks = 237, budget = null, roleCounts = null, floating = 0 } = {}) => ({
+    issues,
+    stability,
+    stats: { blockCount: blocks, longestCantilever: longest, floatingCount: floating },
+    settings: { cantileverLimit: limit, maxBlocks: budget },
+    stress: stress === undefined ? { maxUtilisation: 0.54, unsupportedBlocks: floating } : stress,
+    assembly: roleCounts ? { roleCounts } : null,
+    cantilevers: [],
+});
+const figs = (over) => Object.fromEntries(lib.keyFigures(figResult(over)).map((f) => [f.key, f]));
+
+await test("keyFigures: four figures in order, each with a value, a unit and a mark (symbol as well as colour)", () => {
+    const list = lib.keyFigures(figResult());
+    assert.deepEqual(list.map((f) => f.key), ["balance", "overhang", "strength", "blocks"]);
+    assert.deepEqual(list.map((f) => f.label), ["Balance", "Longest overhang", "Strength used", "Blocks used"]);
+    const [balance, overhang, strength, blocks] = list;
+    assert.deepEqual([balance.value, balance.unit, balance.mark], ["142 mm", "inside", "pass"]);
+    assert.equal(balance.summary, "Balance: passes. 142 mm inside the base.");
+    assert.deepEqual([overhang.value, overhang.unit, overhang.mark], ["none", "", "pass"]);
+    assert.deepEqual([strength.value, strength.unit, strength.mark], ["54%", "worst joint", "pass"]);
+    assert.equal(strength.summary, "Strength used: passes. 54% used at the worst joint.");
+    assert.deepEqual([blocks.value, blocks.unit, blocks.mark], ["237", "", "none"]);
+    assert.equal(blocks.summary, "Blocks used: 237 blocks.");
+    // Every figure has a tooltip with the technical term, and none shows the technical term itself.
+    for (const f of list) {
+        assert.match(f.tip, /Technical term: /, f.key);
+        assert.ok(f.tech.length > 0);
+        for (const text of [f.label, f.value, f.unit, f.summary]) assertPlainText(text, f.key);
+    }
+    assert.match(balance.tip, /centre-of-gravity margin/i);
+    assert.equal(balance.tech, "Centre-of-gravity margin to the support base");
+    assert.match(overhang.tip, /cantilever/i);
+    assert.match(strength.tip, /utilisation/i);
+    assert.match(blocks.tip, /components/i);
+});
+
+await test("keyFigures: balance fails outside the base or with nothing on the ground, warns on the very edge (the report's 1 mm), passes inside", () => {
+    const outside = figs({ stability: { inside: false, marginMm: -85, cogMm: [0, 0, 0] }, issues: [iss("cog-outside")] }).balance;
+    assert.deepEqual([outside.value, outside.unit, outside.mark], ["85 mm", "outside", "fail"]);
+    assert.equal(outside.summary, "Balance: fails. 85 mm outside the base.");
+    const hair = figs({ stability: { inside: false, marginMm: -0.4, cogMm: [0, 0, 0] }, issues: [iss("cog-outside")] }).balance;
+    assert.deepEqual([hair.value, hair.mark], ["< 1 mm", "fail"], "never '0 mm'");
+    const edge = figs({ stability: { inside: true, marginMm: 0.3, cogMm: [0, 0, 0] }, issues: [iss("cog-outside", "warning")] }).balance;
+    assert.deepEqual([edge.value, edge.unit, edge.mark], ["< 1 mm", "on the edge", "warn"]);
+    assert.equal(edge.summary, "Balance: has a warning. On the very edge of the base.");
+    const roomy = figs({ stability: { inside: true, marginMm: 1, cogMm: [0, 0, 0] } }).balance;
+    assert.deepEqual([roomy.value, roomy.mark], ["1 mm", "pass"], "1 mm of margin and no warning: inside");
+    const nothing = figs({ stability: null, issues: many(1, "floating") }).balance;
+    assert.deepEqual([nothing.value, nothing.unit, nothing.mark], ["-", "nothing on the ground", "fail"]);
+    const empty = figs({ stability: null, blocks: 0 }).balance;
+    assert.deepEqual([empty.value, empty.unit, empty.mark], ["-", "no blocks", "none"]);
+    assert.equal(figs({ stability: { inside: true, marginMm: 1234, cogMm: [0, 0, 0] } }).balance.value, "1,234 mm");
+});
+
+await test("keyFigures: the longest overhang against the limit; strength used at 75% and 100%; blocks used against a budget", () => {
+    const o = (longest, limit = 4) => figs({ longest, limit }).overhang;
+    assert.deepEqual([o(0).value, o(0).mark], ["none", "pass"]);
+    assert.deepEqual([o(1).value, o(1).unit, o(1).mark], ["1 block", "max 4", "pass"]);
+    assert.deepEqual([o(4).value, o(4).mark], ["4 blocks", "pass"], "at the limit is allowed");
+    assert.deepEqual([o(5).value, o(5).mark], ["5 blocks", "fail"], "one past is not");
+    assert.deepEqual([o(6).unit, o(6).mark, o(6, 6).mark], ["max 4", "fail", "pass"]);
+    assert.equal(o(6).summary, "Longest overhang: fails. 6 blocks, the most allowed is 4.");
+    assert.equal(figs({ longest: 3, stability: { inside: true, marginMm: 5, cogMm: [0, 0, 0] }, blocks: 0 }).overhang.mark, "none", "no blocks: nothing to judge");
+    const u = (v) => figs({ stress: { maxUtilisation: v } }).strength;
+    assert.equal(u(0.5).mark, "pass");
+    assert.equal(u(0.75).mark, "pass", "75% exactly is not above the warning level");
+    assert.equal(u(0.7501).mark, "warn");
+    assert.equal(u(1).mark, "warn", "100% exactly is not past the limit");
+    assert.equal(u(1.0001).mark, "fail");
+    assert.deepEqual([u(1.32).value, u(1.32).unit], ["132%", "worst joint"]);
+    assert.equal(u(1.32).summary, "Strength used: fails. 132% used at the worst joint.");
+    assert.equal(u(0.004).value, "0%");
+    const none = figs({ stress: null }).strength;
+    assert.deepEqual([none.value, none.unit, none.mark], ["-", "no estimate", "none"]);
+    // Blocks used: a number, unless there is a budget; the stabilizer's added blocks are said.
+    const b = (opts) => figs(opts).blocks;
+    assert.deepEqual([b({}).value, b({}).unit, b({}).mark], ["237", "", "none"]);
+    assert.deepEqual([b({ budget: 300 }).unit, b({ budget: 300 }).mark], ["of 300", "pass"]);
+    assert.deepEqual([b({ budget: 237 }).mark, b({ budget: 236 }).mark], ["pass", "fail"], "at the budget is within it");
+    assert.equal(b({ budget: 236 }).summary, "Blocks used: fails. 237 blocks, the budget is 236.");
+    assert.deepEqual([b({ roleCounts: [237, 10, 4, 2, 0, 0] }).unit, b({ roleCounts: [237, 10, 4, 2, 0, 0] }).mark], ["+16 added", "none"]);
+    assert.equal(b({ budget: 300, roleCounts: [237, 16, 0, 0, 0, 0] }).unit, "of 300 · +16 added");
+    assert.equal(lib.addedBlockCount({ assembly: { roleCounts: [237, 10, 4, 2, 0, 0] } }), 16);
+    assert.equal(lib.addedBlockCount({ assembly: null }), 0);
+});
+
+await test("keyFigures on the engine's results: the shelf fails two chips, the same shelf with a column under the arm passes them", () => {
+    const shelf = lib.keyFigures(measured(plainDesc(armCells(6))));
+    assert.deepEqual(shelf.map((f) => f.mark), ["pass", "fail", "fail", "none"]);
+    assert.equal(shelf[1].value, "6 blocks");
+    assert.match(shelf[2].value, /^\d+%$/);
+    const fixed = lib.keyFigures(measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.deepEqual(fixed.map((f) => f.mark), ["pass", "pass", "pass", "none"]);
+    assert.equal(fixed[3].unit, "+4 added");
+    for (const f of [...shelf, ...fixed]) for (const text of [f.label, f.value, f.unit, f.summary]) assertPlainText(text, f.key);
+});
+
+await test("keyFigures with floating parts: balance and strength are the grounded part's alone, so neither is a green tick; a real reading stays as it is", () => {
+    const sky = { floating: 3, issues: many(1, "floating") };
+    const f = figs({ ...sky, stress: { maxUtilisation: 0.004, unsupportedBlocks: 3 } });
+    // Balance keeps its number and says whose it is.
+    assert.deepEqual([f.balance.value, f.balance.unit, f.balance.mark], ["142 mm", "base only", "none"]);
+    assert.match(f.balance.tip, /Only the grounded part is counted: the floating parts are not\./);
+    assert.match(f.balance.tip, /Technical term: /);
+    assert.equal(f.balance.summary, "Balance: For information only: 142 mm inside the base, counting only the grounded part.");
+    // Strength has no reading at all: "0%" would say the model is fine.
+    assert.deepEqual([f.strength.value, f.strength.unit, f.strength.mark], ["-", "floating parts not counted", "none"]);
+    assert.match(f.strength.tip, /only the grounded part was checked/);
+    assert.match(f.strength.summary, /^Strength used: No reading: the floating parts are not analysed/);
+    for (const figure of [f.balance, f.strength]) for (const text of [figure.value, figure.unit, figure.summary]) assert.doesNotMatch(text, /\b0%/, figure.key);
+    for (const figure of Object.values(f)) for (const text of [figure.label, figure.value, figure.unit, figure.summary]) assertPlainText(text, figure.key);
+    // The same model without anything in the air: the ticks are back.
+    const grounded = figs({ stress: { maxUtilisation: 0.004, unsupportedBlocks: 0 } });
+    assert.deepEqual([grounded.balance.unit, grounded.balance.mark, grounded.strength.value, grounded.strength.mark], ["inside", "pass", "0%", "pass"]);
+    // Blocks the estimate left out count even when the result says none float (the two rules agree with the stabilizer's log).
+    assert.equal(figs({ stress: { maxUtilisation: 0.01, unsupportedBlocks: 2 } }).strength.mark, "none");
+    // A real reading is never hidden: a joint at 90% warns and one at 120% fails, floating parts or not.
+    const heavy = figs({ ...sky, stress: { maxUtilisation: 0.9, unsupportedBlocks: 3 } }).strength;
+    assert.deepEqual([heavy.value, heavy.mark], ["90%", "warn"]);
+    const over = figs({ ...sky, stress: { maxUtilisation: 1.2, unsupportedBlocks: 3 } }).strength;
+    assert.deepEqual([over.value, over.mark], ["120%", "fail"]);
+    // A centre of gravity that is outside, on the edge, or over nothing is a finding of its own and stays as it is.
+    const tips = figs({ ...sky, stability: { inside: false, marginMm: -30, cogMm: [0, 0, 0] }, issues: [iss("cog-outside"), ...sky.issues] }).balance;
+    assert.deepEqual([tips.unit, tips.mark], ["outside", "fail"]);
+    const edge = figs({ ...sky, stability: { inside: true, marginMm: 0.4, cogMm: [0, 0, 0] }, issues: [iss("cog-outside", "warning"), ...sky.issues] }).balance;
+    assert.deepEqual([edge.unit, edge.mark], ["on the edge", "warn"]);
+    const nothing = figs({ ...sky, stability: null, stress: null }).balance;
+    assert.deepEqual([nothing.unit, nothing.mark], ["nothing on the ground", "fail"]);
+    assert.deepEqual([figs({ ...sky, stress: null }).strength.unit, figs({ ...sky, stress: null }).strength.mark], ["no estimate", "none"]);
+    // The overhang and blocks chips are not about the floating parts.
+    assert.equal(f.overhang.mark, "pass");
+    assert.equal(f.blocks.mark, "none");
+});
+
+/** A 3 x 3 base on the ground, a part in the air: "Won't stand: 1 part is floating", and a strength reading of 0.01 % for the base alone. */
+const FLOATY = uniq([...box(0, 3, 0, 3, 0, 2), [8, 8, 5]]);
+const TIPPY = uniq([[0, 0, 0], ...range(7).map((i) => [i, 0, 1]), [8, 8, 5], [8, 8, 6]]);
+
+await test("keyFigures on the engine's results with a part in the air: the four chips never contradict the sentence", () => {
+    const result = measured(plainDesc(FLOATY));
+    assert.ok(result.stats.floatingCount > 0 && result.stress.maxUtilisation < 0.01);
+    assert.equal(lib.verdictSentence(result).text, "Won't stand: 1 part is floating.");
+    const [balance, overhang, strength, blocks] = lib.keyFigures(result);
+    assert.deepEqual([balance.mark, strength.mark, strength.value], ["none", "none", "-"]);
+    assert.deepEqual([overhang.mark, blocks.mark], ["pass", "none"]);
+    // One property over fixtures of every kind: what the sentence says is wrong is not a tick in the chip it is about.
+    const fixtures = {
+        floaty: result,
+        tippy: measured(plainDesc(TIPPY)),
+        shelf: measured(plainDesc(armCells(6))),
+        fixed: measured(addedDesc(armCells(5), TIP_COLUMN)),
+        warn: measured(plainDesc(warnCells())),
+        lean: measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]])),
+        budget: lib.analyzeAssembly(plainDesc(armCells(5)), null, lib.sanitizeSettings({ maxBlocks: 20 })),
+        hanging: measured(plainDesc([[1, 1, 3], [1, 1, 4]])),
+        empty: lib.analyzeAssembly(plainDesc([]), null, lib.sanitizeSettings(null)),
+    };
+    for (const [name, r] of Object.entries(fixtures)) assertChipsAgree(name, r);
+});
+
+await test("issueBrief: what, where and why for every kind of issue, in plain words and never a cell coordinate", () => {
+    const lean = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]]));
+    const shelf = measured(plainDesc(armCells(6)));
+    const floating = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 2], [2, 0, 2]]));
+    const budget = lib.analyzeAssembly(plainDesc(armCells(5)), null, lib.sanitizeSettings({ maxBlocks: 20 }));
+    const edge = measured(plainDesc([[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 2]]));
+    const heavy = measured(plainDesc([...box(0, 4, 0, 3, 0, 1), ...box(0, 1, 1, 2, 1, 5), ...box(1, 5, 1, 2, 4, 5), [1, 1, 5], [2, 1, 5]]), lib.sanitizeSettings({ cantileverLimit: 10 }));
+    const seen = new Set();
+    for (const [name, r] of Object.entries({ lean, shelf, floating, budget, edge, heavy })) {
+        for (const issue of r.issues) {
+            const b = lib.issueBrief(issue, r);
+            seen.add(`${issue.kind}/${issue.severity}`);
+            assert.equal(b.what, issue.title);
+            assert.equal(b.why, issue.detail);
+            assert.equal(b.tone, issue.severity === "error" ? "fail" : "warn");
+            for (const [field, text] of [["what", b.what], ["where", b.where], ["why", b.why]]) assertPlainText(text, `${name} ${issue.id} ${field}`);
+        }
+    }
+    for (const k of ["cog-outside/error", "cog-outside/warning", "cantilever-too-long/error", "floating/error", "too-many-blocks/error", "overstressed/error", "highly-stressed/warning"]) assert.ok(seen.has(k), `${k} was looked at`);
+    const where = (r, kind) => lib.issueBrief(r.issues.find((i) => i.kind === kind), r).where;
+    assert.equal(where(lean, "cog-outside"), "weight pulls to the right", "a tip says which way");
+    assert.match(where(shelf, "cantilever-too-long"), /^500-600 mm up, (right side|back right|front right)$/);
+    assert.match(where(floating, "floating"), /^200-300 mm up, (right side|back right|front right|in the middle)$/);
+    assert.equal(where(budget, "too-many-blocks"), "", "a whole-model issue has no place");
+    assert.equal(where(edge, "cog-outside"), "weight is at the right edge");
+    // A stress issue is about one joint, at the peak block.
+    const stress = shelf.issues.find((i) => i.kind === "overstressed");
+    const peak = shelf.blocks[stress.blocks[0]];
+    assert.match(lib.issueBrief(stress, shelf).where, new RegExp(`^${peak.cell[2] * 100}-${(peak.cell[2] + 1) * 100} mm up, `));
+    // The headings and rows read the same at every width: short enough for one line each.
+    for (const issue of [...shelf.issues, ...lean.issues]) assert.ok(lib.issueBrief(issue, shelf).what.length <= 48, issue.title);
+});
+
+await test("issueBrief: a tip without a direction, thin parts left out (a point, no blocks), and a result with no stability", () => {
+    const base = { blocks: Array.from({ length: 4 }, (_, i) => ({ index: i, cell: [i, 0, 0], centerMm: [i * 100 + 50, 50, 50] })), settings: { blockSizeMm: 100 }, stability: null };
+    const tip = { id: "cog", kind: "cog-outside", severity: "error", title: "Tips over: 5 mm past the base", detail: "d", blocks: [], focusMm: [0, 0, 0] };
+    assert.equal(lib.issueBrief(tip, base).where, "weight is past the base");
+    assert.equal(lib.issueBrief(tip, { ...base, stability: { tipDirection: [0, -1] } }).where, "weight pulls to the front");
+    assert.equal(lib.issueBrief(tip, { ...base, stability: { tipDirection: [-1, 1] } }).where, "weight pulls to the back left");
+    const edge = { ...tip, severity: "warning", title: "Balanced on the edge of the base" };
+    // The base is the square (0..100); the weight is 0.5 mm from its right edge.
+    const square = [[0, 0], [100, 0], [100, 100], [0, 100]];
+    assert.equal(lib.issueBrief(edge, { ...base, stability: { supportHull: square, groundPointMm: [99.5, 50] } }).where, "weight is at the right edge");
+    assert.equal(lib.issueBrief(edge, { ...base, stability: { supportHull: square, groundPointMm: [50, 0.5] } }).where, "weight is at the front edge", "-Y is towards you");
+    assert.equal(lib.issueBrief(edge, { ...base, stability: { supportHull: [], groundPointMm: [0, 0] } }).where, "weight is on the edge of the base");
+    assert.equal(lib.issueBrief(edge, base).where, "weight is on the edge of the base");
+    const thin = { id: "thin-features", kind: "thin-features", severity: "warning", title: "Thin parts left out: 62% of the model kept", detail: "d", blocks: [], focusMm: [350, 50, 250] };
+    assert.equal(lib.issueBrief(thin, base).where, "200-300 mm up, right side");
+    assert.equal(lib.issueBrief({ ...thin, focusMm: [200, 50, 0] }, base).where, "0-100 mm up, in the middle");
+});
+
+await test("the exported report keeps the technical terms: each issue has the engine's sentence and a technical summary (kind, measured value against its limit, cells)", () => {
+    const lean = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]]));
+    const shelf = measured(plainDesc(armCells(6)));
+    const floating = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 2], [2, 0, 2]]));
+    const budget = lib.analyzeAssembly(plainDesc(armCells(5)), null, lib.sanitizeSettings({ maxBlocks: 20 }));
+    const edge = measured(plainDesc([[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 2]]));
+    const heavy = measured(plainDesc([...box(0, 4, 0, 3, 0, 1), ...box(0, 1, 1, 2, 1, 5), ...box(1, 5, 1, 2, 4, 5), [1, 1, 5], [2, 1, 5]]), lib.sanitizeSettings({ cantileverLimit: 10 }));
+    const seen = new Map();
+    for (const [name, r] of Object.entries({ lean, shelf, floating, budget, edge, heavy })) {
+        // Through JSON, as the file is written: nothing in the summary is lost to a NaN.
+        const doc = JSON.parse(JSON.stringify(lib.buildReport(r)));
+        assert.equal(doc.issues.length, r.issues.length, name);
+        for (const issue of doc.issues) {
+            const t = issue.technical_summary;
+            assert.ok(t, `${name} ${issue.id}: a technical summary`);
+            assert.equal(t.kind, issue.kind);
+            assert.ok(t.metric.length > 8 && ["mm", "blocks", "ratio"].includes(t.unit), `${issue.id}: ${t.metric} / ${t.unit}`);
+            assert.ok(t.measured === null || Number.isFinite(t.measured), issue.id);
+            assert.ok(t.limit === null || Number.isFinite(t.limit), issue.id);
+            assert.equal(t.bound === null, t.limit === null, "a limit has a direction");
+            assert.ok(t.cells.every((c) => c.length === 3 && c.every(Number.isInteger)), `${issue.id}: cells are [i, j, k]`);
+            // The screen's words are untouched, and the report has the sentence in the engine's terms next to the summary.
+            assert.equal(issue.title, r.issues.find((i) => i.id === issue.id).title);
+            assert.ok(issue.technical.length > 10);
+            seen.set(`${name}:${issue.kind}/${issue.severity}`, { issue, t, doc });
+        }
+    }
+    // Every kind the engine raises here is covered, by severity.
+    for (const key of ["lean:cog-outside/error", "edge:cog-outside/warning", "shelf:cantilever-too-long/error", "floating:floating/error", "budget:too-many-blocks/error", "shelf:overstressed/error", "heavy:highly-stressed/warning"]) assert.ok(seen.has(key), `${key} in the fixtures`);
+
+    // Measured against the limit, in the engine's units.
+    const arm = seen.get("shelf:cantilever-too-long/error");
+    assert.deepEqual([arm.t.metric, arm.t.measured, arm.t.limit, arm.t.unit, arm.t.bound], ["Cantilever reach", shelf.stats.longestCantilever, 4, "blocks", "max"]);
+    assert.equal(shelf.stats.longestCantilever, 6);
+    assert.match(arm.issue.title, /6 blocks/, "the screen's title and the summary agree");
+    assert.deepEqual(arm.t.cells, arm.issue.cells, "the blocks past the limit");
+    const tip = seen.get("lean:cog-outside/error");
+    assert.equal(tip.t.metric, "Centre-of-gravity margin to the support base");
+    assert.deepEqual([tip.t.unit, tip.t.limit, tip.t.bound], ["mm", 0, "min"]);
+    assert.ok(tip.t.measured < 0, "negative: outside the base");
+    assert.equal(tip.t.measured, tip.doc.stability.margin_mm);
+    const hair = seen.get("edge:cog-outside/warning");
+    assert.deepEqual([hair.t.limit, hair.t.bound], [1, "min"], "the edge warning is held to the report's 1 mm");
+    assert.ok(hair.t.measured >= 0 && hair.t.measured < 1);
+    const air = seen.get("floating:floating/error");
+    assert.deepEqual([air.t.measured, air.t.limit, air.t.unit, air.t.bound], [2, 0, "blocks", "max"]);
+    const over = seen.get("budget:too-many-blocks/error");
+    assert.deepEqual([over.t.metric, over.t.measured, over.t.limit], ["Components used", shelfBlocks(budget), 20]);
+    const joint = seen.get("shelf:overstressed/error");
+    assert.deepEqual([joint.t.unit, joint.t.limit, joint.t.bound], ["ratio", 1, "max"]);
+    assert.ok(joint.t.measured > 1);
+    assert.equal(joint.t.cells.length, 1, "a joint is its peak block");
+    assert.deepEqual(joint.t.cells[0], joint.issue.cells[0]);
+    assert.match(joint.issue.technical, new RegExp(`utilisation ${Math.round(joint.t.measured * 100)}%`), "the sentence and the summary say the same number");
+    const heavyJoint = seen.get("heavy:highly-stressed/warning");
+    assert.deepEqual([heavyJoint.t.limit, heavyJoint.t.unit], [lib.STRESS_WARN, "ratio"]);
+    assert.ok(heavyJoint.t.measured > lib.STRESS_WARN && heavyJoint.t.measured <= lib.STRESS_FAIL);
+    function shelfBlocks(r) {
+        return r.stats.blockCount;
+    }
+});
+
+await test("technicalSummary: the findings a mesh run raises (thin parts, thin joints, no blocks) and a model with nothing on the ground", () => {
+    const base = { settings: lib.sanitizeSettings(null), cantilevers: [], bodies: [], blocks: [], stability: null, stress: null };
+    const issue = (kind, over = {}) => ({ id: kind, kind, severity: "warning", title: "", detail: "", blocks: [], focusMm: [0, 0, 0], ...over });
+    const thin = lib.technicalSummary(issue("thin-features"), { ...base, stats: { coverage: 0.55, blockCount: 12 } }, []);
+    assert.deepEqual([thin.metric, thin.measured, thin.limit, thin.unit, thin.bound], ["Coverage (share of the model's volume inside blocks)", 0.55, 0.8, "ratio", "min"]);
+    // At full coverage the same kind is the "thin joints" finding: floating blocks a lower fill threshold would connect.
+    const joints = lib.technicalSummary(issue("thin-features", { blocks: [0, 1, 2] }), { ...base, stats: { coverage: 0.93, blockCount: 12 } }, [[0, 0, 3], [1, 0, 3], [2, 0, 3]]);
+    assert.deepEqual([joints.metric, joints.measured, joints.limit, joints.unit, joints.bound], ["Floating blocks a lower fill threshold would connect", 3, 0, "blocks", "max"]);
+    assert.equal(joints.cells.length, 3);
+    const empty = lib.technicalSummary(issue("empty", { severity: "error" }), { ...base, stats: { coverage: 0, blockCount: 0 } }, []);
+    assert.match(empty.metric, /^Blocks filled to at least 10% \(fill threshold\)$/);
+    assert.deepEqual([empty.measured, empty.limit, empty.bound], [0, 1, "min"]);
+    // Nothing on the ground: there is no margin to report, only the rule it is held to.
+    const hanging = lib.technicalSummary(issue("cog-outside", { severity: "error" }), { ...base, stats: { coverage: 1, blockCount: 4 } }, []);
+    assert.deepEqual([hanging.measured, hanging.limit, hanging.bound], [null, 0, "min"]);
+    // A budget that is not set holds nothing.
+    const free = lib.technicalSummary(issue("too-many-blocks", { severity: "error" }), { ...base, stats: { coverage: 1, blockCount: 30 } }, []);
+    assert.deepEqual([free.measured, free.limit, free.bound], [30, null, null]);
+});
+
+await test("report: a thin-features finding reads the same in `technical` and `technical_summary`, whichever of its two forms it is", () => {
+    // The engine's own results (a mesh is needed for both). A closed box as a triangle soup.
+    const pushBox = (out, x0, y0, z0, x1, y1, z1) => {
+        const v = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+        for (const [a, b, c, d] of [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [3, 0, 4, 7]]) for (const i of [a, b, c, a, c, d]) out.push(...v[i]);
+    };
+    const soupOf = (floats) => ({ positions: new Float32Array(floats) });
+    const thinOf = (result) => {
+        const issue = result.issues.find((i) => i.kind === "thin-features");
+        assert.ok(issue, `a thin-features finding among ${result.issues.map((i) => i.kind).join(", ")}`);
+        const entry = JSON.parse(lib.buildReportJson(result)).issues.find((i) => i.kind === "thin-features");
+        return { issue, entry, line: lib.technicalLine(issue, result) };
+    };
+    // 1. Thin joints: a 1000 mm slab on a 36 mm post (31% filled with the grazing layer, so a 35% threshold drops it). Coverage is 99%.
+    const post = [];
+    pushBox(post, 0, 0, 100, 1000, 1000, 1000);
+    pushBox(post, 32, 32, 0, 68, 68, 100);
+    const joints = lib.analyze(soupOf(post), { fillThreshold: 0.35 });
+    assert.ok(joints.stats.coverage >= lib.COVERAGE_WARN, `coverage ${joints.stats.coverage}`);
+    const j = thinOf(joints);
+    assert.match(j.issue.title, /^Thin joints left out: 1 floating part would connect$/);
+    assert.doesNotMatch(j.entry.technical, /warning below|Coverage \d+%/, "a 99% coverage is not a warning below 80%");
+    assert.match(j.entry.technical, new RegExp(`^${j.issue.blocks.length} floating blocks? would be connected at a lower fill threshold \\(now 35%\\); coverage is ${Math.round(joints.stats.coverage * 100)}%\\.$`));
+    assert.equal(j.entry.technical, j.line);
+    assert.equal(j.entry.technical_summary.metric, "Floating blocks a lower fill threshold would connect");
+    assert.equal(j.entry.technical_summary.measured, j.issue.blocks.length, "the number the sentence names is the one the summary measures");
+    // 2. Thin parts: a solid base with five 8 mm walls (8% of a block: dropped at any threshold the app offers above that). Coverage is under 80%.
+    const sheet = [];
+    pushBox(sheet, 0, 0, 0, 1000, 1000, 100);
+    for (const y of [100, 300, 500, 700, 900]) pushBox(sheet, 0, y, 100, 1000, y + 8, 1000);
+    const thin = lib.analyze(soupOf(sheet), { fillThreshold: 0.5 });
+    assert.ok(thin.stats.coverage < lib.COVERAGE_WARN, `coverage ${thin.stats.coverage}`);
+    const t = thinOf(thin);
+    assert.equal(t.entry.technical, `Coverage ${Math.round(thin.stats.coverage * 100)}% (warning below ${Math.round(lib.COVERAGE_WARN * 100)}%) at a fill threshold of 50%.`, "the limit is the engine's constant, not a literal");
+    assert.equal(t.entry.technical_summary.metric, "Coverage (share of the model's volume inside blocks)");
+    assert.equal(t.entry.technical_summary.limit, lib.COVERAGE_WARN);
+    // Singular and plural, on a made-up result.
+    const fake = (n) => lib.technicalLine({ kind: "thin-features", severity: "warning", id: "thin-features", title: "", detail: "", blocks: range(n), focusMm: [0, 0, 0] }, { settings: lib.sanitizeSettings(null), stats: { coverage: 0.93, blockCount: 12 } });
+    assert.equal(fake(1), "1 floating block would be connected at a lower fill threshold (now 10%); coverage is 93%.");
+    assert.equal(fake(3), "3 floating blocks would be connected at a lower fill threshold (now 10%); coverage is 93%.");
+});
+
+await test("sortIssuesForList: tipping, floating, long arms, overload, other errors, then the warnings; the engine's order within a kind", () => {
+    const list = [
+        iss("thin-features", "warning", "thin"), iss("highly-stressed", "warning", "loaded"), iss("cog-outside", "warning", "edge"),
+        iss("too-many-blocks", "error", "budget"), iss("overstressed", "error", "over1"), iss("overstressed", "error", "over2"),
+        iss("cantilever-too-long", "error", "arm1"), iss("cantilever-too-long", "error", "arm2"), iss("floating", "error", "float"), iss("cog-outside", "error", "tip"),
+    ];
+    const sorted = lib.sortIssuesForList(list);
+    assert.deepEqual(sorted.map((i) => i.id), ["tip", "float", "arm1", "arm2", "over1", "over2", "budget", "edge", "loaded", "thin"]);
+    assert.notEqual(sorted, list, "a new array");
+    assert.equal(list[0].id, "thin", "the engine's list is not changed");
+    assert.deepEqual(lib.sortIssuesForList([]), []);
+    // Errors before warnings whatever the kind (an unknown one is an "other error").
+    assert.deepEqual(lib.sortIssuesForList([iss("highly-stressed", "warning", "w"), iss("brand-new", "error", "e")]).map((i) => i.id), ["e", "w"]);
+});
+
+await test("checkLabel and checkValue: the six checks in plain words; the engine's own values (and the report) keep the technical ones", () => {
+    const shelf = measured(plainDesc(armCells(6)));
+    assert.deepEqual(["cog", "cantilevered", "long-cantilevers", "components", "floating", "stress"].map(lib.checkLabel), ["Balance", "Overhanging blocks", "Overhangs too long", "Blocks used", "Floating parts", "Strength used"]);
+    const plain = Object.fromEntries(shelf.checks.map((row) => [row.key, lib.checkValue(row, shelf)]));
+    assert.match(plain.cog, /^Inside the base, \d+ mm from the edge$/);
+    assert.equal(plain.cantilevered, "6 blocks");
+    assert.equal(plain["long-cantilevers"], "1 arm longer than 4 blocks");
+    assert.equal(plain.components, "29 blocks");
+    assert.equal(plain.floating, "None");
+    assert.match(plain.stress, /^Worst joint uses \d+% of its strength$/);
+    // The engine's row says it the technical way, and still does.
+    assert.match(shelf.checks.find((r) => r.key === "cog").value, /^Inside the base · \d+ mm margin$/);
+    assert.match(shelf.checks.find((r) => r.key === "stress").value, /^Peak \d+% of allowable at block \(\d+, \d+, \d+\)/);
+    for (const [key, value] of Object.entries(plain)) assertPlainText(`${lib.checkLabel(key)}: ${value}`, key);
+    // A tip, nothing on the ground, a budget, floating parts and a missing estimate.
+    const lean = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]]));
+    const tips = lib.checkValue(lean.checks[0], lean);
+    assert.match(tips, /^Outside the base by \d+ mm, tips to the right$/);
+    const budgeted = lib.analyzeAssembly(plainDesc(armCells(5)), null, lib.sanitizeSettings({ maxBlocks: 20 }));
+    assert.equal(lib.checkValue(budgeted.checks.find((r) => r.key === "components"), budgeted), "28 blocks (budget 20)");
+    const floating = measured(plainDesc([[0, 0, 0], [1, 0, 0], [1, 0, 2], [2, 0, 2]]));
+    assert.equal(lib.checkValue(floating.checks.find((r) => r.key === "floating"), floating), "2 blocks in 1 floating part");
+    assert.match(lib.checkValue(floating.checks[0], floating), /1? ?floating blocks? not counted|2 floating blocks not counted/);
+    const noStress = { ...shelf, stress: null };
+    assert.equal(lib.checkValue({ key: "stress", value: "Stress could not be estimated" }, noStress), "Stress could not be estimated", "the engine's plain line is used when there is no estimate");
+    const hanging = lib.analyzeAssembly(plainDesc([[1, 1, 1], [1, 1, 2]]), null, lib.sanitizeSettings(null));
+    assert.equal(lib.checkValue(hanging.checks[0], hanging), "Nothing touches the ground");
+    assert.equal(lib.checkValue({ key: "cog", value: "x" }, lib.analyzeAssembly(plainDesc([]), null, lib.sanitizeSettings(null))), "No blocks");
+});
+
+await test("the vocabulary: every term has a plain label, a technical term and a tooltip that names it; the words the stage and lists use", () => {
+    for (const [key, term] of Object.entries(lib.TERMS)) {
+        assert.ok(term.label && term.tech && term.tip, key);
+        assert.notEqual(term.label.toLowerCase(), term.tech.toLowerCase(), `${key}: the plain word differs from the technical one`);
+        assert.ok(term.tip.includes("Technical term: "), `${key}: the tooltip names the technical term`);
+        assertPlainText(term.label, `${key} label`);
+    }
+    assert.equal(lib.GLOSSARY.length, new Set(lib.GLOSSARY.map((t) => t.label)).size, "no term twice");
+    assert.ok(lib.GLOSSARY.includes(lib.TERMS.overhang) && lib.GLOSSARY.includes(lib.TERMS.strengthUsed));
+    assert.deepEqual(Object.keys(lib.CHECK_TERMS), ["cog", "cantilevered", "long-cantilevers", "components", "floating", "stress"]);
+    assert.deepEqual(lib.STATUS_WORDS, { supported: "Supported", cantilever: "Overhang", overreach: "Overhang too long", floating: "Floating" });
+    assert.deepEqual(lib.COLOR_WORDS, { status: "Status", reach: "Overhang", stress: "Strength", layer: "Layers", role: "Added blocks" });
+    assert.deepEqual(lib.ROLE_WORDS, { original: "Original blocks", column: "Columns", footing: "Footings", bracket: "Brackets", bridge: "Bridges", reinforcement: "Thicker joints" });
+    assert.deepEqual(lib.STRESS_MODE_WORDS, { tension: "being pulled apart", compression: "being crushed", shear: "being sheared" });
+    // The check for jargon itself.
+    assert.deepEqual(lib.technicalWordsIn("A cantilever with a high Utilisation, in kPa, by FEM."), ["cantilever", "utilisation", "kPa", "FEM"]);
+    assert.deepEqual(lib.technicalWordsIn("Arm too long: 6 blocks (max 4). Strength used 132%."), []);
+    assert.deepEqual(lib.technicalWordsIn("the Centre of Gravity"), ["centre of gravity"]);
+    assert.deepEqual(lib.technicalWordsIn("a COGnitive load"), [], "COG is a whole word");
+    assert.deepEqual(lib.technicalWordsIn("Comparing the compass, a hemp-fem, an impact"), [], "kPa, MPa and FEM are not found inside other words");
+    assert.deepEqual(lib.technicalWordsIn("143 of 200kPa, or 0.2 MPa"), ["kPa", "MPa"], "a unit against its number still counts");
+});
+
 // ---------- the stabilizer: pure rules ----------
 
-await test("the Options popover's choices are clamped and become the stabilizer's options", () => {
-    assert.deepEqual(lib.sanitizeChoices(null), { target: 0.75, maxBlocks: null });
-    assert.deepEqual(lib.sanitizeChoices({ target: 5, maxBlocks: 5000 }), { target: 0.75, maxBlocks: 1000 }, "the target stops at the warning level");
-    assert.deepEqual(lib.sanitizeChoices({ target: 0.1, maxBlocks: 0 }), { target: 0.4, maxBlocks: null });
+await test("the stabilizer's choices are clamped; its block budget is the analysis settings' one, so there is one budget", () => {
+    assert.deepEqual(lib.sanitizeChoices(null), { target: 0.75 });
+    assert.deepEqual(lib.sanitizeChoices({ target: 5, maxBlocks: 5000 }), { target: 0.75 }, "the target stops at the warning level; a budget of its own is not a choice any more");
+    assert.deepEqual(lib.sanitizeChoices({ target: 0.1 }), { target: 0.4 });
     assert.equal(lib.sanitizeChoices({ target: 0.553 }).target, 0.55);
     assert.equal(lib.sanitizeChoices({ target: "x" }).target, 0.75);
-    const o = lib.optionsFor({ target: 0.6, maxBlocks: null }, { maxBlocks: 120 });
+    assert.deepEqual(lib.DEFAULT_CHOICES, { target: 0.75 });
+    const o = lib.optionsFor({ target: 0.6 }, { maxBlocks: 120 });
     assert.equal(o.targetUtilisation, 0.6);
-    assert.equal(o.maxBlocks, 120, "the analysis budget when none is chosen");
-    assert.equal(lib.optionsFor({ target: 0.6, maxBlocks: 80 }, { maxBlocks: 120 }).maxBlocks, 80);
-    assert.equal(lib.optionsFor(lib.DEFAULT_CHOICES, { maxBlocks: null }).maxBlocks, 1000);
+    assert.equal(o.maxBlocks, 120, "the block budget of the settings, which also decides the verdict");
+    assert.equal(lib.optionsFor({ target: 0.6, maxBlocks: 80 }, { maxBlocks: 120 }).maxBlocks, 120, "a stale choice cannot override it");
+    assert.equal(lib.optionsFor(lib.DEFAULT_CHOICES, { maxBlocks: null }).maxBlocks, 1000, "no budget: the 1000 cells of the grid");
+    assert.equal(lib.optionsFor(lib.DEFAULT_CHOICES, { maxBlocks: 5000 }).maxBlocks, 1000, "never above the grid");
     assert.equal(o.maxSteps, 40);
+    // The words that send the user to raise it point at Settings.
+    const line = lib.nothingLine({ stop: "max-blocks", before: { blocks: 85, max_utilisation: null } }, { targetUtilisation: 0.75, maxBlocks: 50 });
+    assert.match(line, /Raise the block budget in Settings\./);
+    assert.doesNotMatch(line, /Options/);
+});
+
+await test("what the stabilizer can do about a verdict: thin parts alone are nothing for it, heavily loaded joints are 'Reduce stress', the rest is 'Stabilize'", () => {
+    const issue = (kind, severity) => mkIssue(`${kind}-${severity}`, kind, severity, [1]);
+    const fix = (...pairs) => lib.fixOfIssues(pairs.map(([kind, severity]) => issue(kind, severity)));
+    assert.equal(fix(), "none", "no issue: nothing to fix");
+    assert.equal(fix(["thin-features", "warning"]), "none", "thin parts left out: the stabilizer never moves on coverage");
+    assert.equal(fix(["highly-stressed", "warning"]), "stress");
+    assert.equal(fix(["highly-stressed", "warning"], ["highly-stressed", "warning"]), "stress");
+    assert.equal(fix(["thin-features", "warning"], ["highly-stressed", "warning"]), "stress", "the thin parts do not take the stress away");
+    assert.equal(fix(["cog-outside", "warning"]), "stabilize", "balanced on the edge: widening the base is what it does");
+    assert.equal(fix(["cog-outside", "warning"], ["highly-stressed", "warning"]), "stabilize");
+    assert.equal(fix(["thin-features", "warning"], ["cog-outside", "warning"]), "stabilize");
+    assert.equal(fix(["floating", "error"]), "stabilize");
+    assert.equal(fix(["floating", "error"], ["thin-features", "warning"]), "stabilize", "a problem is always offered");
+    assert.equal(fix(["overstressed", "error"], ["highly-stressed", "warning"]), "stabilize");
+    // The button's words, from the verdict.
+    const label = (kind, fixOf) => lib.stabilizeLabelOf(kind === null ? null : { kind, fix: fixOf });
+    assert.equal(label(null), null);
+    assert.equal(label("pass", "none"), null);
+    assert.equal(label("fail", "stabilize"), "Stabilize");
+    assert.equal(label("fail", "none"), "Stabilize", "an error is offered whatever the fix says");
+    assert.equal(label("warn", "stress"), "Reduce stress");
+    assert.equal(label("warn", "stabilize"), "Stabilize");
+    assert.equal(label("warn", "none"), null, "a warning the stabilizer cannot act on has no button");
+    assert.equal(label("warn", undefined), "Stabilize", "a verdict that does not say is offered under the plain word, never under a claim about the cause");
+    // verdictOf carries it: given outright for a result, inferred for a saved summary.
+    assert.equal(lib.verdictOf({ errors: 0, warnings: 1, blocks: 9, fix: "none" }).fix, "none");
+    assert.equal(lib.verdictOf({ errors: 0, warnings: 0, blocks: 9 }).fix, "none");
+    assert.equal(lib.verdictOf({ errors: 2, warnings: 0, blocks: 9 }).fix, "stabilize");
+});
+
+await test("the fix of a saved summary: its counts and figures tell thin parts, the edge and the stress apart", () => {
+    const stressed = (max_utilisation) => ({ material: "concrete", max_utilisation });
+    const fix = (over) => lib.verdictOf(mkSummary({ warnings: 1, ...over })).fix;
+    assert.equal(fix({ coverage: 0.5 }), "none", "one warning and coverage under 80%: thin parts, nothing else");
+    assert.equal(fix({ coverage: 0.5, stress: stressed(0.44) }), "none", "the stress is fine");
+    assert.equal(fix({ coverage: 0.9, stress: stressed(0.8) }), "stress", "the peak is over the warning level");
+    assert.equal(fix({ coverage: 0.5, warnings: 2, stress: stressed(0.8) }), "stress", "thin parts and heavily loaded joints: the joints are what it can act on");
+    assert.equal(fix({ cog_margin_mm: 0.4 }), "stabilize", "balanced on the edge");
+    assert.equal(fix({ cog_margin_mm: 0.4, stress: stressed(0.8) }), "stabilize");
+    assert.equal(fix({ coverage: 0.5, warnings: 2 }), "stabilize", "two warnings, one of them unexplained (a summary from before the stress estimate): offered");
+    assert.equal(fix({ coverage: 0.95 }), "stabilize", "a warning nothing explains is offered, not hidden");
+    assert.equal(lib.verdictOf(mkSummary({ errors: 1, warnings: 1, coverage: 0.5 })).fix, "stabilize", "an error is always offered");
+    assert.equal(lib.verdictOf(mkSummary()).fix, "none", "a clean summary");
+    // The same decision from the summary of a real analysis and from its issues.
+    const thin = lib.analyzeAssembly(plainDesc(box(0, 3, 0, 3, 0, 2)), null, lib.sanitizeSettings(null));
+    const grafted = { ...thin, issues: [mkIssue("thin-features", "thin-features", "warning", [])], summary: { ...thin.summary, warnings: 1, coverage: 0.7 } };
+    assert.equal(lib.verdictOf(grafted.summary).fix, lib.fixOfIssues(grafted.issues), "summary and issues agree: nothing to fix");
+    const warnResult = measured(plainDesc(warnCells()));
+    assert.deepEqual([...new Set(warnResult.issues.map((i) => i.kind))], ["highly-stressed"], "the fixture: a joint at 99% of what it takes");
+    assert.equal(lib.fixOfIssues(warnResult.issues), "stress");
+    assert.equal(lib.verdictOf(warnResult.summary).fix, "stress", "and the summary says the same");
+});
+
+await test("the mirrored limits are the engine's own", () => {
+    assert.equal(lib.COVERAGE_WARN_SHARE, lib.COVERAGE_WARN);
+    assert.equal(lib.EDGE_WARN_MM, lib.EDGE_MARGIN_MM);
 });
 
 await test("the Stabilize card is offered for a model with something to fix, and says why when it cannot run", () => {
     const stats = { blockCount: 28 };
     const base = { model: { id: "a", derived: null }, models: [], result: { stats, stress: null }, verdict: { kind: "fail" }, analysing: false };
     assert.deepEqual(lib.stabilizeOffer(base), { label: "Stabilize", child: null, blocked: null });
-    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "warn" } }).label, "Reduce stress", "a warning-only model");
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "warn" } }).label, "Stabilize", "a warning-only verdict that does not say what it is about: the plain word");
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "warn", fix: "stress" } }).label, "Reduce stress", "only heavily loaded joints are left");
+    assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "warn", fix: "none" } }), null, "only thin parts left out: the stabilizer has nothing to do, so no card");
+    // The result's issues are the authority on which warnings there are.
+    const withIssues = (...kinds) => ({ ...base, verdict: { kind: "warn" }, result: { stats, stress: null, issues: kinds.map((k) => mkIssue(k, k, "warning", [1])) } });
+    assert.equal(lib.stabilizeOffer(withIssues("highly-stressed")).label, "Reduce stress");
+    assert.equal(lib.stabilizeOffer(withIssues("thin-features", "highly-stressed")).label, "Reduce stress");
+    assert.equal(lib.stabilizeOffer(withIssues("cog-outside")).label, "Stabilize", "balanced on the edge");
+    assert.equal(lib.stabilizeOffer(withIssues("thin-features")), null, "thin parts left out and nothing else: no button, not a run that adds nothing");
+    assert.equal(lib.stabilizeOffer({ ...withIssues("thin-features"), verdict: { kind: "warn", fix: "stress" } }), null, "the issues win over a verdict that was made elsewhere");
+    assert.equal(lib.stabilizeOffer({ ...withIssues("thin-features"), verdict: { kind: "fail" }, result: { stats, stress: null, issues: [mkIssue("floating-1", "floating", "error", [1]), mkIssue("thin-features", "thin-features", "warning", [])] } }).label, "Stabilize");
     assert.equal(lib.stabilizeOffer({ ...base, verdict: { kind: "pass" } }), null, "nothing to fix: no card");
     assert.equal(lib.stabilizeOffer({ ...base, verdict: null }), null);
     assert.equal(lib.stabilizeOffer({ ...base, result: { stats: { blockCount: 0 }, stress: null } }), null);
@@ -1935,6 +2573,69 @@ await test("the Stabilize card is offered for a model with something to fix, and
     assert.match(lib.stabilizeOffer({ ...base, models: many }).blocked, /20 stabilized versions/);
 });
 
+await test("the card's 'Open stabilized version' is the bar's: through a chain of versions an original opens the family's, a version opens its own", () => {
+    const stats = { blockCount: 28 };
+    const base = { model: { id: "r", derived: null }, models: [], result: { stats, stress: null }, verdict: { kind: "fail" }, analysing: false };
+    const at = (id, kind, source, ms) => ({ id, kind, source_model_id: source, created_at: iso(ms) });
+    const R = at("r", "generated", null, 0);
+    const A = at("a", "stabilized", "r", 10);
+    const B = at("b", "stabilized", "a", 20);
+    const chain = [R, A, B];
+    // generated -> A -> B: A is the only version made directly from R, but the bar's Stabilized half (the family's newest) is B.
+    assert.equal(lib.stabilizeOffer({ ...base, models: chain }).child.id, "b");
+    // A version offers the one made from it, and the last of a chain none.
+    assert.equal(lib.stabilizeOffer({ ...base, model: { id: "a", derived: { depth: 1 } }, models: chain }).child.id, "b");
+    assert.equal(lib.stabilizeOffer({ ...base, model: { id: "b", derived: { depth: 2 } }, models: chain }).child, null);
+    // The version the bar remembers wins, when it is one of this original's; anything else is ignored.
+    assert.equal(lib.stabilizeOffer({ ...base, models: chain, opens: { id: "a" } }).child.id, "a");
+    assert.equal(lib.stabilizeOffer({ ...base, models: chain, opens: { id: "elsewhere" } }).child.id, "b");
+    assert.equal(lib.stabilizeOffer({ ...base, models: chain, opens: null }).child.id, "b");
+    // Another original's versions are not this one's, wherever they sit in the list or however new they are.
+    const Q = at("q", "generated", null, 5);
+    const QA = at("qa", "stabilized", "q", 30);
+    assert.equal(lib.stabilizeOffer({ ...base, models: [R, A, Q, B, QA] }).child.id, "b");
+    assert.equal(lib.stabilizeOffer({ ...base, model: { id: "q", derived: null }, models: [R, A, Q, B, QA] }).child.id, "qa");
+    // Two siblings: the newest (by time, then by place in the list).
+    const A2 = at("a2", "stabilized", "r", 40);
+    assert.equal(lib.stabilizeOffer({ ...base, models: [R, A, B, A2] }).child.id, "a2");
+    // An example and its twin made in the same instant: the later in the list.
+    const E = at("e", "example", null, 0);
+    const twin = at("t", "stabilized", "e", 0);
+    assert.equal(lib.stabilizeOffer({ ...base, model: { id: "e", derived: null }, models: [E, twin] }).child.id, "t");
+    // The limits still count the versions made directly from the model.
+    assert.equal(lib.stabilizeOffer({ ...base, models: chain }).blocked, null, "one direct version of three");
+    // descendantsOf is the same tree: newest first, below the root only, not looping on a broken chain.
+    assert.deepEqual(lib.descendantsOf([R, A, Q, B, QA, A2], "r").map((m) => m.id), ["a2", "b", "a"]);
+    assert.deepEqual(lib.descendantsOf([R], "r"), []);
+    assert.deepEqual(lib.descendantsOf([A, B], "elsewhere"), [], "a chain that does not reach the root is not below it");
+    const loopA = at("la", "stabilized", "lb", 1);
+    const loopB = at("lb", "stabilized", "la", 2);
+    assert.deepEqual(lib.descendantsOf([loopA, loopB], "r"), []);
+});
+
+await test("a chain's blocks are named by the run on screen: the offset is the highest step minus the model's own log, and without it every version's steps read as the newest's", () => {
+    // generated -> A (steps 1 and 2) -> B (one step): B's blocks are numbered 1..3, its own log has one step.
+    const added = [
+        { cell: [6, 0, 0], role: "footing", step: 1 },
+        { cell: [6, 1, 0], role: "footing", step: 2 },
+        { cell: [6, 2, 0], role: "column", step: 3 },
+    ];
+    const desc = lib.descriptorFromBlocks([...armCells(5).map((cell) => ({ cell })), ...added]);
+    const result = lib.analyzeAssembly(desc, null, lib.sanitizeSettings(null));
+    const offset = lib.savedStepOffset(result, 1);
+    assert.equal(offset, 2, "the steps of the versions before B");
+    const block = (n) => result.blocks.find((b) => b.step === n);
+    const tip = (n, off) => lib.describeSupport(block(n), result.settings, off).tooltip;
+    assert.deepEqual([1, 2, 3].map((n) => tip(n, offset)), ["Footing · added in an earlier version", "Footing · added in an earlier version", "Column · added in step 1"]);
+    assert.deepEqual([1, 2, 3].map((n) => lib.addedWhen(n, offset)), ["in an earlier version", "in an earlier version", "in step 1"]);
+    // The offset 0 of a viewer that does not know it: A's steps read as B's and B's own block as its third.
+    assert.deepEqual([1, 2, 3].map((n) => tip(n, 0)), ["Footing · added in step 1", "Footing · added in step 2", "Column · added in step 3"]);
+    // A first stabilization needs no offset, and a model that is not a chain's end is not asked for one.
+    assert.equal(lib.savedStepOffset(measured(addedDesc(armCells(5), TIP_COLUMN)), 1), 0);
+    assert.equal(lib.savedStepOffset(null, 0), 0);
+    assert.equal(lib.savedStepOffset(measured(plainDesc(armCells(5))), 0), 0, "nothing added: no steps");
+});
+
 await test("progress and results in words", () => {
     assert.equal(lib.progressLine(null, 0), "Step 1 · looking for the next move…");
     assert.equal(lib.progressLine({ candidatesTotal: 24 }, 2), "Step 3 · evaluating 24 moves…");
@@ -1945,8 +2646,38 @@ await test("progress and results in words", () => {
     assert.deepEqual(lib.runChips(start, steps), { added: 7, problems: [3, 0], stress: [1.98, 0.54] });
     assert.equal(lib.stressArrow(1.98, 0.544), "198% → 54%");
     assert.equal(lib.stressArrow(null, null), "n/a → n/a");
-    assert.deepEqual(lib.stepChips(steps[0]), ["errors 2 → 1", "peak 106% → 72%", "+5"], "only what the move changed, then its size");
-    assert.deepEqual(lib.stepChips(stepLog(3, "bridge", 2, { before: mt({ floating_blocks: 16, errors: 0, max_utilisation: null, longest_cantilever: 2 }), after: mt({ floating_blocks: 0, errors: 0, max_utilisation: null, longest_cantilever: 2 }) })), ["floating 16 → 0", "+2"]);
+    assert.deepEqual(lib.stepChips(steps[0]), ["problems 2 → 1", "strength used 106% → 72%", "+5"], "only what the move changed, then its size");
+    // Balance is said the way the panel's chip says it, on both sides of the arrow: how far inside or outside the base.
+    assert.deepEqual(lib.stepChips(stepLog(4, "footing", 6, { before: mt({ cog_margin_mm: -40 }), after: mt({ cog_margin_mm: 25 }) })), ["balance 40 mm outside → 25 mm inside", "+6"]);
+    assert.deepEqual(lib.stepChips(stepLog(4, "footing", 6, { before: mt({ cog_margin_mm: 60 }), after: mt({ cog_margin_mm: 110 }) })), ["balance 60 mm inside → 110 mm inside", "+6"]);
+    assert.deepEqual(lib.stepChips(stepLog(3, "bridge", 2, { before: mt({ floating_blocks: 16, errors: 0, max_utilisation: null, longest_cantilever: 2 }), after: mt({ floating_blocks: 0, errors: 0, max_utilisation: null, longest_cantilever: 2 }) })), ["floating blocks 16 → 0", "+2"]);
+    // The sentence of a step: what was added and why, in the panel's words (the stored text, with coordinates and the engine's terms, stays in the report).
+    const sentence = (move, reason, added, before = {}, after = {}) => lib.stepSentence(stepLog(1, move, added, { reason, before: mt(before), after: mt(after) }));
+    assert.equal(sentence("column", "cantilever", 4), "Held up an arm that was too long with a 4-block column.");
+    // A column that joins a floating part to the ground says so: other figures can get worse before they get better.
+    assert.equal(
+        sentence("column", "cantilever", 4, { floating_blocks: 6 }, { floating_blocks: 0 }),
+        "Held up an arm that was too long with a 4-block column. It also joins the floating part to the ground, so other figures can rise before they fall.",
+    );
+    assert.equal(sentence("column", "cantilever", 4, { floating_blocks: 6 }, { floating_blocks: 6 }), "Held up an arm that was too long with a 4-block column.");
+    assert.equal(sentence("column", "cantilever", 4, { floating_blocks: 0 }, { floating_blocks: 0 }), "Held up an arm that was too long with a 4-block column.");
+    // The article follows how the number is said: "an 8-block", "an 11-block", "an 18-block", "an 83-block", but "a 9-block" and "a 12-block".
+    for (const [n, article] of [[1, "a"], [3, "a"], [8, "an"], [9, "a"], [11, "an"], [12, "a"], [18, "an"], [19, "a"], [80, "an"], [83, "an"], [89, "an"], [90, "a"], [100, "a"]]) {
+        assert.equal(sentence("column", "floating", n), `Held up a floating part with ${article} ${n}-block column.`, `${article} ${n}-block`);
+    }
+    assert.equal(sentence("column", "floating", 3), "Held up a floating part with a 3-block column.");
+    assert.equal(sentence("bridge", "floating", 2), "Joined a floating part to the rest of the model with a 2-block bridge.");
+    assert.equal(sentence("footing", "cog", 6, { cog_margin_mm: -40 }), "Widened the base with a 6-block footing so the model no longer tips over.");
+    assert.equal(sentence("footing", "cog", 6, { cog_margin_mm: 0.5 }), "Widened the base with a 6-block footing so the model is no longer balanced on the edge.");
+    assert.equal(sentence("bracket", "stress", 3), "Held up a joint that was carrying too much with a 3-block bracket.");
+    assert.equal(sentence("reinforcement", "stress", 1), "Thickened a joint that was carrying too much with 1 block.");
+    for (const move of ["column", "footing", "bracket", "bridge", "reinforcement"]) {
+        for (const reason of ["floating", "cantilever", "cog", "stress"]) {
+            const text = sentence(move, reason, 2, { cog_margin_mm: -10 });
+            assert.deepEqual(lib.technicalWordsIn(text), [], text);
+            assert.doesNotMatch(text, /\bx = |\(\d+, \d+, \d+\)|[+-][XY]\b/, `no coordinates or axes: ${text}`);
+        }
+    }
     assert.equal(lib.stabilizedFileName("a-shelf-meshy.glb"), "a-shelf-meshy-stabilized.glb");
     assert.match(lib.uploadErrorMessage(new Error("The file has unexpected content")), /Reload the page/);
     assert.equal(lib.uploadErrorMessage(new Error("Too many versions")), "Too many versions");
@@ -1959,14 +2690,42 @@ await test("a finished run is complete, partial or empty, and says what is left"
     assert.equal(lib.outcomeOf({ complete: false, meta: meta({}) }), "partial");
     assert.equal(lib.outcomeOf({ complete: true, meta: meta({ added_blocks: 0 }) }), "nothing");
     const after = { blocks: 30, errors: 1, warnings: 0, floating_blocks: 0, over_limit: 2, longest_cantilever: 5, cog_margin_mm: 40, max_utilisation: 0.9, overstressed_blocks: 0 };
-    assert.deepEqual(lib.remainingProblems(after, 0.75, 4), ["a cantilever of 5 blocks (limit 4)", "peak stress 90% against the 75% target"]);
-    assert.equal(lib.partialHeadline(after, 0.75, 4), "Improved, not fully stable: 1 problem remains (a cantilever of 5 blocks (limit 4); peak stress 90% against the 75% target)");
+    assert.deepEqual(lib.remainingProblems(after, 0.75, 4), ["an arm of 5 blocks is over the limit of 4", "strength used 90%, aim for under 75%"]);
+    // One pair of brackets: the reasons inside them carry none of their own.
+    const headline = lib.partialHeadline(after, 0.75, 4);
+    assert.equal(headline, "Improved, not fully stable: 1 problem remains (an arm of 5 blocks is over the limit of 4; strength used 90%, aim for under 75%)");
+    assert.equal(headline.split("(").length, 2, "no nested brackets");
     assert.equal(lib.partialHeadline({ ...after, errors: 2 }, 0.75, 4).split(" (")[0], "Improved, not fully stable: 2 problems remain");
-    assert.deepEqual(lib.remainingProblems({ ...after, over_limit: 0, max_utilisation: 0.5, floating_blocks: 3, cog_margin_mm: -20 }, 0.75, 4), ["3 floating blocks", "the centre of gravity is outside the base"]);
-    assert.equal(lib.stabilizedLine({ added_blocks: 14, before: { ...after, max_utilisation: 1.8 }, after: { ...after, errors: 0, warnings: 0, max_utilisation: 0.54 } }), "+14 blocks · all checks pass · peak stress 180% → 54%");
+    assert.deepEqual(lib.remainingProblems({ ...after, over_limit: 0, max_utilisation: 0.5, floating_blocks: 3, cog_margin_mm: -20 }, 0.75, 4), ["3 floating blocks", "it still tips over"]);
+    assert.equal(lib.stabilizedLine({ added_blocks: 14, before: { ...after, max_utilisation: 1.8 }, after: { ...after, errors: 0, warnings: 0, max_utilisation: 0.54 } }), "+14 blocks · all checks pass · strength used 180% → 54%");
     assert.equal(lib.stabilizedLine({ added_blocks: 1, before: { ...after, max_utilisation: null }, after: { ...after, errors: 0, warnings: 2, max_utilisation: null } }), "+1 block · 2 warnings");
     assert.equal(lib.savedMessage("a shelf", { added_blocks: 14, complete: true, after }), "Stabilized version of **a shelf**: +14 blocks, passes all checks.");
     assert.equal(lib.savedMessage("a shelf", { added_blocks: 3, complete: false, after }), "Improved version of **a shelf**: +3 blocks, 1 problem left.");
+});
+
+await test("answerIsBeforeRun: the answer is the 'before' only while the run holds blocks; a failed run or one with nothing to add leaves the report as it was", () => {
+    const states = [
+        // [status, errorKind, outcome, expected]
+        ["idle", null, null, false],
+        ["saved", null, null, false],
+        ["running", null, null, true],
+        ["saving", null, "complete", true],
+        ["saving", null, "partial", true],
+        ["finished", null, "complete", true],
+        ["finished", null, "partial", true],
+        ["finished", null, "nothing", false],
+        ["canceled", null, null, true],
+        ["error", "save", "partial", true],
+        ["error", "save", "complete", true],
+        ["error", "run", null, false],
+    ];
+    for (const [status, errorKind, outcome, expected] of states) {
+        assert.equal(lib.answerIsBeforeRun(status, errorKind, outcome), expected, `${status} / ${errorKind} / ${outcome}`);
+    }
+    // It never says "before" for a state in which no badge speaks of added blocks to keep.
+    for (const status of ["idle", "saved"]) assert.equal(lib.runBadge({ status, steps: 0, outcome: null, errorKind: null }), null);
+    assert.equal(lib.runBadge({ status: "finished", steps: 1, outcome: "nothing", errorKind: null }).kind, "nothing");
+    assert.equal(lib.runBadge({ status: "error", steps: 1, outcome: null, errorKind: "run" }).kind, "failed");
 });
 
 await test("the assembly of a run: a model's own blocks stay as they are and the moves are numbered after the steps it already has", () => {
@@ -2109,14 +2868,154 @@ await test("a run that reaches its goal shows its work as it goes, then saves it
     assert.equal(message.role, "assistant");
     assert.deepEqual(message.model_ids, [saved.id], "the chat presents it as a model card");
     assert.equal(message.content, "Stabilized version of **a shelf**: +4 blocks, passes all checks.");
-    assert.ok(lib.toasts.some((t) => t.kind === "success" && /stabilized version/i.test(t.title)));
+    assert.ok(lib.toasts.some((t) => t.kind === "success" && t.title === "Switched to the stabilized version"), "the toast says the viewer moved to it");
     assert.equal(AS().preview, null);
     assert.equal(ST().preview, null);
-    assert.equal(AS().view.colorBy, "status", "the stage is back to the user's colouring");
+    // The version that replaces the preview keeps the Added-blocks colouring (spec 4.4): the supports must not turn into blocks that look
+    // like the original's the moment the toast says it is shown. It is drawn that way as soon as its analysis lands.
+    assert.equal(AS().colorChoice, "role", "the switch picks the Added-blocks colouring");
+    AS().runSucceeded(saved.id, measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.equal(AS().view.colorBy, "role", "and the new version's added blocks are painted by what they are");
+    AS().runSucceeded(model.id, result);
+    assert.equal(AS().view.colorBy, "status", "the original, which has none, falls back to the status colours (the choice itself stays)");
+    assert.equal(AS().colorChoice, "role");
     assert.ok(S().revision > 0, "the chat message is an edit the autosave picks up");
     ST().discard();
     assert.equal(ST().status, "idle", "the banner is dismissed");
     assert.equal(ST().endedAt, null, "and forgets when the run ended");
+});
+
+await test("a saved version is put on the stage in the tab the user is in; a user who moved to another model is not pulled away", async () => {
+    // The tab stays where it is (the Analysis tab, the Models tab, 3D).
+    for (const tab of ["analysis", "3d", "models"]) {
+        const { pid, model, result } = begin();
+        S().setWorkspaceTab(tab);
+        const complete = await answerFor(result, [COLUMN_MOVE()]);
+        fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: complete });
+        assert.equal(ST().start(model, result), true);
+        await until(() => ST().status === "saved");
+        const saved = S().models.find((m) => m.kind === "stabilized");
+        assert.equal(S().activeModelId, saved.id, `${tab}: the new version is the model on the stage`);
+        assert.equal(S().workspaceTab, tab, `${tab}: and the tab did not move`);
+        assert.deepEqual(lib.toasts.filter((t) => /stabilized version/i.test(t.title)).map((t) => t.title), ["Switched to the stabilized version"]);
+        lib.toasts.length = 0;
+        ST().discard();
+    }
+    // The user went to another model of the project while the run was going: it is saved, not shown.
+    const { pid, model, result } = begin();
+    const other = { ...model, id: crypto.randomUUID(), prompt: "a lamp", glb_url: "/other.glb" };
+    S().addModel(other);
+    const complete = await answerFor(result, [COLUMN_MOVE()]);
+    const hold = {};
+    fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: complete, hold });
+    assert.equal(ST().start(model, result), true);
+    await until(() => ST().steps.length === 1);
+    S().setActiveModel(other.id);
+    hold.release();
+    await until(() => ST().status === "saved");
+    const saved = S().models.find((m) => m.kind === "stabilized");
+    assert.ok(saved, "the version is in the project");
+    assert.equal(S().activeModelId, other.id, "the user keeps looking at the model they chose");
+    assert.deepEqual(lib.toasts.filter((t) => /stabilized version/i.test(t.title)).map((t) => t.title), ["Saved a stabilized version"]);
+    assert.match(lib.toasts.find((t) => t.title === "Saved a stabilized version").options.description, /Models tab/);
+    ST().discard();
+    // A user on another VERSION of the same model is on the family: they are moved to the new one.
+    lib.toasts.length = 0;
+    const r2 = begin();
+    const sibling = { ...r2.model, id: crypto.randomUUID(), kind: "stabilized", source_model_id: r2.model.id, derived: { depth: 1 }, glb_url: "/sib.glb" };
+    S().addModel(sibling);
+    const answer2 = await answerFor(r2.result, [COLUMN_MOVE()]);
+    const hold2 = {};
+    fakeStabilizer(r2.pid, { moves: [COLUMN_MOVE()], answer: answer2, hold: hold2 });
+    assert.equal(ST().start(r2.model, r2.result), true);
+    await until(() => ST().steps.length === 1);
+    S().setActiveModel(sibling.id);
+    hold2.release();
+    await until(() => ST().status === "saved");
+    const made = S().models.find((m) => m.kind === "stabilized" && m.id !== sibling.id);
+    assert.equal(S().activeModelId, made.id, "a version of the same family: still the family the run belongs to");
+    ST().discard();
+});
+
+await test("a user's own colouring gives way to Added blocks only when the version is switched to; a user who stayed elsewhere keeps theirs", async () => {
+    const { pid, model, result } = begin();
+    AS().setColorBy("layer");
+    const complete = await answerFor(result, [COLUMN_MOVE()]);
+    fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: complete });
+    assert.equal(ST().start(model, result), true);
+    await until(() => ST().status === "saved");
+    assert.equal(AS().colorChoice, "role", "switched: the new version is shown by what was added, over the colouring the user had");
+    ST().discard();
+    // Moved to another model of the project while it ran: the run is only saved, so nothing about the stage changes.
+    const second = begin();
+    AS().setColorBy("layer");
+    const other = { ...second.model, id: crypto.randomUUID(), prompt: "a lamp", glb_url: "/other.glb" };
+    S().addModel(other);
+    const hold = {};
+    fakeStabilizer(second.pid, { moves: [COLUMN_MOVE()], answer: await answerFor(second.result, [COLUMN_MOVE()]), hold });
+    assert.equal(ST().start(second.model, second.result), true);
+    await until(() => ST().steps.length === 1);
+    S().setActiveModel(other.id);
+    AS().setColorBy("layer"); // the preview of the run was forcing role; this is the user's own pick afterwards
+    hold.release();
+    await until(() => ST().status === "saved");
+    assert.equal(S().activeModelId, other.id);
+    assert.equal(AS().colorChoice, "layer", "not switched: the user's colouring is theirs");
+    ST().discard();
+});
+
+await test("the end of a saved run is renewed once the new version's analysis lands, so the row that appears takes the focus after a slow load; not for a version that is not shown", async () => {
+    const FRESH = 2000;
+    const age = () => Date.now() - ST().endedAt;
+    // The window counts from the row's appearance: the analysis of a switched-to version needs its file fetched first.
+    const { pid, model, result } = begin();
+    fakeStabilizer(pid, { moves: [COLUMN_MOVE()], answer: await answerFor(result, [COLUMN_MOVE()]) });
+    assert.equal(ST().start(model, result), true);
+    await until(() => ST().status === "saved");
+    const saved = S().models.find((m) => m.kind === "stabilized");
+    assert.equal(S().activeModelId, saved.id);
+    assert.ok(age() < FRESH, "stamped at the save");
+    lib.useStabilizeStore.setState({ endedAt: Date.now() - 10_000 }); // the fetch took long: the stamp is old by now
+    AS().runSucceeded(model.id, result);
+    assert.ok(age() >= 10_000, "the analysis of another model is not the row's");
+    AS().runSucceeded(saved.id, measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.ok(age() < FRESH, "the new version's analysis landed: its row is on screen now, and the run's end counts from there");
+    lib.useStabilizeStore.setState({ endedAt: Date.now() - 10_000 });
+    AS().runSucceeded(saved.id, measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.ok(age() >= 10_000, "once: a re-run of the analysis (a settings change) never takes the focus again");
+    ST().discard();
+
+    // The user went to look at another model before it landed: the run's end is not renewed for a row they are not looking at.
+    const second = begin();
+    const other = { ...second.model, id: crypto.randomUUID(), prompt: "a lamp", glb_url: "/other.glb" };
+    S().addModel(other);
+    fakeStabilizer(second.pid, { moves: [COLUMN_MOVE()], answer: await answerFor(second.result, [COLUMN_MOVE()]) });
+    assert.equal(ST().start(second.model, second.result), true);
+    await until(() => ST().status === "saved");
+    const savedTwo = S().models.find((m) => m.kind === "stabilized");
+    assert.equal(S().activeModelId, savedTwo.id);
+    S().setActiveModel(other.id);
+    lib.useStabilizeStore.setState({ endedAt: Date.now() - 10_000 });
+    AS().runSucceeded(savedTwo.id, measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.ok(age() >= 10_000, "moved away first: not renewed");
+    ST().discard();
+
+    // A version that was not switched to (the user stayed on another model) is not waited for either.
+    const third = begin();
+    const elsewhere = { ...third.model, id: crypto.randomUUID(), prompt: "a lamp", glb_url: "/other2.glb" };
+    S().addModel(elsewhere);
+    const hold = {};
+    fakeStabilizer(third.pid, { moves: [COLUMN_MOVE()], answer: await answerFor(third.result, [COLUMN_MOVE()]), hold });
+    assert.equal(ST().start(third.model, third.result), true);
+    await until(() => ST().steps.length === 1);
+    S().setActiveModel(elsewhere.id);
+    hold.release();
+    await until(() => ST().status === "saved");
+    const savedThree = S().models.find((m) => m.kind === "stabilized");
+    lib.useStabilizeStore.setState({ endedAt: Date.now() - 10_000 });
+    AS().runSucceeded(savedThree.id, measured(addedDesc(armCells(5), TIP_COLUMN)));
+    assert.ok(age() >= 10_000, "not switched to: nothing to renew");
+    ST().discard();
 });
 
 await test("a run that falls short waits for the user: Save as new version keeps it, Discard drops it", async () => {
@@ -2322,6 +3221,168 @@ await test("the runner analyses a stabilized model from its blocks, not by voxel
     assert.equal(r.assembly.roleCounts[1], 4);
     assert.ok(r.stress && r.stress.analysedBlocks === 32, "and the stress estimate came with it");
     assert.equal(r.summary.errors, 0);
+    stop();
+});
+
+// ---------- a stabilized model shown over the mesh it was made from ----------
+
+/** A project with a generated model and a stabilized version of it (`desc`: its blocks, served as its GLB), the stabilized one active. */
+function withSourceAndVersion(desc) {
+    resetAnalysis();
+    lib.setStabilizeDeps();
+    ST().discard();
+    const pid = crypto.randomUUID();
+    S().setProject(detail(pid));
+    const source = { ...modelFor(makeJob(pid)), id: "ov-src", glb_url: "/ov-src.glb", analysis: null };
+    const stab = { ...modelFor(makeJob(pid)), id: "ov-stab", provider: "stabilizer", glb_url: "/ov-stab.glb", analysis: null, kind: "stabilized", source_model_id: "ov-src", derived: { depth: 1 } };
+    S().addModel(source);
+    S().addModel(stab);
+    S().setActiveModel("ov-stab");
+    fake.files["/ov-stab.glb"] = { bytes: lib.writeAssemblyGlb(desc), hits: 0 };
+    return { pid, source: S().models.find((m) => m.id === "ov-src"), stab: S().models.find((m) => m.id === "ov-stab") };
+}
+
+await test("the runner shows a stabilized model over the mesh it was made from: its blocks come from its own file, the source's transform places them", async () => {
+    const desc = addedDesc(armCells(5), TIP_COLUMN);
+    const { source, stab } = withSourceAndVersion(desc);
+    // The viewer loads the SOURCE's GLB for the stabilized model; WorkspaceShell may still pass the model's own url.
+    const mesh = loadedModel("/ov-src.glb");
+    AS().setLoaded(mesh);
+    AS().modelChanged("ov-stab", "/ov-stab.glb");
+    assert.equal(AS().loaded, mesh, "the handle of the mesh on stage stays");
+    let stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().resultModelId === "ov-stab");
+    const r = AS().result;
+    const T = lib.transformForBounds(lib.soupBoundsOf(CRANE.positions), r.settings);
+    assert.deepEqual(r.transform, T, "the source mesh's own transform");
+    // Its size is the mesh's scaled box (what the original voxelised from the same mesh reports), not the lattice's extent.
+    const box = lib.placementForBounds(lib.soupBoundsOf(CRANE.positions), r.settings).sizeMm;
+    assert.deepEqual(r.sizeMm, box);
+    assert.deepEqual(r.summary.size_mm, box.map((v) => Math.round(v * 10) / 10), "and so is the saved summary's");
+    assert.notDeepEqual(r.sizeMm, lib.analyzeAssembly(desc, null, r.settings).sizeMm, "which is not the lattice's own extent");
+    assert.equal(r.blocks.length, desc.cells.length / 5, "the blocks of the stabilized model's file, not a voxelisation of the mesh on stage");
+    assert.deepEqual(r.assembly.roleCounts.slice(0, 2), [28, 4]);
+    assert.equal(r.assembly.descriptor.cells.length, desc.cells.length);
+    assert.ok(r.stress, "the stress estimate came with it");
+    assert.equal(fake.files["/ov-stab.glb"].hits, 1);
+    // The summary is the stabilized model's, saved under its id.
+    await until(() => calls.some((c) => c.method === "PUT"));
+    assert.deepEqual(calls.filter((c) => c.method === "PUT").map((c) => c.path), ["/models/ov-stab/analysis"]);
+    assert.equal(AS().summaries["ov-stab"].blocks, r.stats.blockCount);
+    assert.equal(AS().summaries["ov-src"], undefined);
+    assert.equal(S().models.find((m) => m.id === "ov-stab").analysis.blocks, r.stats.blockCount);
+    // The original: the same mesh, the same handle, voxelised; it shares the frame the stabilized blocks were placed in.
+    S().setActiveModel("ov-src");
+    AS().modelChanged("ov-src", "/ov-src.glb");
+    assert.equal(AS().loaded, mesh);
+    stop();
+    stop = mountHook(() => lib.useAnalysisRunner(source));
+    await until(() => AS().resultModelId === "ov-src");
+    assert.equal(AS().result.assembly, null, "a mesh");
+    assert.deepEqual(AS().result.transform, T, "the original's voxelisation and the stabilized model's placement are one frame");
+    assert.deepEqual(AS().result.sizeMm, r.sizeMm, "and one size: switching versions does not change how big the model is");
+    assert.deepEqual(AS().result.summary.size_mm, r.summary.size_mm);
+    assert.notEqual(AS().result.blocks.length, r.blocks.length);
+    // Back to the stabilized version: its file is not fetched again, and its result is the cached one.
+    S().setActiveModel("ov-stab");
+    AS().modelChanged("ov-stab", "/ov-stab.glb");
+    stop();
+    stop = mountHook(() => lib.useAnalysisRunner(S().models.find((m) => m.id === "ov-stab")));
+    await until(() => AS().resultModelId === "ov-stab");
+    assert.equal(AS().result, r, "cached for these blocks over this mesh");
+    assert.equal(fake.files["/ov-stab.glb"].hits, 1);
+    // A setting moves: the blocks are analysed again, over the same mesh.
+    AS().updateSettings({ cantileverLimit: 2 });
+    stop();
+    stop = mountHook(() => lib.useAnalysisRunner(S().models.find((m) => m.id === "ov-stab")));
+    await until(() => AS().result.settings.cantileverLimit === 2);
+    assert.deepEqual(AS().result.transform, T);
+    assert.equal(fake.files["/ov-stab.glb"].hits, 1, "the file is kept");
+    stop();
+});
+
+await test("a stabilized model whose file cannot be read is an error of its own run; Try again reads it", async () => {
+    const desc = addedDesc(armCells(5), TIP_COLUMN);
+    const { stab } = withSourceAndVersion(desc);
+    delete fake.files["/ov-stab.glb"];
+    AS().setLoaded(loadedModel("/ov-src.glb"));
+    let stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().run.status === "error");
+    assert.equal(AS().run.modelId, "ov-stab");
+    assert.match(AS().run.error, /file was not found/);
+    assert.equal(AS().result, null);
+    assert.equal(calls.filter((c) => c.method === "PUT").length, 0, "nothing is saved for a failed run");
+    fake.files["/ov-stab.glb"] = { bytes: lib.writeAssemblyGlb(desc), hits: 0 };
+    AS().retry();
+    stop();
+    stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().resultModelId === "ov-stab");
+    assert.equal(AS().result.blocks.length, desc.cells.length / 5);
+    stop();
+});
+
+await test("a stabilized model keeps the handle of the mesh it is shown on; without its source it is shown as its own blocks", () => {
+    const desc = addedDesc(armCells(5), TIP_COLUMN);
+    withSourceAndVersion(desc);
+    AS().setLoaded(stubHandle("/ov-src.glb"));
+    AS().modelChanged("ov-stab", "/ov-stab.glb");
+    assert.equal(AS().loaded.url, "/ov-src.glb", "the viewer is showing the source");
+    AS().setLoaded(stubHandle("/ov-stab.glb"));
+    AS().modelChanged("ov-stab", "/ov-stab.glb");
+    assert.equal(AS().loaded, null, "the stabilized file's own handle is not what the viewer is about to show");
+    AS().setLoaded(stubHandle("/ov-src.glb"));
+    AS().modelChanged("ov-src", "/ov-src.glb");
+    assert.equal(AS().loaded.url, "/ov-src.glb");
+    // The original is gone from the project: the stabilized file is what the viewer shows.
+    S().removeModels(["ov-src"]);
+    AS().setLoaded(stubHandle("/ov-stab.glb"));
+    AS().modelChanged("ov-stab", "/ov-stab.glb");
+    assert.equal(AS().loaded.url, "/ov-stab.glb");
+    assert.equal(lib.versionFamily(S().models, "ov-stab").display.id, "ov-stab");
+});
+
+await test("stabilizing a stabilized model shown over its source: the stabilizer gets its blocks, the preview is in the source's frame, the new version is analysed under its own id", async () => {
+    // The stabilized version still has an arm that is too long (7 blocks): a bracket is the next move.
+    const desc = addedDesc(armCells(7), [1, 2, 3, 4].map((k) => [7, 1, k]));
+    const { pid, stab } = withSourceAndVersion(desc);
+    const mesh = loadedModel("/ov-src.glb");
+    AS().setLoaded(mesh);
+    let stop = mountHook(() => lib.useAnalysisRunner(stab));
+    await until(() => AS().resultModelId === "ov-stab");
+    const r = AS().result;
+    const move = { step: stepLog(1, "bracket", 1), cells: [[3, 1, 4]], roles: ["bracket"] };
+    const seen = fakeStabilizer(pid, { moves: [move], answer: await answerFor(r, [move]), hold: {} });
+    assert.equal(ST().start(stab, r), true);
+    await until(() => AS().preview && AS().preview.result.blocks.length === r.blocks.length + 1);
+    assert.deepEqual(seen.input.assembly, r.assembly.descriptor, "its blocks, roles and steps go to the stabilizer");
+    assert.equal(seen.input.cells.length, r.blocks.length);
+    assert.equal(seen.sourceDepth, 1);
+    assert.deepEqual(AS().preview.result.transform, r.transform, "drawn over the mesh on stage with the source's transform");
+    assert.equal(AS().preview.modelId, "ov-stab");
+    ST().cancel();
+    await ST().save();
+    assert.equal(ST().status, "saved");
+    assert.equal(seen.uploads[0].sourceId, "ov-stab", "the new version is made from the stabilized one");
+    const saved = S().models.find((m) => m.id === ST().savedModelId);
+    assert.equal(saved.source_model_id, "ov-stab");
+    assert.equal(S().activeModelId, saved.id);
+    // The family: both versions, the new one first; the viewer keeps showing the original mesh.
+    const family = lib.versionFamily(S().models, saved.id);
+    assert.equal(family.root.id, "ov-src");
+    assert.deepEqual(family.stabilized.map((m) => m.id), [saved.id, "ov-stab"]);
+    assert.equal(family.display.id, "ov-src");
+    // Its file is served by the fake server; the runner reads it and analyses it under its own id, over the same mesh.
+    fake.files[saved.glb_url] = { bytes: seen.uploads[0].glb, hits: 0 };
+    AS().modelChanged(saved.id, saved.glb_url);
+    assert.equal(AS().loaded, mesh, "still the original mesh on stage");
+    stop();
+    stop = mountHook(() => lib.useAnalysisRunner(saved));
+    await until(() => AS().resultModelId === saved.id);
+    assert.equal(AS().result.blocks.length, r.blocks.length + 1);
+    assert.deepEqual(AS().result.transform, r.transform, "the same frame as the version it was made from");
+    assert.equal(AS().result.assembly.roleCounts[2], 0);
+    assert.equal(AS().result.blocks.find((b) => b.cell.join() === "3,1,4").role, "bracket");
+    assert.ok(AS().summaries[saved.id], "its summary is its own");
     stop();
 });
 

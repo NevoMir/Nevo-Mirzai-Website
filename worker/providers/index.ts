@@ -1,6 +1,6 @@
 // The text-to-3D models the app offers, and which API serves each one.
 // A model is available when one of its routes is enabled (its API key is configured), so the app works with any
-// subset of FAL_KEY / TRIPO_API_KEY / MESHY_API_KEY / the Tencent Cloud key pair. Routes are tried in order and the
+// subset of FAL_KEY / TRIPO_API_KEY / MESHY_API_KEY / the Tencent Cloud key pair / OPENROUTER_API_KEY. Routes are tried in order and the
 // vendor's own API comes first: it has the vendor's newest options and no middleman, while fal is the one-key fallback.
 //
 // approx_seconds (typical end to end, drives the progress estimate): Tripo's model page lists ~40 s untextured and
@@ -13,6 +13,7 @@ import type { ProviderId, ProviderInfo } from "../../src/assignment/shared/contr
 import { falHunyuan, falMeshy, falRodin, falTripo } from "./fal.ts";
 import { meshyDirect } from "./meshy.ts";
 import { mockAdapter } from "./mock.ts";
+import { openRouterDesigner } from "./openrouter.ts";
 import { tencentHunyuan } from "./tencent.ts";
 import { tripoParts, tripoTextured } from "./tripo.ts";
 import type { Env, ProviderAdapter, ProviderSpec, Via } from "./types.ts";
@@ -21,6 +22,7 @@ import type { Env, ProviderAdapter, ProviderSpec, Via } from "./types.ts";
 const hasFal = (env: Env) => Boolean(env.FAL_KEY?.trim());
 const hasTripo = (env: Env) => Boolean(env.TRIPO_API_KEY?.trim());
 const hasMeshy = (env: Env) => Boolean(env.MESHY_API_KEY?.trim());
+const hasOpenRouter = (env: Env) => Boolean(env.OPENROUTER_API_KEY?.trim());
 const hasTencent = (env: Env) => Boolean(env.TENCENTCLOUD_SECRET_ID?.trim() && env.TENCENTCLOUD_SECRET_KEY?.trim());
 
 export const PROVIDER_SPECS: ProviderSpec[] = [
@@ -92,6 +94,20 @@ export const PROVIDER_SPECS: ProviderSpec[] = [
             { via: "tencent", adapter: tencentHunyuan, enabled: hasTencent },
             { via: "fal", adapter: falHunyuan, enabled: hasFal },
         ],
+    },
+    {
+        // Not a 3D model: a language model that designs the object as named primitive parts (JSON), which the app builds into
+        // a multi-part GLB (see providers/openrouter.ts). ~21 s with reasoning effort "low", about $0.001 per design.
+        id: "muse",
+        info: {
+            label: "Muse Spark 1.3",
+            vendor: "Meta via OpenRouter",
+            description: "An AI model designs the object as named parts; the app builds them into a multi-part assembly",
+            parts: true,
+            textured: false,
+            approx_seconds: 35,
+        },
+        routes: [{ via: "openrouter", adapter: openRouterDesigner, enabled: hasOpenRouter }],
     },
     {
         id: "mock",

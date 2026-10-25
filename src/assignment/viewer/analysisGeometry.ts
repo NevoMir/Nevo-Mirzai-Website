@@ -7,7 +7,8 @@
 // related by AnalysisTransform: mm = (p - modelMin) * factor + offsetMm. The block scene is built in mm and
 // placed in the display frame by one group transform, so these helpers only map points that cross over
 // (labels, the camera focus).
-import type { AnalysisColorBy, AnalysisResult, AnalysisSettings, AnalysisTransform, Block, BlockStatus, CompareMode, Stability, Vec2, Vec3 } from "../analysis/types.ts";
+import type { AnalysisColorBy, AnalysisResult, AnalysisSettings, AnalysisTransform, Block, BlockStatus, Stability, Vec2, Vec3 } from "../analysis/types.ts";
+import { COLOR_WORDS, ROLE_WORD, ROLE_WORDS, STATUS_WORDS, STRESS_MODE_WORDS } from "../components/analysis/vocabulary.ts";
 import { ROLE_HEX } from "../shared/assembly.ts";
 import { BLOCK_ROLES, type BlockRole, type MaterialId } from "../shared/contract.ts";
 import type { ViewTheme } from "./types.ts";
@@ -36,7 +37,7 @@ export function volumeMm(analysis: Pick<AnalysisResult, "gridSize" | "settings">
 }
 
 /** Highest layer k that holds a block (-1 when there are none). */
-export function topLayer(blocks: readonly Block[]): number {
+export function topLayer(blocks: readonly Pick<Block, "cell">[]): number {
     let top = -1;
     for (const b of blocks) if (b.cell[2] > top) top = b.cell[2];
     return top;
@@ -91,7 +92,20 @@ export const STATUS_COLORS: Record<BlockStatus, { light: string; dark: string }>
     floating: { light: "#a855f7", dark: "#a855f7" },
 };
 
-export const STATUS_LABELS: Record<BlockStatus, string> = { supported: "Supported", cantilever: "Cantilever", overreach: "Over the limit", floating: "Floating" };
+/** What each status is called on the stage. The engine's words (cantilever, overreach) stay in the report files and the info glossary. */
+export const STATUS_LABELS: Record<BlockStatus, string> = STATUS_WORDS;
+
+/** The colour menu's names for the colourings, in the order the menu lists them. */
+export const COLOR_MODE_LABELS: Record<AnalysisColorBy, string> = COLOR_WORDS;
+
+/** One plain line under each name in the colour menu (and the tooltip of the chip). */
+export const COLOR_MODE_HINTS: Record<AnalysisColorBy, string> = {
+    status: "Supported, overhang, too long, floating",
+    reach: "How far each block is from a support",
+    stress: "How much of its limit each joint uses",
+    layer: "Height, bottom to top",
+    role: "What the stabilizer added, by kind",
+};
 
 export function statusColor(status: BlockStatus, theme: ViewTheme): string {
     return STATUS_COLORS[status][theme];
@@ -169,12 +183,26 @@ export function blockColor(block: Block, colorBy: AnalysisColorBy, ctx: ColorCon
 // ---------- stress ----------
 
 /**
- * Above this share of the allowable a joint is "highly stressed", above STRESS_FAIL_SHARE it is overstressed. They
+ * Above this share of the allowable a joint is "heavily loaded", above STRESS_FAIL_SHARE it is overloaded. They
  * mirror STRESS_WARN / STRESS_FAIL of analysis/materials.ts, which this file cannot import (that module pulls the FEM
  * solver into whatever imports it, and the React side imports this file statically); test-viewer.mjs pins them equal.
  */
 export const STRESS_WARN_SHARE = 0.75;
 export const STRESS_FAIL_SHARE = 1;
+
+/**
+ * The blocks that carry weight, in three bands that add up: overloaded (above 100% of what their joints take), heavily loaded
+ * (above 75% and up to 100%) and fine (75% or less). The estimate counts `stressedBlocks` cumulatively (everything above 75%,
+ * the overloaded ones included), so the bands are made by taking them apart. The stage's legend and the report's Strength
+ * section both print these, so one word never carries two numbers.
+ */
+export function stressBands(stress: { analysedBlocks: number; stressedBlocks: number; overstressedBlocks: number }): { over: number; heavy: number; fine: number } {
+    return {
+        over: stress.overstressedBlocks,
+        heavy: Math.max(0, stress.stressedBlocks - stress.overstressedBlocks),
+        fine: Math.max(0, stress.analysedBlocks - stress.stressedBlocks),
+    };
+}
 
 /** Stops of the stress ramp: share of the allowable, colour. Blue (idle) through teal and amber to red at the limit, dark red well past it. */
 export const STRESS_RAMP: ReadonlyArray<readonly [number, string]> = [
@@ -222,14 +250,11 @@ export function stressGradientCss(): string {
 export const percentText = (share: number): string => `${Math.round(share * 100)}%`;
 
 export const MATERIAL_LABELS: Record<MaterialId, string> = { concrete: "Concrete", timber: "Timber" };
-/** What a joint takes in tension, kPa (analysis/materials.ts, pinned equal by test-viewer.mjs): a block's tension is its share of this. */
-export const JOINT_TENSION_KPA: Record<MaterialId, number> = { concrete: 200, timber: 400 };
-
 /** What the stress analysis says about one block, for the tooltip. */
 export interface StressInfo {
     /** Share of the allowable; null where there is no load path. */
     utilisation: number | null;
-    /** "Stress 73% of allowable (tension 146 of 200 kPa)", or "No load path (not connected to the ground)". */
+    /** "Strength used 73% (being pulled apart)", or "Not carrying weight (not connected to the ground)". Shares and words, no kPa. */
     text: string;
 }
 
@@ -239,22 +264,17 @@ export function describeStress(analysis: Pick<AnalysisResult, "stress">, index: 
     if (!stress) return null;
     const u = stress.byBlock[index];
     if (u === undefined) return null;
-    if (!Number.isFinite(u)) return { utilisation: null, text: "No load path (not connected to the ground)" };
-    // The peak of a stress point has its numbers from the solver; any other block is read as tension, which governs almost always.
-    const peak = stress.points.find((p) => p.blocks[0] === index);
-    const mode = peak?.mode ?? "tension";
-    const head = `Stress ${percentText(u)} of allowable`;
-    if (mode !== "tension") return { utilisation: u, text: `${head} (${mode})` };
-    const allowable = peak ? peak.allowableKPa : (JOINT_TENSION_KPA[stress.material] ?? JOINT_TENSION_KPA.concrete);
-    const tension = peak ? peak.tensionKPa : u * allowable;
-    return { utilisation: u, text: `${head} (tension ${Math.round(tension)} of ${Math.round(allowable)} kPa)` };
+    if (!Number.isFinite(u)) return { utilisation: null, text: "Not carrying weight (not connected to the ground)" };
+    // The peak of a stress point knows what its joint is going through; any other block is read as tension, which governs almost always.
+    const mode = stress.points.find((p) => p.blocks[0] === index)?.mode ?? "tension";
+    return { utilisation: u, text: `Strength used ${percentText(u)} (${STRESS_MODE_WORDS[mode]})` };
 }
 
 // ---------- roles (a stabilized model) ----------
 
-export const ROLE_LABELS: Record<BlockRole, string> = { original: "Original", column: "Column", footing: "Footing", bracket: "Bracket", bridge: "Bridge", reinforcement: "Reinforcement" };
+export const ROLE_LABELS: Record<BlockRole, string> = ROLE_WORD;
 /** Plural, as a count reads: "5 columns". */
-export const ROLE_PLURALS: Record<BlockRole, string> = { original: "Original blocks", column: "Columns", footing: "Footing", bracket: "Brackets", bridge: "Bridges", reinforcement: "Reinforcement" };
+export const ROLE_PLURALS: Record<BlockRole, string> = ROLE_WORDS;
 
 /** Original blocks are the theme's quiet slate, so what was added carries the colour; each added role has one hue on both stages. */
 export function roleColor(role: BlockRole, theme: ViewTheme): string {
@@ -268,12 +288,12 @@ export function countByRole(blocks: readonly Pick<Block, "role">[]): Record<Bloc
 }
 
 /**
- * The colouring the stage uses: what the view asks for, unless it cannot be done. A preview of the stabilizer and the
- * Overlay comparison are always drawn in role colours; Stress needs a stress analysis and Role needs an assembly, and
- * without them the blocks keep the status colours.
+ * The colouring the stage uses: what the view asks for, unless it cannot be done. A preview of the stabilizer is always
+ * drawn in role colours (what it added); Stress needs a stress analysis and Role needs an assembly, and without them the
+ * blocks keep the status colours.
  */
-export function resolveColorBy(view: { colorBy: AnalysisColorBy; compare?: CompareMode }, analysis: Pick<AnalysisResult, "stress" | "assembly"> | null | undefined, previewing = false): AnalysisColorBy {
-    if (analysis?.assembly && (previewing || view.compare === "overlay")) return "role";
+export function resolveColorBy(view: { colorBy: AnalysisColorBy }, analysis: Pick<AnalysisResult, "stress" | "assembly"> | null | undefined, previewing = false): AnalysisColorBy {
+    if (analysis?.assembly && previewing) return "role";
     if (view.colorBy === "stress" && !analysis?.stress) return "status";
     if (view.colorBy === "role" && !analysis?.assembly) return "status";
     return view.colorBy;
@@ -371,14 +391,14 @@ export const PALETTE: Record<ViewTheme, BlockPalette> = {
 const blocksOf = (n: number) => `${n} ${n === 1 ? "block" : "blocks"}`;
 
 export interface BlockInfo {
-    title: string; // "Block (3, 5, 2)"
-    zRange: string; // "z 200–300 mm"
+    title: string; // "Block"
+    zRange: string; // "200–300 mm up": where the block is, in words (no cell coordinates)
     status: BlockStatus;
-    statusLabel: string; // "Cantilever"
-    detail: string; // "3 blocks from support"
+    statusLabel: string; // "Overhang"
+    detail: string; // "3 blocks from the nearest support"
     /** What the stabilizer added this block as: "Column, added in step 2" (or "in an earlier version"); absent for an original block. */
     added?: string;
-    /** The block's stress, when the analysis has one: "Stress 73% of allowable (tension 146 of 200 kPa)". */
+    /** The block's stress, when the analysis has one: "Strength used 73% (being pulled apart)". */
     stress?: StressInfo;
     /** All of it on one line, for assistive technology and tests. */
     text: string;
@@ -398,7 +418,7 @@ export function addedWhen(step: number | undefined, offset = 0): string {
  * model carries (see addedWhen).
  */
 export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "blockSizeMm" | "cantileverLimit">, stress: StressInfo | null = null, stepOffset = 0): BlockInfo {
-    const [i, j, k] = block.cell;
+    const k = block.cell[2];
     const half = settings.blockSizeMm / 2;
     const z0 = Math.round(block.centerMm[2] - half);
     const z1 = Math.round(block.centerMm[2] + half);
@@ -406,13 +426,13 @@ export function describeBlock(block: Block, settings: Pick<AnalysisSettings, "bl
     if (block.status === "supported") detail = k === 0 ? "rests on the ground" : "carried down to the ground";
     else if (block.status === "floating") detail = "not connected to the ground";
     else if (block.reach === null) detail = "nothing underneath";
-    else if (block.status === "overreach") detail = `${blocksOf(block.reach)} from support, the limit is ${settings.cantileverLimit}`;
-    else detail = `${blocksOf(block.reach)} from support`;
+    else if (block.status === "overreach") detail = `${blocksOf(block.reach)} from the nearest support, the limit is ${settings.cantileverLimit}`;
+    else detail = `${blocksOf(block.reach)} from the nearest support`;
     const statusLabel = STATUS_LABELS[block.status];
-    const title = `Block (${i}, ${j}, ${k})`;
-    const zRange = `z ${z0}–${z1} mm`;
+    const title = "Block";
+    const zRange = `${z0}–${z1} mm up`;
     const added = block.role && block.role !== "original" ? `${ROLE_LABELS[block.role]}, added ${addedWhen(block.step, stepOffset)}` : undefined;
-    const parts = [title, zRange, statusLabel, detail];
+    const parts = [`${title}, ${zRange}`, statusLabel, detail];
     if (added) parts.push(added);
     if (stress) parts.push(stress.text);
     return { title, zRange, status: block.status, statusLabel, detail, added, stress: stress ?? undefined, text: parts.join(" · ") };
@@ -444,12 +464,12 @@ export function dimensionOffset(volume: Vec3): number {
 }
 
 /**
- * The COG label's verdict line, and a note when the marker is not where the whole design's mass would put it: the
- * engine takes the COG of the grounded blocks only, so floating blocks are left out of it.
+ * The COG label's verdict line ("Inside the base by 110 mm"), and a note when the marker is not where the whole design's
+ * mass would put it: the engine takes the COG of the grounded blocks only, so floating blocks are left out of it.
  */
 export function cogSummary(stability: Stability, floatingCount = 0): { sub: string; tone: LabelTone; note?: string } {
     const note = floatingCount > 0 ? `Grounded blocks only, ${floatingCount} floating left out` : undefined;
-    if (stability.inside) return { sub: `Inside the base, ${mmText(stability.marginMm)} margin`, tone: "ok", note };
+    if (stability.inside) return { sub: `Inside the base by ${mmText(stability.marginMm)}`, tone: "ok", note };
     return { sub: `Outside the base by ${mmText(-stability.marginMm)}: tips over`, tone: "bad", note };
 }
 

@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Blocks, Check, CornerDownRight, Download, Eye, Layers, Loader2, Trash2 } from "lucide-react";
 
-import { ModelVerdictBadge } from "@/assignment/components/analysis/VerdictBadge";
 import { ModelThumb } from "@/assignment/components/chat/JobCard";
 import {
     AlertDialog,
@@ -16,6 +15,7 @@ import {
 import { Button } from "@/assignment/components/ui/button";
 import { formatBytes, modelFileName, modelTitle, partsLabel } from "@/assignment/components/workspace/format";
 import { ModelKindChip } from "@/assignment/components/workspace/ModelKindChip";
+import { ModelStabilityBadge } from "@/assignment/components/workspace/ModelStabilityBadge";
 import { ModelPairLink } from "@/assignment/components/workspace/ModelPairLink";
 import { descendantsOf, groupModels } from "@/assignment/components/workspace/modelGroups";
 import { cn } from "@/assignment/lib/utils";
@@ -63,7 +63,7 @@ function ModelRow({ model, models, activeModelId, providers, depth, deleting, on
                     )}
                     {via && <span className={chip}>{via}</span>}
                     <ModelKindChip model={model} />
-                    <ModelVerdictBadge model={model} />
+                    <ModelStabilityBadge model={model} />
                 </div>
                 <p className="line-clamp-2 text-sm text-foreground [overflow-wrap:anywhere]" title={title}>
                     {title}

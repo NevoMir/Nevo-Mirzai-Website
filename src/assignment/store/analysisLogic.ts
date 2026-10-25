@@ -10,13 +10,13 @@ import {
     type Block,
     type CheckKey,
     type CheckRow,
-    type CompareMode,
     type Issue,
     type IssueKind,
-    type StressAnalysis,
     type Vec3,
 } from "@/assignment/analysis/types";
+import { technicalWordsIn } from "@/assignment/components/analysis/vocabulary";
 import { MATERIAL_IDS, type AnalysisSummary, type MaterialId, type StressSummary } from "@/assignment/shared/contract";
+import { STRESS_WARN_SHARE } from "@/assignment/viewer/analysisGeometry";
 
 // ---------- settings ----------
 
@@ -139,8 +139,20 @@ export function sameSummary(a: AnalysisSummary | null | undefined, b: AnalysisSu
 
 export type VerdictKind = "pass" | "warn" | "fail";
 
+/**
+ * What a verdict leaves for the stabilizer to act on. The stabilizer moves on floating parts, long arms, the balance and the joint
+ * stress, never on thin parts that were left out of the blocks (nothing it adds brings them back), so a warning about those alone
+ * is nothing for it to fix:
+ *  - "stabilize": a problem (an error), a model balanced on the edge, or a warning that cannot be told apart from those;
+ *  - "stress": only heavily loaded joints are left (the button says "Reduce stress");
+ *  - "none": nothing the stabilizer can fix (a clean model, or only "thin parts left out").
+ */
+export type StabilizeFix = "stabilize" | "stress" | "none";
+
 export interface Verdict {
     kind: VerdictKind;
+    /** What the stabilizer can do about it (see StabilizeFix); counted from the issues of a result, else inferred from the summary. */
+    fix: StabilizeFix;
     errors: number;
     warnings: number;
     blocks: number;
@@ -172,13 +184,60 @@ export function customSettingsNote(s: {
     return parts.length > 0 ? parts.join(", ") : null;
 }
 
-/** What verdictOf reads of a summary (or of a result, which has no summary of that shape). */
+/**
+ * What verdictOf reads of a summary (or of a result, which has no summary of that shape). The optional figures only tell the
+ * stabilizer's part apart (fixOfSummary); `fix` is that part given outright, for a result whose issues are at hand.
+ */
 export type VerdictInput = Pick<AnalysisSummary, "errors" | "warnings" | "blocks"> &
-    Partial<Pick<AnalysisSummary, "cantilever_limit" | "fill_threshold">> & {
+    Partial<Pick<AnalysisSummary, "cantilever_limit" | "fill_threshold" | "coverage" | "cog_inside" | "cog_margin_mm">> & {
         /** The material the stress was estimated with; a stored summary says it in `stress`. */
         material?: MaterialId;
-        stress?: Pick<StressSummary, "material"> | null;
+        stress?: (Pick<StressSummary, "material"> & Partial<Pick<StressSummary, "max_utilisation">>) | null;
+        fix?: StabilizeFix;
     };
+
+// ---------- what the stabilizer can do about a verdict ----------
+
+/**
+ * Mirrors COVERAGE_WARN and EDGE_MARGIN_MM of analysis/issues.ts (the engine is loaded on demand, so the panel's logic does not import
+ * it); test-store.mjs pins them equal to the engine's.
+ */
+export const COVERAGE_WARN_SHARE = 0.8;
+export const EDGE_WARN_MM = 1;
+
+/** The fix a result's own issue list leaves: counted from the kinds, so it is exactly what the Problems list shows. */
+export function fixOfIssues(issues: ReadonlyArray<Pick<Issue, "kind" | "severity">>): StabilizeFix {
+    if (issues.some((issue) => issue.severity === "error")) return "stabilize";
+    const left = issues.filter((issue) => issue.severity === "warning" && issue.kind !== "thin-features");
+    if (left.length === 0) return "none";
+    return left.every((issue) => issue.kind === "highly-stressed") ? "stress" : "stabilize";
+}
+
+/**
+ * The same from a saved summary, which has the counts but not the kinds. The warnings a model without errors can have are three:
+ * balanced on the edge (the centre of gravity inside the base by less than EDGE_WARN_MM), heavily loaded joints (the peak above the
+ * warning level), and thin parts left out (coverage below COVERAGE_WARN_SHARE). Anything that does not add up to those (a summary
+ * from before the stress estimate, a rounded margin) is offered as "stabilize" rather than hidden.
+ */
+export function fixOfSummary(s: Pick<VerdictInput, "errors" | "warnings" | "coverage" | "cog_inside" | "cog_margin_mm" | "stress">): StabilizeFix {
+    if (Math.round(s.errors) > 0) return "stabilize";
+    const warnings = Math.round(s.warnings);
+    if (warnings <= 0) return "none";
+    if (s.cog_inside === true && typeof s.cog_margin_mm === "number" && s.cog_margin_mm < EDGE_WARN_MM) return "stabilize";
+    if (typeof s.stress?.max_utilisation === "number" && s.stress.max_utilisation > STRESS_WARN_SHARE) return "stress";
+    const thin = typeof s.coverage === "number" && s.coverage < COVERAGE_WARN_SHARE;
+    return thin && warnings === 1 ? "none" : "stabilize";
+}
+
+/** The stabilizer button's words for a verdict, or null when there is nothing for it to fix (so no button and no pill). */
+export type StabilizeLabel = "Stabilize" | "Reduce stress";
+
+export function stabilizeLabelOf(verdict: (Pick<Verdict, "kind"> & Partial<Pick<Verdict, "fix">>) | null): StabilizeLabel | null {
+    if (!verdict || verdict.kind === "pass") return null;
+    if (verdict.kind === "fail") return "Stabilize";
+    // A warning-only verdict whose fix is not known is offered under the plain word: "Reduce stress" is a claim about the cause.
+    return verdict.fix === "none" ? null : verdict.fix === "stress" ? "Reduce stress" : "Stabilize";
+}
 
 export function verdictOf(s: VerdictInput | null | undefined, maxBlocks?: number | null): Verdict | null {
     if (!s) return null;
@@ -190,7 +249,8 @@ export function verdictOf(s: VerdictInput | null | undefined, maxBlocks?: number
         maxBlocks,
         material: s.material ?? s.stress?.material,
     });
-    const base = { errors, warnings, blocks: s.blocks, custom };
+    const fix = s.fix ?? fixOfSummary({ ...s, errors, warnings });
+    const base = { errors, warnings, blocks: s.blocks, custom, fix };
     if (errors > 0) {
         return { ...base, kind: "fail", headline: `${plural(errors, "problem")} found`, short: plural(errors, "problem") };
     }
@@ -272,7 +332,7 @@ export function selectionView(issues: readonly Issue[], ids: readonly string[], 
 export const keepExistingIds = (issues: readonly Issue[], ids: readonly string[]): string[] =>
     ids.filter((id) => issues.some((issue) => issue.id === id));
 
-/** Blocks with nothing underneath (within the limit or beyond it): the "Cantilevered blocks" row shows these. */
+/** Blocks with nothing underneath (within the limit or beyond it): the "Overhanging blocks" row shows these. */
 export const cantileveredBlocks = (blocks: readonly Block[]): number[] =>
     blocks.filter((block) => block.status === "cantilever" || block.status === "overreach").map((block) => block.index);
 
@@ -328,12 +388,12 @@ export function reconcileSelection(
         if (prev.check !== "cantilevered") return null;
         const blocks = cantileveredBlocks(result.blocks);
         if (blocks.length === 0) return null;
-        return { selection: stable({ ...prev, label: `Cantilevered blocks: ${blocks.length}` }), highlight: blocks };
+        return { selection: stable({ ...prev, label: `Overhanging blocks: ${plural(blocks.length, "block")}` }), highlight: blocks };
     }
     const ids = keepExistingIds(result.issues, prev.ids);
     const view = ids.length > 0 ? selectionView(result.issues, ids) : null;
     if (!view) return null;
-    // Same issues as before: keep the wording ("Long cantilevers: 3 places").
+    // Same issues as before: keep the wording ("Overhangs too long: 3 places").
     const label = ids.length === prev.ids.length ? prev.label : view.label;
     return { selection: stable({ ids, check: prev.check, label }), highlight: view.highlight };
 }
@@ -341,18 +401,14 @@ export function reconcileSelection(
 /** Does any of this report text name a direction as +X, -Y, ...? Then the report says which way those point. */
 export const mentionsAxes = (texts: readonly string[]): boolean => texts.some((text) => /(?:^|[\s(])[+\-−][XY]\b/.test(text));
 
-// ---------- colour, compare and preview ----------
+// ---------- colour and preview ----------
 
-/** A result with blocks a stabilizer step added (a stabilized model), so colouring by role says something. */
-export function hasAddedBlocks(result: Pick<AnalysisResult, "assembly"> | null | undefined): boolean {
-    const a = result?.assembly;
-    if (!a) return false;
-    return a.roleCounts.some((n, i) => i > 0 && n > 0);
-}
+/** A result with blocks a stabilizer step added (a stabilized model), so colouring by role says something (one copy: the stage's menu uses it too). */
+export { hasAddedBlocks } from "@/assignment/viewer/stageControls";
 
 /**
  * The colour mode the stage actually uses. The user's choice stands unless it cannot be drawn: stress needs the
- * estimate, role needs added blocks. Overlay and the live preview of a stabilizer run always paint by role.
+ * estimate, role needs added blocks. The live preview of a stabilizer run always paints by role.
  */
 export function resolveColorBy(
     choice: AnalysisColorBy,
@@ -362,22 +418,6 @@ export function resolveColorBy(
     if (choice === "stress" && !ctx.stress) return "status";
     if (choice === "role" && !ctx.roles) return "status";
     return choice;
-}
-
-/** What the Original | Stabilized | Overlay switch shows; null for a result that is no block assembly. */
-export interface CompareInfo {
-    originalCount: number;
-    addedCount: number;
-    /** There are blocks of the analysed model left to show on their own. */
-    originalAvailable: boolean;
-}
-
-export function compareInfo(result: Pick<AnalysisResult, "assembly"> | null | undefined): CompareInfo | null {
-    const a = result?.assembly;
-    if (!a) return null;
-    const original = a.roleCounts[0] ?? 0;
-    const total = a.roleCounts.reduce((sum, n) => sum + n, 0);
-    return { originalCount: original, addedCount: total - original, originalAvailable: original > 0 };
 }
 
 const cellIndexCache = new WeakMap<object, Map<number, number>>();
@@ -396,8 +436,8 @@ function cellIndex(result: Pick<AnalysisResult, "blocks" | "gridSize">): Map<num
 
 /**
  * Block indices of `from` as indices of `to`, matched by grid cell; blocks `to` does not have are dropped. The stage may
- * show another result than the report (the live preview of a run, the original half of a stabilized model), whose block
- * numbers differ, while the cells stay where they are.
+ * show another result than the report (the live preview of a run), whose block numbers differ, while the cells stay where
+ * they are.
  */
 export function mapBlockIndices(
     from: Pick<AnalysisResult, "blocks">,
@@ -430,17 +470,13 @@ export interface PreviewState {
     result: AnalysisResult;
 }
 
-/** What the stage draws: the preview of a run, else the original half of a stabilized model, else the result. */
+/** What the stage draws: the preview of a run while it is for the model on screen, else the model's own result. */
 export function stageResultOf(s: {
     result: AnalysisResult | null;
     resultModelId: string | null;
-    compare: CompareMode;
-    originalResult: AnalysisResult | null;
-    originalFor: AnalysisResult | null;
     preview: PreviewState | null;
 }): AnalysisResult | null {
     if (s.preview && s.preview.modelId === s.resultModelId) return s.preview.result;
-    if (s.result && s.compare === "original" && s.originalResult && s.originalFor === s.result) return s.originalResult;
     return s.result;
 }
 
@@ -491,6 +527,25 @@ export const dockInset = (freeWidth: number, dockPx: number): number =>
     Math.max(0, Math.min(dockPx, freeWidth - MIN_STAGE_PX));
 
 // ---------- run phase ----------
+
+/**
+ * What the first-run panel says at each stage of the engine ("Checking the model…", then this). The engine labels its stages for its
+ * own progress callback ("Voxelising the model"); the panel is written for a student (vocabulary.ts keeps "voxel" out of it), so it
+ * speaks from the machine-readable step, not the label.
+ */
+export const STAGE_WORDS: Readonly<Record<string, string>> = {
+    voxelize: "Building the blocks",
+    flood: "Filling the inside",
+    analyze: "Checking the structure",
+    stress: "Estimating stress",
+};
+
+/** The panel's words for a stage: by its step; a stage this does not know keeps the engine's label unless that is technical. */
+export function stageWords(step: string | undefined, label: string): string {
+    const known = step === undefined ? undefined : STAGE_WORDS[step];
+    if (known !== undefined) return known;
+    return technicalWordsIn(label).length > 0 ? "Checking the model" : label;
+}
 
 export type AnalysisPhase = "no-model" | "unavailable" | "loading" | "running" | "error" | "done";
 
@@ -550,21 +605,6 @@ export function scaleLine(result: Pick<AnalysisResult, "sizeMm" | "settings" | "
     if (result.assembly) return `${result.assembly.steps > 0 ? "Block assembly built by the stabilizer" : "Block assembly"} · ${blocks}`;
     const [x, y, z] = result.sizeMm.map((v) => Math.round(v));
     return `Scaled to ${x} × ${y} × ${z} mm · ${blocks}`;
-}
-
-/** The sentence under "No problems found": the numbers that make the design stand. */
-export function passingSentence(result: Pick<AnalysisResult, "stability" | "stats" | "settings"> & { stress?: Pick<StressAnalysis, "maxUtilisation"> | null }): string {
-    const parts: string[] = [];
-    const { stability } = result;
-    if (stability) parts.push(`The centre of gravity sits ${fmtMm(Math.max(0, stability.marginMm))} mm inside the support base.`);
-    const { longestCantilever } = result.stats;
-    parts.push(
-        longestCantilever === 0
-            ? "Nothing hangs without support."
-            : `The longest cantilever is ${plural(longestCantilever, "block")} of the ${result.settings.cantileverLimit} allowed.`,
-    );
-    if (result.stress) parts.push(`The highest joint stress is ${fmtPct(result.stress.maxUtilisation)} of what the joints allow.`);
-    return parts.join(" ");
 }
 
 /** `a-wooden-chair-meshy-analysis` from the model's file name: the report files share its stem. */

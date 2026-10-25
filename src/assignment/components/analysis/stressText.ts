@@ -1,8 +1,7 @@
-// The words of the stress estimate that the screen needs: what the materials are, what the estimate assumes. Kept apart
+// The words of the stress estimate that the screen needs: what the materials are and how the estimate was solved. Kept apart
 // from analysis/materials.ts on purpose: that module pulls the FEM solver into whatever imports it, and the report
 // panel is part of the page. scripts/assignment/test-store.mjs pins these numbers equal to the ones the solver uses.
 
-import type { StressPoint } from "@/assignment/analysis/types";
 import type { MaterialId } from "@/assignment/shared/contract";
 
 export interface MaterialFacts {
@@ -50,25 +49,9 @@ export function materialLine(id: MaterialId): string {
     return `${m.kind} (${m.density} kg/m³, E ${m.youngGPa} GPa; joints take ${m.tensionMPa} MPa tension, ${m.compressionMPa} MPa compression, ${m.shearMPa} MPa shear)`;
 }
 
-/** What the estimate leaves out, the other half of "an estimate for ranking, not a certificate". */
-export const STRESS_CAVEAT =
-    "An estimate for ranking and comparing designs, not a certificate: no wind or people, no buckling, rigid ground. Tipping is judged by the centre-of-gravity check.";
-
-export const STRESS_LOAD_CASE = "Load case: self-weight, blocks bonded to each other and the ground.";
-
 /** "Solved in 12 ms in your browser with Awatif FEM (open source, MIT), one beam per shared face." */
 export function solverLine(solver: { backend: "wasm" | "ts"; ms: number }): string {
     const ms = solver.ms < 1 ? "under 1 ms" : `${Math.round(solver.ms)} ms`;
     const build = solver.backend === "wasm" ? "" : " (TypeScript build of its solver)";
     return `Solved in ${ms} in your browser with Awatif FEM (open source, MIT)${build}, one beam per shared face.`;
-}
-
-const MODE_WORD = { tension: "Tension", compression: "Compression", shear: "Shear" } as const;
-const cell = (c: readonly number[]): string => `(${c.join(", ")})`;
-
-/** "Tension · joint (4, 5, 6)–(5, 5, 6) · 143 of 200 kPa": what governs at a stress point, and how close it is. */
-export function pointLine(p: Pick<StressPoint, "mode" | "joint" | "cell" | "utilisation" | "allowableKPa">): string {
-    const where = p.joint ? `joint ${cell(p.joint[0])}–${cell(p.joint[1])}` : `block ${cell(p.cell)}`;
-    const used = Math.round(p.utilisation * p.allowableKPa);
-    return `${MODE_WORD[p.mode]} · ${where} · ${used} of ${Math.round(p.allowableKPa)} kPa`;
 }

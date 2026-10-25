@@ -294,6 +294,18 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     toggleChat: () => set((s) => ({ chatHidden: !s.chatHidden })),
 }));
 
+/**
+ * Does the project on screen have anything in it: a message, a model or a job? Such a project is never "a new chat", whatever way
+ * it came to be (made through the API without any chat messages, say): the new-chat hero and its blank canvas are only for one that
+ * has none of the three, and everything else shows the chat panel and the model. (Not a hook: use it as a selector.)
+ */
+export const selectProjectHasContent = (s: Pick<WorkspaceState, "messages" | "models" | "jobs">): boolean =>
+    s.messages.length > 0 || s.models.length > 0 || Object.keys(s.jobs).length > 0;
+
+export function useProjectHasContent(): boolean {
+    return useWorkspaceStore(selectProjectHasContent);
+}
+
 /** Is any job of the open project still running? (Not a hook: use it as a selector.) */
 export const selectIsGenerating = (s: WorkspaceState): boolean =>
     Object.values(s.jobs).some(

@@ -1,5 +1,7 @@
-// The rules behind the numbers, in plain words. Shown in the app ("How is this computed?") and copied into the
-// exported report so a reader can follow the analysis without reading the code.
+// The rules behind the numbers. DEFINITIONS are the technical statement of each rule: shown in the app ("How is this computed?",
+// under "The rules in detail") and copied into the exported report, so a reader can follow the analysis without reading the code.
+// They keep the technical terms (cantilever, centre of gravity, utilisation) on purpose. HOW_IT_WORKS and SCREEN_DEFINITIONS are
+// the plain-language parts of the info page and are not part of the report.
 
 import { STRESS_FAIL, STRESS_MATERIALS, STRESS_WARN, pct as pc } from "./materials.ts";
 
@@ -14,6 +16,40 @@ export interface Definition {
     title: string;
     text: string;
 }
+
+/** The short story of the analysis in four steps, for the top of the "How is this computed?" page. Plain words, no jargon. */
+export const HOW_IT_WORKS: ReadonlyArray<{ title: string; text: string }> = [
+    {
+        title: "Scale it",
+        text: "The model is scaled so its longest side is 1 m, and set on the ground. Its shape does not change.",
+    },
+    {
+        title: "Build it from blocks",
+        text: "It is rebuilt from 100 mm blocks. A block is used where the model fills enough of it (the fill threshold in Settings).",
+    },
+    {
+        title: "Check the rules",
+        text: "Balance (does the weight sit over the base, or does it tip?), overhangs (does any arm stick out further than the limit?), floating parts, and the block budget if you set one.",
+    },
+    {
+        title: "Estimate the strength",
+        text: "The model's own weight is applied to a simple beam model of the blocks. For every joint it works out how much of its strength is used: 100% is where it would open or crush.",
+    },
+];
+
+/** What only the screen needs (the report does not list these): how to read directions and "how far an overhang reaches". */
+export const SCREEN_DEFINITIONS: Definition[] = [
+    {
+        key: "directions",
+        title: "Directions",
+        text: "Right, left, front and back are as the Front view shows them: the front is the side that faces you. The Front, Right and Top buttons in the 3D view show each side. (In the exported report these are +X for right, -X for left, -Y for front, +Y for back, and +Z is up.)",
+    },
+    {
+        key: "reach-unit",
+        title: "How far an overhang reaches",
+        text: "Counted in block steps along the structure from the nearest support, not in a straight line. A step to a neighbouring block, sideways or across a corner, counts as one; going up or down is free. A straight arm or a plate therefore never reaches further than the model is wide, but a winding arm can. (Technical term: reach of a cantilever.)",
+    },
+];
 
 export const DEFINITIONS: Definition[] = [
     {

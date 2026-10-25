@@ -11,6 +11,7 @@ import { ModelCard } from "@/assignment/components/chat/ModelCard";
 import { BrandLockup } from "@/assignment/components/BrandLockup";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { toast } from "@/assignment/components/ui/sonner";
+import { openVersion } from "@/assignment/components/workspace/versionActions";
 import { useTheme } from "@/assignment/hooks/useTheme";
 import { getAccessCode } from "@/assignment/lib/api";
 import type { ChatMessage, Job, ModelAsset, ProviderId, ProviderInfo } from "@/assignment/shared/contract";
@@ -27,7 +28,7 @@ import {
     saveSelection,
 } from "@/assignment/store/providers";
 import { replyLine } from "@/assignment/store/replies";
-import { selectIsGenerating, useIsGenerating, useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
+import { selectIsGenerating, useIsGenerating, useProjectHasContent, useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
 
 const EMPTY_QUESTION = "What do you want to build?";
 
@@ -73,6 +74,8 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     const providersInfo = useWorkspaceStore((s) => s.providers);
     const unstoppable = useWorkspaceStore((s) => s.unstoppable);
     const generating = useIsGenerating();
+    // A model, a job or a message: this is no new chat, even when there are no messages (a project made through the API).
+    const hasContent = useProjectHasContent();
 
     // ---- model selection ----
     // null until the visitor changes it: the remembered selection (or the server's default) stands in,
@@ -110,7 +113,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     // The empty state and the composer paint over the canvas (see heroSlot) until the first
     // message; after it they are back inside the panel. Same component instance either way, so the
     // text typed carries over: only the DOM nodes move.
-    const heroActive = Boolean(heroSlot) && messages.length === 0 && !mobile;
+    const heroActive = Boolean(heroSlot) && messages.length === 0 && !hasContent && !mobile;
 
     useEffect(() => {
         const ta = textareaRef.current;
@@ -277,10 +280,9 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
     }, [flashCanvas]);
 
     // ---- cards ----
+    // The same switch as the bar's version switcher, landing on the 3D tab (and on the canvas, on a phone).
     const viewModel = (model: ModelAsset) => {
-        const state = useWorkspaceStore.getState();
-        state.setActiveModel(model.id);
-        state.setWorkspaceTab("3d");
+        openVersion(model, { tab: "3d" });
         mobile?.onShowCanvas();
     };
     const retry = (job: Job) => void retryJob(job, askAccess);
@@ -294,13 +296,15 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                 other.created_at > job.created_at,
         );
     const providerList = providersInfo?.providers;
-    const renderCard = (job: Job) => (
+    // `unlisted`: no message of the chat points at this job, so no bubble above it says what was asked; the card quotes the prompt itself.
+    const renderCard = (job: Job, unlisted = false) => (
         <JobCard
             key={job.id}
             job={job}
             providers={providerList}
             active={Boolean(job.model) && job.model?.id === activeModelId}
             canRetry={canRetry(job)}
+            showPrompt={unlisted}
             onView={viewModel}
             onRetry={retry}
         />
@@ -333,10 +337,12 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
             ? { used: providersInfo.used_today, limit: providersInfo.daily_limit }
             : null;
     const hasMessages = messages.length > 0;
+    // The conversation is under way, or the project already holds work: the panel is a chat now, not the new-chat hero.
+    const started = hasMessages || hasContent;
     // Short on purpose: the box is one line tall, so a long placeholder would be cut off.
     const placeholder = generating
         ? "Queue the next prompt"
-        : hasMessages
+        : started
           ? "Describe another object"
           : "Describe the object you want to build";
 
@@ -378,7 +384,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
             {/* Header, only once the conversation has started: an empty chat shows the single big
                 centred logo instead (never both at once). On phones the header always exists (it
                 carries the navigation buttons), but the logo inside it follows the same rule. */}
-            {(hasMessages || mobile || (onHide && !heroActive)) && (
+            {(started || mobile || (onHide && !heroActive)) && (
                 <div className={`border-b border-sidebar-border ${mobile ? "px-2 py-2" : "px-4 py-4 @[20rem]:px-6"}`}>
                     <div className="flex items-center gap-1">
                         {!mobile && onHide && (
@@ -405,7 +411,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
                             </button>
                         )}
                         {/* The wordmark is wide: a panel dragged narrow drops it before it crowds the buttons. */}
-                        {hasMessages && (
+                        {started && (
                             <div className="ml-1 hidden min-w-0 @[17rem]:block">
                                 <BrandLockup size="sm" dark={isDark} />
                             </div>
@@ -445,20 +451,29 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
-                {!hasMessages && !heroActive && (
+                {!hasMessages && !heroActive && loading && (
+                    <div className="mb-0 flex min-h-full flex-col items-center justify-center text-center">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label="Loading project" />
+                    </div>
+                )}
+
+                {/* A project that holds a model or a job but no messages (made through the API, or its chat was cleared): the
+                    panel is the chat of that project, not the new-chat hero, so one line says why the conversation is empty. */}
+                {!hasMessages && !loading && hasContent && (
+                    <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="chat-empty-project">
+                        {/* "Another" only when there is a model already: a project whose one run failed has none to add to. */}
+                        No messages in this project yet. Describe an object below{models.length > 0 ? " to add another model" : ""}.
+                    </p>
+                )}
+
+                {!hasMessages && !heroActive && !loading && !hasContent && (
                     <div className="mb-0 flex min-h-full flex-col items-center justify-center text-center space-y-3">
                         {/* min-h-full (not h-full): on short landscape phones the logo + examples
                             exceed the viewport; this lets the block grow and scroll instead of
                             clipping the top under justify-center. */}
-                        {loading ? (
-                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label="Loading project" />
-                        ) : (
-                            <>
-                                {brandMark}
-                                <p className="text-muted-foreground text-sm">{EMPTY_QUESTION}</p>
-                                {examples}
-                            </>
-                        )}
+                        {brandMark}
+                        <p className="text-muted-foreground text-sm">{EMPTY_QUESTION}</p>
+                        {examples}
                     </div>
                 )}
 
@@ -505,7 +520,7 @@ export function ChatPanel({ mobile, heroSlot, onHide, loading = false, tagId = n
 
                 {unlistedJobs.length > 0 && (
                     <div className="flex flex-col gap-2" data-testid="unlisted-jobs">
-                        {unlistedJobs.map(renderCard)}
+                        {unlistedJobs.map((job) => renderCard(job, true))}
                     </div>
                 )}
 

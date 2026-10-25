@@ -35,7 +35,7 @@ export const ROLE_NODE_NAMES: Record<BlockRole, string> = {
 };
 
 /**
- * Colour of each role (sRGB hex): the GLB's materials (they cannot follow the theme) and the Overlay legend. The block view
+ * Colour of each role (sRGB hex): the GLB's materials (they cannot follow the theme) and the stage's "Added blocks" legend. The block view
  * paints "original" blocks with its theme-aware slate instead (statusColor("supported", theme)); the added roles are
  * saturated hues that read on both stages (the 3D view outlines every block, as it does for the status colours).
  */

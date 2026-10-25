@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
 
 import { useThrottled } from "@/assignment/components/analysis/useThrottled";
+import { ROLE_WORDS } from "@/assignment/components/analysis/vocabulary";
 import { cn } from "@/assignment/lib/utils";
 import { ROLE_HEX } from "@/assignment/shared/assembly";
 import type { StabilizeStepLog } from "@/assignment/shared/contract";
-import { stepChips } from "@/assignment/store/stabilizeLogic";
-import { ROLE_PLURALS } from "@/assignment/viewer/analysisGeometry";
+import { stepChips, stepSentence } from "@/assignment/store/stabilizeLogic";
 
 export interface StabilizeTimelineProps {
     steps: readonly StabilizeStepLog[];
@@ -24,7 +24,7 @@ export interface StabilizeTimelineProps {
  */
 export function StabilizeTimeline({ steps, running, selected, onSelect, className }: StabilizeTimelineProps) {
     const last = steps[steps.length - 1];
-    const announcement = useThrottled(last ? `Step ${last.n}: ${last.text}` : "", 1500);
+    const announcement = useThrottled(last ? `Step ${last.n}: ${stepSentence(last)}` : "", 1500);
     const boxRef = useRef<HTMLDivElement>(null);
     // The list follows the run while the reader is at its end; one who scrolled up to read is left alone.
     const following = useRef(true);
@@ -65,7 +65,7 @@ export function StabilizeTimeline({ steps, running, selected, onSelect, classNam
                                     onClick={() => onSelect(on ? null : step.n)}
                                     aria-pressed={on}
                                     aria-current={latest ? "step" : undefined}
-                                    aria-label={`Step ${step.n}, ${ROLE_PLURALS[step.move].toLowerCase()}: ${step.text} ${on ? "Showing in the viewer. Press to clear." : "Press to show these blocks in the viewer."}`}
+                                    aria-label={`Step ${step.n}, ${ROLE_WORDS[step.move].toLowerCase()}: ${stepSentence(step)} ${on ? "Showing in the viewer. Press to clear." : "Press to show these blocks in the viewer."}`}
                                     data-testid="timeline-step"
                                     data-step={step.n}
                                     data-role={step.move}
@@ -82,11 +82,11 @@ export function StabilizeTimeline({ steps, running, selected, onSelect, classNam
                                         {step.n}
                                     </span>
                                     <span className="min-w-0 flex-1">
-                                        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
                                             <span aria-hidden className="h-2 w-2 shrink-0 rounded-[2px] ring-1 ring-black/15 dark:ring-white/20" style={{ background: ROLE_HEX[step.move] }} />
-                                            {ROLE_PLURALS[step.move]}
+                                            {ROLE_WORDS[step.move]}
                                         </span>
-                                        <span className="mt-0.5 block text-xs leading-relaxed text-foreground">{step.text}</span>
+                                        <span className="mt-0.5 block text-xs leading-relaxed text-foreground">{stepSentence(step)}</span>
                                         <span className="mt-1.5 flex flex-wrap gap-1">
                                             {stepChips(step).map((chip) => (
                                                 <span key={chip} className="rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground">

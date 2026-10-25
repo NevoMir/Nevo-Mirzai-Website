@@ -28,15 +28,16 @@ if (!process.features.typescript && !process.execArgv.includes("--experimental-s
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const mod = (name) => import(`../../src/assignment/analysis/${name}.ts`);
 const { analyze, analyzeGrid, toAnalysisMm, toModelSpace } = await mod("analyze");
-const { voxelize, triBoxOverlap, SUBDIVISION } = await mod("voxelize");
+const { voxelize, triBoxOverlap, SUBDIVISION, transformForBounds } = await mod("voxelize");
 const { convexHull, hullDistance, directionLabel } = await mod("geometry");
 const { normalizeSettings, maxGridSize } = await mod("settings");
 const { buildReport, buildReportJson, buildBlocksCsv } = await mod("report");
 const { runAnalysis, clearAnalysisCache, EmptyModelError } = await mod("runAnalysis");
 const { withStress, analyzeAssemblyWithStress, resetSharedSolver } = await mod("withStress");
-const { boundsOf, originalOf } = await mod("assembly");
+const { boundsOf, originalOf, soupBoundsOf, sourceTransformOf, sourcePlacementOf, analyzeAssembly, parseSize } = await mod("assembly");
 const { descriptorFromBlocks } = await import("../../src/assignment/shared/assembly.ts");
-const { DEFINITIONS } = await mod("definitions");
+const { DEFINITIONS, HOW_IT_WORKS, SCREEN_DEFINITIONS } = await mod("definitions");
+const { plainDirection, placeOf, placeAtPoint } = await mod("plain");
 const { DEFAULT_ANALYSIS_SETTINGS } = await mod("types");
 const { checkAnalysisSummary } = await import("../../worker/analysis.ts");
 const { NodeIO } = await import("@gltf-transform/core");
@@ -606,11 +607,12 @@ await test("gallows with a 6-block arm: one cantilever run, reach 6, two blocks 
     assert.equal(issue.id, "cantilever-0");
     assert.equal(issue.kind, "cantilever-too-long");
     assert.equal(issue.severity, "error");
-    assert.equal(issue.title, "Cantilever too long: 6 blocks");
+    assert.equal(issue.title, "Arm too long: 6 blocks (max 4)");
     assert.deepEqual(issue.blocks, run1.overLimit);
-    assert.match(issue.detail, /500-600 mm height/, issue.detail);
+    assert.match(issue.detail, /At a height of 500-600 mm/, issue.detail);
     assert.match(issue.detail, /6 blocks \(600 mm\)/);
-    assert.match(issue.detail, /towards \+X/);
+    assert.match(issue.detail, /towards the right/);
+    assert.doesNotMatch(issue.detail, /\+X|cantilever/i, "plain words: no axis names, no jargon");
     assert.match(issue.detail, /limit is 4 blocks \(400 mm\)/);
     assert.match(issue.detail, /2 blocks are beyond the limit/);
     nearVec(issue.focusMm, find([6, 0, 5]).centerMm, 1e-9);
@@ -637,7 +639,7 @@ await test("a 4-block arm is within the limit; setting the limit to 3 makes it a
 
     const strict = run(gallows(4, 5), { cantileverLimit: 3 }).result;
     assert.equal(strict.issues.length, 1);
-    assert.equal(strict.issues[0].title, "Cantilever too long: 4 blocks");
+    assert.equal(strict.issues[0].title, "Arm too long: 4 blocks (max 3)");
     assert.equal(strict.issues[0].blocks.length, 1);
     assert.match(strict.issues[0].detail, /1 block is beyond the limit/);
 });
@@ -653,7 +655,7 @@ await test("a block hanging under the arm tip has the tip's reach, and a block o
     assert.equal(result.cantilevers[0].blocks.length, 9);
     assert.deepEqual(result.cantilevers[0].layers, [4, 6]);
     assert.deepEqual(result.cantilevers[0].overLimit.sort((a, b) => a - b), [idx([5, 0, 5]), idx([6, 0, 4]), idx([6, 0, 5]), idx([6, 0, 6])].sort((a, b) => a - b));
-    assert.match(result.issues[0].detail, /400-700 mm height/);
+    assert.match(result.issues[0].detail, /At a height of 400-700 mm/);
 });
 
 await test("a bridge between two columns: reach is the distance to the nearest support", () => {
@@ -683,7 +685,9 @@ await test("a leaning shape: the centre of gravity falls outside the base (+X), 
     assert.equal(issue.id, "cog");
     assert.equal(issue.kind, "cog-outside");
     assert.equal(issue.severity, "error");
-    assert.match(issue.detail, /centre of gravity is 13 mm outside the support base, towards \+X: the structure would tip over/);
+    assert.equal(issue.title, "Tips over: 13 mm past the base");
+    assert.match(issue.detail, /The model's weight is centred 13 mm past the edge of its base, towards the right, so it would tip over/);
+    assert.doesNotMatch(issue.detail, /centre of gravity|support base|\+X/i, "plain words");
     nearVec(issue.focusMm, result.stability.cogMm);
     assert.ok(issue.blocks.length > 0 && issue.blocks.every((b) => result.blocks[b].cell[0] >= 2), "the overhanging blocks are highlighted");
     const cog = result.checks[0];
@@ -699,7 +703,7 @@ await test("the tip direction follows the lean: -Y and a diagonal", () => {
     const toMinusY = lean.map(([i, j, k]) => [j, 4 - i, k]);
     const a = run(toMinusY).result;
     nearVec(a.stability.tipDirection, [0, -1], 1e-9);
-    assert.match(a.issues[0].detail, /towards -Y/);
+    assert.match(a.issues[0].detail, /towards the front/);
     assert.equal(a.checks[0].value, "Outside the base · 13 mm towards -Y");
     // A diagonal lean: a column on one ground block with an arm to +X and an arm to +Y at the top.
     const diag = [[0, 0, 0], [0, 0, 1], [0, 0, 2], [1, 0, 2], [2, 0, 2], [3, 0, 2], [0, 1, 2], [0, 2, 2], [0, 3, 2]];
@@ -708,7 +712,7 @@ await test("the tip direction follows the lean: -Y and a diagonal", () => {
     assert.equal(b.stability.inside, false);
     nearVec(b.stability.tipDirection, [Math.SQRT1_2, Math.SQRT1_2], 1e-9);
     near(b.stability.marginMm, -Math.hypot(100 * (10.5 / 9 - 1), 100 * (10.5 / 9 - 1)), 1e-6);
-    assert.match(b.issues[0].detail, /towards \+X and \+Y/);
+    assert.match(b.issues[0].detail, /towards the back right/);
 });
 
 await test("a floating box above the ground is its own body, an error, and not part of the centre of gravity", () => {
@@ -730,7 +734,7 @@ await test("a floating box above the ground is its own body, an error, and not p
     assert.equal(issue.severity, "error");
     assert.equal(issue.title, "Floating part: 2 blocks");
     assert.deepEqual(issue.blocks, result.bodies[1].blocks);
-    assert.match(issue.detail, /200-300 mm height/);
+    assert.match(issue.detail, /at a height of 200-300 mm/);
     assert.match(issue.detail, /not connected to the ground/);
     assert.match(issue.detail, /one block of space separates them from the structure/);
     assert.match(issue.detail, /if the model is joined there, the joint fills less than 10% of a block/);
@@ -750,7 +754,7 @@ await test("a part that only touches the structure along an edge is still floati
 await test("a floating block far above the ground says how far it is", () => {
     const { result } = run([[0, 0, 0], [0, 0, 4]]);
     assert.equal(result.issues.length, 1);
-    assert.match(result.issues[0].detail, /1 block at 400-500 mm height is not connected/);
+    assert.match(result.issues[0].detail, /1 block at a height of 400-500 mm is not connected/);
     assert.match(result.issues[0].detail, /nearest block of the structure is 3 blocks away/);
     assert.doesNotMatch(result.issues[0].detail, /empty/, "does not claim the blocks in between are empty");
     assert.match(result.issues[0].detail, /It would fall/);
@@ -772,8 +776,8 @@ await test("a component budget: too many blocks is an error with the numbers", (
     const over = run(cube(3), { maxBlocks: 20 }).result;
     assert.equal(over.issues.length, 1);
     assert.equal(over.issues[0].kind, "too-many-blocks");
-    assert.equal(over.issues[0].title, "Too many components: 27 blocks");
-    assert.match(over.issues[0].detail, /budget is 20: 7 blocks over/);
+    assert.equal(over.issues[0].title, "Too many blocks: 27 (budget 20)");
+    assert.match(over.issues[0].detail, /block budget is 20: 7 blocks over/);
     assert.match(over.issues[0].detail, /Raising the fill threshold above \d+% drops the most weakly filled blocks first/, "a voxelised mesh: the fill threshold can drop blocks");
     assert.equal(over.checks[3].status, "fail");
     assert.equal(over.checks[3].value, "27 blocks (budget 20)");
@@ -861,7 +865,7 @@ await test("E3: a stray grounded piece does not hide a structure that tips; each
     assert.deepEqual(result.stability.supportHull, [[0, 400], [100, 400], [100, 600], [0, 600]], "its base is its own stem, not stem + pad");
     nearVec(result.stability.cogMm, alone.result.stability.cogMm, 1e-9);
     const cog = result.issues.find((i) => i.id === "cog");
-    assert.match(cog.detail, /one of the 2 separate structures standing on the ground \(26 blocks\) is \d+ mm outside its support base, towards \+X: that structure would tip over/);
+    assert.match(cog.detail, /The weight of one of the 2 separate pieces standing on the ground \(26 blocks\) is centred \d+ mm past the edge of its base, towards the right, so that piece would tip over/);
     assert.ok(cog.blocks.length > 0 && cog.blocks.every((b) => tipping.blocks.includes(b)), "only the tipping structure is highlighted");
     assert.ok(cog.blocks.every((b) => result.blocks[b].cell[0] >= 1), "the cap, not the stem");
     assert.equal(result.checks[0].status, "fail");
@@ -970,17 +974,17 @@ await test("E7: a cantilever that sticks out in several directions is described 
     const two = tee.issues.find((i) => i.kind === "cantilever-too-long");
     assert.equal(tee.cantilevers.length, 1);
     // (the bar is one block wide, so its ends are reached along it: 3 + 5 steps, minus one for the corner at the arm)
-    assert.match(two.detail, /sticks out up to 7 blocks \(700 mm\) in 2 directions \(\+X\/\+Y, \+X\/-Y\) from its last support/);
+    assert.match(two.detail, /sticks out up to 7 blocks \(700 mm\) in 2 directions \(back right, front right\) from its last support/);
     assert.equal(two.blocks.length, 6);
     // A beam over a central column is two cantilevers, one per side, each with its own heading.
     const beam = analyzeCells(11, [...column(5, 0, 0, 4), ...range(11).map((i) => [i, 0, 5])]);
-    const heads = beam.issues.filter((i) => i.kind === "cantilever-too-long").map((i) => /towards ([+-]X)/.exec(i.detail)?.[1]);
-    assert.deepEqual(heads.sort(), ["+X", "-X"]);
+    const heads = beam.issues.filter((i) => i.kind === "cantilever-too-long").map((i) => /towards the (right|left)/.exec(i.detail)?.[1]);
+    assert.deepEqual(heads.sort(), ["left", "right"]);
     // One arm keeps the single heading.
-    assert.match(analyzeCells(10, gallows(6, 6)).issues[0].detail, /sticks out 6 blocks \(600 mm\) towards \+X from its last support/);
+    assert.match(analyzeCells(10, gallows(6, 6)).issues[0].detail, /sticks out 6 blocks \(600 mm\) towards the right from its last support/);
     // A diagonal arm names the diagonal.
     const diag = analyzeCells(10, [...column(0, 0, 0, 3), ...range(7).map((i) => [i, i, 4]), ...range(6).map((i) => [i + 1, i, 4])]);
-    assert.match(diag.issues.find((i) => i.kind === "cantilever-too-long").detail, /towards \+X and \+Y/);
+    assert.match(diag.issues.find((i) => i.kind === "cantilever-too-long").detail, /towards the back right/);
 });
 
 await test("E9: a centre of gravity a hair outside the base is not reported as 0 mm, and one exactly on the edge is only balanced", () => {
@@ -993,7 +997,8 @@ await test("E9: a centre of gravity a hair outside the base is not reported as 0
     assert.equal(hair.checks[0].value, "Outside the base · < 1 mm towards +X");
     assert.equal(hair.checks[0].status, "fail");
     const miss = hair.issues.find((i) => i.id === "cog");
-    assert.match(miss.detail, /The centre of gravity is less than 1 mm outside the support base, towards \+X: the structure would tip over/);
+    assert.match(miss.detail, /The model's weight is centred less than 1 mm past the edge of its base, towards the right, so it would tip over/);
+    assert.equal(miss.title, "Tips over: less than 1 mm past the base");
     assert.doesNotMatch(miss.detail, /\b0 mm\b/);
     assert.equal(hair.summary.cog_margin_mm, Math.round(hair.stability.marginMm * 10) / 10);
 
@@ -1006,7 +1011,8 @@ await test("E9: a centre of gravity a hair outside the base is not reported as 0
     const warn = edge.issues.find((i) => i.id === "cog-edge");
     assert.equal(warn.severity, "warning");
     assert.equal(warn.kind, "cog-outside", "it belongs to the centre-of-gravity row");
-    assert.match(warn.detail, /within 1 mm of the edge of the support base \(the \+X side\)/);
+    assert.match(warn.detail, /within 1 mm of the edge of its base \(the right side\)/);
+    assert.equal(warn.title, "Balanced on the edge of the base");
     assert.equal(edge.summary.errors, 0);
     assert.equal(edge.summary.warnings, 1);
     assert.ok(edge.issues.every((i, n) => i.severity === "error" || edge.issues.slice(n).every((j) => j.severity === "warning")));
@@ -1563,6 +1569,234 @@ await test("runAnalysis of a block assembly through a worker: no triangles are s
     }
 });
 
+// ---------- a stabilized model over its SOURCE mesh: the placement is the source's, given from outside ----------
+
+await test("soupBoundsOf is the bounds voxelize would use: whole triangles with finite coordinates only", () => {
+    assert.equal(soupBoundsOf(new Float32Array(0)), null);
+    assert.equal(soupBoundsOf(new Float32Array(6)), null, "less than a triangle");
+    assert.equal(soupBoundsOf(Float32Array.from([NaN, 0, 0, 1, 1, 1, 2, 2, 2])), null, "the only triangle has a NaN");
+    // The broken triangle's far-away finite vertices must not stretch the box (they would shrink the scale and shift the cells).
+    const soup = Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 1, /* broken */ 500, 500, 500, Infinity, 0, 0, 0, 0, 0, /* partial */ 9, 9, 9]);
+    assert.deepEqual(soupBoundsOf(soup), { min: [0, 0, 0], max: [1, 1, 1] });
+    const settings = normalizeSettings({});
+    assert.deepEqual(transformForBounds(soupBoundsOf(soup), settings), voxelize({ positions: soup }, settings).transform);
+});
+
+await test("sourceTransformOf: the source mesh's own voxelisation transform, at the assembly's lattice scale", () => {
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const floats = [];
+    pushBox(floats, 7, 5, 3, 40, 12, 9);
+    const soup = soupOf(floats);
+    const settings = normalizeSettings({ targetSizeMm: 1000, blockSizeMm: 100 });
+    const t = sourceTransformOf(soupBoundsOf(soup.positions), settings, desc);
+    assert.deepEqual(t, voxelize(soup, settings).transform);
+    // A user-set scale of the settings does not apply to a lattice of 100 mm blocks.
+    assert.deepEqual(sourceTransformOf(soupBoundsOf(soup.positions), { blockSizeMm: 50, targetSizeMm: 500 }, desc), t);
+    assert.equal(sourceTransformOf(null, settings, desc), null);
+    // The placement is the transform and the mesh's scaled box: what voxelising the mesh reports as its size.
+    const placement = sourcePlacementOf(soupBoundsOf(soup.positions), settings, desc);
+    assert.deepEqual(placement.transform, t);
+    assert.deepEqual(placement.sizeMm, voxelize(soup, settings).sizeMm);
+    assert.deepEqual(sourcePlacementOf(soupBoundsOf(soup.positions), { blockSizeMm: 50, targetSizeMm: 500 }, desc), placement, "the lattice's scale, not the settings'");
+    assert.equal(sourcePlacementOf(null, settings, desc), null);
+});
+
+await test("a stabilized model over its source mesh is as big as that mesh: the size is the mesh's box, so the original and the stabilized model agree", async () => {
+    clearAnalysisCache();
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const floats = [];
+    pushBox(floats, 7, 5, 3, 40, 12, 9);
+    const soup = soupOf(floats);
+    const settings = normalizeSettings({});
+    const placement = sourcePlacementOf(soupBoundsOf(soup.positions), settings, desc);
+    const original = voxelize(soup, settings);
+    // Headless, and over a mesh without being told its size: the lattice's own extent (what the stabilizer measures).
+    const lattice = analyzeAssembly(desc, null, {});
+    const told = analyzeAssembly(desc, null, {}, desc, placement.transform);
+    assert.deepEqual(told.sizeMm, lattice.sizeMm, "the transform alone does not say how big the mesh is");
+    // With the mesh's box: the result says what the original does, in the result and in the summary that is saved.
+    const sized = analyzeAssembly(desc, null, {}, desc, placement.transform, placement.sizeMm);
+    assert.deepEqual(sized.transform, placement.transform);
+    assert.deepEqual(sized.sizeMm, original.sizeMm);
+    assert.notDeepEqual(sized.sizeMm, lattice.sizeMm);
+    assert.deepEqual(sized.summary.size_mm, analyzeGrid(original, settings).summary.size_mm);
+    assert.deepEqual(sized.blocks, told.blocks, "nothing else moves");
+    assert.deepEqual(sized.issues.map((i) => [i.kind, i.blocks]), told.issues.map((i) => [i.kind, i.blocks]));
+    assert.deepEqual(sized.stats, told.stats);
+    // A size without a transform is not a placement: the lattice's own frame and extent.
+    assert.deepEqual(analyzeAssembly(desc, null, {}, desc, null, placement.sizeMm).sizeMm, lattice.sizeMm);
+    // The summary the Worker takes in accepts it.
+    assert.equal(checkAnalysisSummary(sized.summary, Date.now()).ok, true);
+
+    // Through runAnalysis (main thread): same, and another size under the same key is another result.
+    const key = "stab@src-size";
+    const run = (sourceSizeMm, extra = {}) => runAnalysis(() => assert.fail("no triangles are read"), {}, { assembly: desc, cacheKey: key, sourceTransform: placement.transform, sourceSizeMm, ...extra });
+    const a = await run(placement.sizeMm);
+    assert.deepEqual(a.sizeMm, original.sizeMm);
+    assert.deepEqual(a.summary.size_mm, sized.summary.size_mm);
+    assert.equal(await run([...placement.sizeMm]), a, "cached by the size's values");
+    const other = await run([500, 400, 300]);
+    assert.notEqual(other, a, "another size is another result");
+    assert.deepEqual(other.sizeMm, [500, 400, 300]);
+    assert.deepEqual(a.sizeMm, original.sizeMm, "and did not change the first");
+    const unsized = await run(null);
+    assert.deepEqual(unsized.sizeMm, lattice.sizeMm);
+    assert.notEqual(unsized, a);
+    // A size with no transform is ignored (and is not in the key, so it cannot split the cache).
+    const free = await runAnalysis(assemblySoup(desc), {}, { assembly: desc, cacheKey: "stab@own-size", sourceSizeMm: [1, 2, 3] });
+    assert.deepEqual(free.sizeMm, lattice.sizeMm);
+    // A mesh is voxelised and says its own.
+    const mesh = shape(cube(2));
+    const voxelised = await runAnalysis(mesh.soup, mesh.settings, { cacheKey: "mesh-with-size", sourceTransform: placement.transform, sourceSizeMm: [1, 2, 3] });
+    assert.notDeepEqual(voxelised.sizeMm, [1, 2, 3]);
+    clearAnalysisCache();
+});
+
+await test("parseSize: three finite numbers that are not negative, else null", () => {
+    assert.deepEqual(parseSize([1, 2.5, 0]), [1, 2.5, 0]);
+    for (const bad of [null, undefined, "x", 7, {}, [], [1, 2], [1, 2, 3, 4], [1, 2, NaN], [1, Infinity, 3], [1, -1, 3], [1, "2", 3]]) assert.equal(parseSize(bad), null, JSON.stringify(bad));
+});
+
+await test("runAnalysis with a sourceTransform (main thread): the blocks are placed by it, the triangles are never read, the cache tells placements apart", async () => {
+    clearAnalysisCache();
+    const desc = descriptorFromBlocks(stabilizedBlocks());
+    const T = { factor: 8, modelMin: [1, 2, 3], offsetMm: [40, 120, 0] };
+    let extracted = 0;
+    const source = () => (extracted++, assemblySoup(desc));
+    const placed = await runAnalysis(source, {}, { assembly: desc, cacheKey: "stab@src", sourceTransform: T });
+    assert.equal(extracted, 0, "the placement is given: nothing is read from the viewer");
+    assert.deepEqual(placed.transform, T);
+    assert.equal(placed.blocks.length, assemblyBlockCount(desc));
+    assert.deepEqual(placed.assembly.roleCounts, [shelfBlocks().length, 4, 0, 0, 0, 0]);
+    assert.ok(placed.stress, "the stress stage ran");
+    // The numbers are the assembly's whatever the placement.
+    const own = await runAnalysis(assemblySoup(desc), {}, { assembly: desc, cacheKey: "stab@own" });
+    assert.notDeepEqual(own.transform, T, "the stabilized GLB's own frame is another placement");
+    assert.deepEqual(placed.blocks, own.blocks);
+    assert.deepEqual(placed.issues, own.issues);
+    assert.deepEqual({ ...placed.summary, analyzed_at: "" }, { ...own.summary, analyzed_at: "" });
+    assert.equal(placed.stress.maxUtilisation, own.stress.maxUtilisation);
+    // Cached by the placement as well as the key.
+    assert.equal(await runAnalysis(source, {}, { assembly: desc, cacheKey: "stab@src", sourceTransform: { ...T, modelMin: [...T.modelMin] } }), placed);
+    const T2 = { ...T, offsetMm: [0, 0, 0] };
+    const moved = await runAnalysis(source, {}, { assembly: desc, cacheKey: "stab@src", sourceTransform: T2 });
+    assert.notEqual(moved, placed, "another placement under the same key is another result");
+    assert.deepEqual(moved.transform, T2);
+    assert.deepEqual(placed.transform, T, "and did not change the first");
+    // No key and no triangles needed either: the transform is the identity of the frame.
+    assert.deepEqual((await runAnalysis(source, {}, { assembly: desc, sourceTransform: T })).transform, T);
+    assert.equal(extracted, 0);
+    // An unloaded viewer does not matter when nothing is read from it.
+    const unloaded = await runAnalysis(() => ({ positions: new Float32Array(0) }), {}, { assembly: desc, cacheKey: "stab@unloaded", sourceTransform: T, rejectEmpty: true });
+    assert.deepEqual(unloaded.transform, T);
+    // A mesh has no use for a placement it did not ask for: it is voxelised and gets its own.
+    const mesh = shape(cube(2));
+    const voxelised = await runAnalysis(mesh.soup, mesh.settings, { cacheKey: "mesh-with-transform", sourceTransform: T });
+    assert.notDeepEqual(voxelised.transform, T);
+    clearAnalysisCache();
+});
+
+await test("runAnalysis with a sourceTransform through a worker: bounds and triangles are not sent, the transform is, and the result matches the main thread", async () => {
+    globalThis.Worker = FakeWorker;
+    try {
+        clearAnalysisCache();
+        const desc = descriptorFromBlocks(stabilizedBlocks());
+        const T = { factor: 8, modelMin: [1, 2, 3], offsetMm: [40, 120, 0] };
+        let extracted = 0;
+        const source = () => (extracted++, assemblySoup(desc));
+        const before = FakeWorker.sent.length;
+        const viaWorker = await runAnalysis(source, {}, { assembly: desc, cacheKey: "stab@src-w", sourceTransform: T });
+        const sent = FakeWorker.sent.slice(before);
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].positions, null);
+        assert.equal(sent[0].soupBounds, null);
+        assert.equal(sent[0].frame, null);
+        assert.deepEqual(sent[0].sourceTransform, T);
+        assert.equal(sent[0].sourceSizeMm, null, "no size given: none sent");
+        assert.equal(extracted, 0);
+        const direct = await analyzeAssemblyWithStress(desc, null, {});
+        assert.deepEqual(viaWorker.transform, T);
+        assert.deepEqual(viaWorker.blocks, direct.blocks);
+        assert.deepEqual(viaWorker.issues, direct.issues);
+        assert.equal(viaWorker.stress.solver.backend, "wasm");
+        assert.equal(await runAnalysis(source, {}, { assembly: desc, cacheKey: "stab@src-w", sourceTransform: T }), viaWorker);
+        assert.equal(FakeWorker.sent.length, before + 1, "a cache hit sends nothing");
+    } finally {
+        clearAnalysisCache();
+        delete globalThis.Worker;
+    }
+});
+
+await test("runAnalysis through a worker: the source mesh's size travels with its transform and is the result's size", async () => {
+    globalThis.Worker = FakeWorker;
+    try {
+        clearAnalysisCache();
+        const desc = descriptorFromBlocks(stabilizedBlocks());
+        const T = { factor: 8, modelMin: [1, 2, 3], offsetMm: [40, 120, 0] };
+        const box = [640, 480, 900];
+        const before = FakeWorker.sent.length;
+        const viaWorker = await runAnalysis(() => assert.fail("no triangles are read"), {}, { assembly: desc, cacheKey: "stab@src-size-w", sourceTransform: T, sourceSizeMm: box });
+        const sent = FakeWorker.sent.slice(before);
+        assert.equal(sent.length, 1);
+        assert.deepEqual(sent[0].sourceTransform, T);
+        assert.deepEqual(sent[0].sourceSizeMm, box);
+        assert.deepEqual(viaWorker.sizeMm, box);
+        assert.deepEqual(viaWorker.summary.size_mm, box);
+        assert.deepEqual(viaWorker.transform, T);
+        const direct = analyzeAssembly(desc, null, {}, desc, T, box);
+        assert.deepEqual(viaWorker.blocks, direct.blocks);
+        assert.deepEqual(viaWorker.issues, direct.issues);
+    } finally {
+        clearAnalysisCache();
+        delete globalThis.Worker;
+    }
+});
+
+await test("the worker refuses a source size that is not three finite numbers, as it does a bad transform", async () => {
+    const desc = descriptorFromBlocks(shelfBlocks());
+    const settings = normalizeSettings({});
+    const w = rawWorker();
+    try {
+        const T = { factor: 2, modelMin: [0, 0, 0], offsetMm: [10, 20, 0] };
+        const ask = (id, sourceSizeMm) => w.ask({ kind: "run", id, gridKey: null, positions: null, settings, assembly: desc, soupBounds: null, sourceTransform: T, sourceSizeMm });
+        const good = await ask(1, [300, 200, 100]);
+        assert.equal(good.done.kind, "result", good.done.message);
+        assert.deepEqual(good.done.result.sizeMm, [300, 200, 100]);
+        for (const bad of [[1, 2], [1, NaN, 3], [1, -2, 3], ["1", 2, 3], "big", 7]) {
+            const answer = await ask(2, bad);
+            assert.equal(answer.done.kind, "error", JSON.stringify(bad));
+            assert.match(answer.done.message, /size is not valid/);
+        }
+        const none = await ask(3, null);
+        assert.equal(none.done.kind, "result", "null means no size given");
+        assert.deepEqual(none.done.result.sizeMm, analyzeAssembly(desc, null, {}).sizeMm);
+    } finally {
+        w.stop();
+    }
+});
+
+await test("the worker refuses a transform that is not finite numbers with a positive factor", async () => {
+    const desc = descriptorFromBlocks(shelfBlocks());
+    const settings = normalizeSettings({});
+    const w = rawWorker();
+    try {
+        const ask = (id, sourceTransform) => w.ask({ kind: "run", id, gridKey: null, positions: null, settings, assembly: desc, soupBounds: null, sourceTransform });
+        const good = await ask(1, { factor: 2, modelMin: [0, 0, 0], offsetMm: [10, 20, 0] });
+        assert.equal(good.done.kind, "result", good.done.message);
+        assert.deepEqual(good.done.result.transform, { factor: 2, modelMin: [0, 0, 0], offsetMm: [10, 20, 0] });
+        for (const bad of [{ factor: 0, modelMin: [0, 0, 0], offsetMm: [0, 0, 0] }, { factor: NaN, modelMin: [0, 0, 0], offsetMm: [0, 0, 0] }, { factor: 1, modelMin: [0, 0], offsetMm: [0, 0, 0] }, { factor: 1, modelMin: [0, 0, 0], offsetMm: [0, "1", 0] }, "scale it", 7]) {
+            const answer = await ask(2, bad);
+            assert.equal(answer.done.kind, "error", JSON.stringify(bad));
+            assert.match(answer.done.message, /transform is not valid/);
+        }
+        const none = await ask(3, null);
+        assert.equal(none.done.kind, "result", "null means no transform given");
+        assert.deepEqual(none.done.result.transform, { factor: 1, modelMin: [0, 0, 0], offsetMm: [0, 0, 0] });
+    } finally {
+        w.stop();
+    }
+});
+
 await test("E5: an empty extraction is never cached or remembered; the real model under the same key is analysed", async () => {
     const empty = () => ({ positions: new Float32Array(0) });
     for (const withWorker of [false, true]) {
@@ -1602,6 +1836,168 @@ await test("E5: an empty extraction is never cached or remembered; the real mode
             delete globalThis.Worker;
         }
     }
+});
+
+// ---------- plain words on screen, technical terms in the report ----------
+
+/** Words and shapes a student should not meet in an issue's title or detail (the report and the glossary keep them). */
+const JARGON = /cantilever|centre of gravity|center of gravity|utilis|allowable|kPa|\bCOG\b|\bFEM\b|voxel|overreach|load path|component|overstressed|highly stressed|support base/i;
+const CELL_COORDINATES = /\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)/;
+const AXIS_NAMES = /(?:^|[\s(,/])[+\-−][XYZ]\b/;
+function assertPlain(issue, where = "") {
+    for (const [field, text] of [["title", issue.title], ["detail", issue.detail]]) {
+        assert.doesNotMatch(text, JARGON, `${where} ${issue.id} ${field}: ${text}`);
+        assert.doesNotMatch(text, CELL_COORDINATES, `${where} ${issue.id} ${field} has a cell coordinate: ${text}`);
+        assert.doesNotMatch(text, AXIS_NAMES, `${where} ${issue.id} ${field} names an axis: ${text}`);
+        assert.doesNotMatch(text, /\bkPa\b|\bMPa\b/, `${where} ${issue.id} ${field}`);
+    }
+}
+
+/** A 4-block concrete arm with two blocks on top of it: 92% of its strength used (a warning, not an error). */
+const heavyArmBlocks = () => [...bx(0, 4, 0, 3, 0, 1), ...bx(0, 1, 1, 2, 1, 5), ...bx(1, 5, 1, 2, 4, 5), [1, 1, 5], [2, 1, 5]].map((cell) => ({ cell }));
+
+await test("plainDirection: the Front view's words for the analysis axes (+X right, -Y front), diagonals between", () => {
+    assert.equal(plainDirection(1, 0), "right");
+    assert.equal(plainDirection(-1, 0), "left");
+    assert.equal(plainDirection(0, 1), "back");
+    assert.equal(plainDirection(0, -1), "front");
+    assert.equal(plainDirection(1, 1), "back right");
+    assert.equal(plainDirection(-1, 1), "back left");
+    assert.equal(plainDirection(1, -1), "front right");
+    assert.equal(plainDirection(-1, -1), "front left");
+    assert.equal(plainDirection(0, 0), "");
+    // The same classes as the report's directionLabel: ~22 degrees of an axis is that axis.
+    for (const [dx, dy] of [[1, 0.3], [1, -0.3], [0.3, 1], [-0.3, -1], [1, 0.5], [-1, 0.7], [0.2, -0.2], [5, 1.9], [5, 2.1]]) {
+        const technical = directionLabel(dx, dy);
+        const plain = plainDirection(dx, dy);
+        const words = technical.split(" and ").map((t) => ({ "+X": "right", "-X": "left", "+Y": "back", "-Y": "front" })[t]);
+        assert.deepEqual(plain.split(" ").sort(), words.sort(), `${dx},${dy}: ${technical} -> ${plain}`);
+    }
+});
+
+await test("placeOf: a height range and the side of the model, never a cell; the middle has no side", () => {
+    const { result } = run(gallows(6, 6));
+    const arm = result.issues[0];
+    const place = placeOf(result.blocks, arm.blocks, result.settings.blockSizeMm);
+    assert.equal(place.height, "500-600 mm");
+    assert.deepEqual(place.layers, [5, 5]);
+    assert.equal(place.side, "right side", "the end of the arm is on the right");
+    assert.equal(place.line, "500-600 mm up, right side");
+    assert.equal(place.sentence, "at a height of 500-600 mm, on the right side");
+    // A column of the model's middle: no side to name.
+    const column3 = analyzeCells(5, [...column(2, 2, 0, 3), ...column(1, 2, 0, 0), ...column(3, 2, 0, 0)]).blocks;
+    const mid = column3.filter((b) => b.cell[0] === 2).map((b) => b.index);
+    const middle = placeOf(column3, mid, 100);
+    assert.equal(middle.side, "middle");
+    assert.equal(middle.line, "0-400 mm up, in the middle");
+    assert.equal(middle.sentence, "at a height of 0-400 mm, in the middle");
+    assert.equal(placeOf(result.blocks, [], 100), null);
+    assert.equal(placeAtPoint(result.blocks, arm.focusMm, 100).line, "500-600 mm up, right side", "the point the camera flies to is on the same side");
+    assert.equal(placeAtPoint([], [0, 0, 0], 100), null);
+});
+
+await test("every issue the engine words is plain: no jargon, no cell coordinates, no axis names, no kPa", async () => {
+    const lean = [[0, 0, 0], [1, 0, 0], [1, 0, 1], [1, 0, 2], [1, 0, 3], [2, 0, 3], [3, 0, 3], [4, 0, 3]];
+    const results = {
+        arm: run(gallows(6, 6)).result,
+        fan: analyzeCells(10, [...[4, 5].flatMap((i) => [4, 5].flatMap((j) => column(i, j, 0, 8))), ...plate(9)], { cantileverLimit: 3 }),
+        lean: run(lean).result,
+        leanFront: run(lean.map(([i, j, k]) => [j, 4 - i, k])).result,
+        leanDiagonal: run([[0, 0, 0], [0, 0, 1], [0, 0, 2], [1, 0, 2], [2, 0, 2], [3, 0, 2], [0, 1, 2], [0, 2, 2], [0, 3, 2]]).result,
+        floating: run([[0, 0, 0], [1, 0, 0], [1, 0, 2], [2, 0, 2]]).result,
+        farFloating: run([[0, 0, 0], [0, 0, 4]]).result,
+        edgeFloating: run([[0, 0, 0], [0, 1, 0], [1, 0, 1]]).result,
+        budget: run(cube(3), { maxBlocks: 20 }).result,
+        edge: analyzeCells(4, [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 2]]),
+        noGround: analyzeGrid(gridOf(4, [[1, 1, 1], [1, 1, 2]]), { targetSizeMm: 400, blockSizeMm: 100 }),
+        several: analyzeCells(8, [...cube(3), [6, 6, 0], [7, 7, 5]]),
+    };
+    // A thin skin (thin parts left out) and the stress issues of an overloaded arm and a heavily loaded one.
+    results.skin = analyze(shellSoup(5, { hole: true }), { targetSizeMm: 500 });
+    results.stress = await analyzeAssemblyWithStress(descriptorFromBlocks(shelfBlocks()), null, {});
+    results.heavy = await analyzeAssemblyWithStress(descriptorFromBlocks(heavyArmBlocks()), null, { cantileverLimit: 10 });
+    let seen = 0;
+    const kinds = new Set();
+    for (const [name, result] of Object.entries(results)) {
+        for (const issue of result.issues) {
+            assertPlain(issue, name);
+            kinds.add(issue.kind);
+            seen += 1;
+        }
+    }
+    assert.ok(seen >= 15, `${seen} issues looked at`);
+    for (const kind of ["cog-outside", "cantilever-too-long", "floating", "too-many-blocks", "thin-features", "overstressed", "highly-stressed"]) assert.ok(kinds.has(kind), `a ${kind} issue was among them`);
+    assert.ok(results.edge.issues.some((i) => i.id === "cog-edge"), "and the one on the edge");
+    // The titles are short sentences with the numbers.
+    assert.equal(results.stress.issues.find((i) => i.kind === "cantilever-too-long").title, "Arm too long: 6 blocks (max 4)");
+    assert.equal(results.budget.issues[0].title, "Too many blocks: 27 (budget 20)");
+    assert.equal(results.noGround.issues.find((i) => i.kind === "floating").title, "Floating part: 2 blocks");
+});
+
+await test("a stress issue says where (a height and a side), what the joint goes through, and how much of its strength is used", async () => {
+    const r = await analyzeAssemblyWithStress(descriptorFromBlocks(shelfBlocks()), null, {});
+    const issue = r.issues.find((i) => i.kind === "overstressed");
+    assert.match(issue.title, /^Joint overloaded: \d+%$/);
+    assert.equal(issue.title, `Joint overloaded: ${Math.round(r.stress.maxUtilisation * 100)}%`);
+    assert.match(issue.detail, /^At a height of \d+-\d+ mm, (on the (left|right) side|at the (back|front)( (left|right))?|in the middle), a concrete joint is (pulled apart|crushed|sheared) and uses \d+% of its strength under the model's own weight\. It would open or crush\. /);
+    assert.doesNotMatch(issue.detail, /kPa|allowed/);
+    assert.equal(issue.blocks[0], r.stress.points[0].blocks[0], "the peak block is the first");
+    // The place is the peak's, not the whole region's.
+    const peak = r.blocks[issue.blocks[0]];
+    const height = `${peak.cell[2] * 100}-${(peak.cell[2] + 1) * 100} mm`;
+    assert.ok(issue.detail.includes(`At a height of ${height}`), `${height} in ${issue.detail}`);
+    // A warning: the same sentence for a joint close to its limit.
+    const heavy = await analyzeAssemblyWithStress(descriptorFromBlocks(heavyArmBlocks()), null, { cantileverLimit: 10 });
+    assert.ok(heavy.stress.maxUtilisation > 0.75 && heavy.stress.maxUtilisation <= 1, `${heavy.stress.maxUtilisation}`);
+    const warning = heavy.issues.find((i) => i.kind === "highly-stressed");
+    assert.ok(warning, "a 4-block arm with two blocks on top of it is close to its limit");
+    assert.match(warning.title, /^Joint heavily loaded: \d+%$/);
+    assert.match(warning.detail, /It is close to its limit\./);
+});
+
+await test("the report keeps the technical terms: kinds, rows, definitions, cells and kPa, whatever the screen says", async () => {
+    const { result } = run(gallows(6, 6));
+    const json = JSON.parse(buildReportJson(result));
+    assert.equal(json.issues[0].kind, "cantilever-too-long");
+    assert.equal(json.issues[0].cells.length, 2, "the cells are in the report");
+    assert.equal(json.checks[0].label, "Centre of gravity");
+    assert.equal(json.checks[0].value, "Inside the base · 50 mm margin");
+    assert.equal(json.checks[1].label, "Cantilevered blocks");
+    assert.equal(json.checks[2].label, "Long cantilevers");
+    assert.equal(json.checks[3].label, "Components used");
+    assert.equal(json.cantilever_runs.length, 1);
+    assert.deepEqual(json.definitions, DEFINITIONS, "the definitions are the technical statement of each rule");
+    assert.ok(json.definitions.some((d) => /Utilisation/.test(d.title)) && json.definitions.some((d) => /Centre of gravity/.test(d.title)));
+    const stressed = await analyzeAssemblyWithStress(descriptorFromBlocks(shelfBlocks()), null, {});
+    const row = stressed.checks.find((c) => c.key === "stress");
+    assert.equal(row.label, "Joint stress");
+    assert.match(row.value, /^Peak \d+% of allowable at block \(\d+, \d+, \d+\)/);
+    const withStressJson = JSON.parse(buildReportJson(stressed));
+    assert.ok(withStressJson.stress.points[0].tension_kpa > 0 && withStressJson.stress.points[0].allowable_kpa > 0);
+    assert.equal(withStressJson.stress.points[0].mode, "tension");
+    // Each issue also carries its finding in the engine's terms, with the figures: the screen's sentence is plain, the report's is technical.
+    assert.match(json.issues[0].technical, /^Cantilever run \d+: reach \d+ blocks against a limit of 4; \d+ of its \d+ blocks are over the limit \(layers k \d+ to \d+\)\.$/);
+    assert.doesNotMatch(json.issues[0].title + json.issues[0].detail, /cantilever/i, "while the screen's own words do not name it");
+    const overstressed = withStressJson.issues.find((i) => i.kind === "overstressed" || i.kind === "highly-stressed");
+    assert.ok(overstressed, "the shelf has an overloaded joint");
+    assert.match(overstressed.technical, /^Joint utilisation \d+% of the allowable stress: (tension|compression|shear) \d+ of \d+ kPa allowable at block \(\d+, \d+, \d+\); over (100% \(overstressed\)|75% \(highly stressed\))\.$/);
+    const tipper = run([[0, 0, 0], [0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1], [4, 0, 1], [5, 0, 1], [6, 0, 1]]);
+    const tip = JSON.parse(buildReportJson(tipper.result)).issues.find((i) => i.kind === "cog-outside");
+    assert.ok(tip, "a column with a long arm tips over");
+    assert.match(tip.technical, /^Centre of gravity \(.*\) mm projects [\d.]+ mm outside the support base; it tips about \(.*\) mm towards \(.*\)\.$/);
+    for (const issue of json.issues) assert.ok(typeof issue.technical === "string" && issue.technical.length > 10, `${issue.kind} has a technical line`);
+});
+
+await test("the info page's plain parts: four steps, and the two screen-only definitions that the report does not carry", () => {
+    assert.equal(HOW_IT_WORKS.length, 4);
+    for (const step of HOW_IT_WORKS) {
+        assert.ok(step.title && step.text, step.title);
+        assert.doesNotMatch(step.text, JARGON, step.title);
+    }
+    assert.deepEqual(SCREEN_DEFINITIONS.map((d) => d.key), ["directions", "reach-unit"]);
+    assert.ok(!DEFINITIONS.some((d) => SCREEN_DEFINITIONS.some((x) => x.key === d.key)), "not in the report's list");
+    assert.match(SCREEN_DEFINITIONS[0].text, /right, left, front and back/i);
+    assert.match(SCREEN_DEFINITIONS[0].text, /\+X for right/, "the exported report's axes are explained here");
 });
 
 // ---------- the real fixture ----------

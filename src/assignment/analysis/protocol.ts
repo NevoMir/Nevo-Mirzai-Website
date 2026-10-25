@@ -2,7 +2,7 @@
 
 import type { AssemblyDescriptor } from "../shared/assembly.ts";
 import type { Bounds } from "./assembly.ts";
-import type { AnalysisResult, AnalysisSettings } from "./types.ts";
+import type { AnalysisResult, AnalysisSettings, AnalysisTransform, Vec3 } from "./types.ts";
 import type { AnalysisStage } from "./voxelize.ts";
 
 export interface RunRequest {
@@ -23,7 +23,14 @@ export interface RunRequest {
     assembly?: AssemblyDescriptor | null;
     /** The bounds of the GLB's triangles in the viewer's frame (sets the result's transform); null: a headless frame. */
     soupBounds?: Bounds | null;
-    /** The assembly `soupBounds` belong to, when `assembly` is only a part of it (the compare view's original blocks). */
+    /**
+     * The transform of the SOURCE mesh the blocks are drawn over (a stabilized model shown on the model it was made from):
+     * the result's transform as it is. When it is set, `soupBounds` and `frame` are not used.
+     */
+    sourceTransform?: AnalysisTransform | null;
+    /** With `sourceTransform`: the scaled bounding box of that mesh, which is the result's size (else the lattice's own extent is). */
+    sourceSizeMm?: Vec3 | null;
+    /** The assembly `soupBounds` belong to, when `assembly` is only a part of it (for instance the original blocks of a stabilized model, analysed on their own). */
     frame?: AssemblyDescriptor | null;
     /** Where lSolver.wasm is, when not at the bundle's own copy (fem/wasmUrl.ts). Only the first request of a worker uses it. */
     wasmUrl?: string;

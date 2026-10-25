@@ -213,6 +213,25 @@ async function tryCancel(env: Env, adapter: ProviderAdapter, taskId: string, sta
     }
 }
 
+/** The job is over: lets the adapter delete what it staged for it (the Muse designer's files in R2). Best effort, never throws. */
+async function releaseTask(env: Env, row: JobRow): Promise<void> {
+    if (!row.provider_task_id) return;
+    const route = adapterFor(row.provider, row.via);
+    if (!route?.adapter.cleanup) return;
+    try {
+        await route.adapter.cleanup(env, row.provider_task_id, parseState(row.provider_state));
+    } catch {
+        // ignored on purpose
+    }
+}
+
+/** Reloads the job after a poll's verdict and, when that verdict landed (the job is over), releases the adapter's staging. */
+async function reloadAndRelease(env: Env, row: JobRow): Promise<Job> {
+    const job = await reload(env, row.id);
+    if (isTerminal(job.status)) await releaseTask(env, row);
+    return job;
+}
+
 const safeMessage = (err: unknown, fallback: string) => (err instanceof ProviderError ? err.message : fallback);
 
 /**
@@ -475,7 +494,7 @@ export async function advanceJob(env: Env, ctx: ExecutionContext, rawId: string)
         }
         case "failed":
             await markFailed(env, id, result.error || "The provider reported a failure.", claim);
-            return reload(env, id);
+            return reloadAndRelease(env, row);
         case "canceled": {
             const finished = nowIso();
             await updateClaimed(
@@ -485,7 +504,7 @@ export async function advanceJob(env: Env, ctx: ExecutionContext, rawId: string)
                 "status = 'canceled', stage = 'Canceled', finished_at = ?1, updated_at = ?1",
                 [finished],
             );
-            return reload(env, id);
+            return reloadAndRelease(env, row);
         }
         case "succeeded":
             return finalizeJob(env, ctx, row, result, claim);
@@ -528,7 +547,7 @@ async function finalizeJob(
     if (row.finalize_attempts >= MAX_FINALIZE_ATTEMPTS) {
         const error = "Could not save the generated model after several tries. Please generate it again.";
         await markFailed(env, row.id, error, claim);
-        return reload(env, row.id);
+        return reloadAndRelease(env, row); // the job is over: whatever the adapter staged for it can go
     }
     // The lease: only one request saves the model. A crashed one is retried after FINALIZE_LEASE_MS, and its
     // own late write then fails because updated_at no longer matches the token it holds.
@@ -598,6 +617,8 @@ async function saveModel(
         if (jobUpdate.meta.changes !== 1) {
             // The lease was lost (another request took over, or the project was deleted): drop our copy.
             await deleteKeys(env, [glbKey, thumbKey]);
+        } else {
+            await releaseTask(env, row); // the model is ours now: the adapter's staging copy can go
         }
     } catch (err) {
         await deleteKeys(env, [glbKey, thumbKey]);
@@ -618,12 +639,14 @@ async function saveModel(
                     .bind(new Date(Date.now() + RETRY_SAVE_DELAY_MS).toISOString(), finished, row.id, token)
                     .run();
             } else {
-                await env.DB.prepare(
+                const failed = await env.DB.prepare(
                     `UPDATE jobs SET status = 'failed', stage = 'Failed', error = ?1, finished_at = ?2, updated_at = ?2
                      WHERE id = ?3 AND status = 'finalizing' AND updated_at = ?4`,
                 )
                     .bind(message, finished, row.id, token)
                     .run();
+                // Over for good: the adapter's staging copy has no more use (the retry branch above keeps it for the next poll).
+                if (failed.meta.changes === 1) await releaseTask(env, row);
             }
         } catch (dbErr) {
             // The job stays "finalizing" and is picked up again when its lease runs out.
@@ -659,11 +682,13 @@ export async function cancelJob(env: Env, request: Request, rawId: string): Prom
         await tryCancel(env, route.adapter, row.provider_task_id, parseState(row.provider_state));
     }
     const now = nowIso();
-    await env.DB.prepare(
+    const canceled = await env.DB.prepare(
         `UPDATE jobs SET status = 'canceled', stage = 'Canceled', finished_at = ?1, updated_at = ?1
          WHERE id = ?2 AND status IN ('queued', 'running')`,
     )
         .bind(now, id)
         .run();
+    // Whatever the adapter staged for a job that finished while Stop was on its way would otherwise stay (see releaseTask).
+    if (canceled.meta.changes === 1) await releaseTask(env, row);
     return reload(env, id);
 }

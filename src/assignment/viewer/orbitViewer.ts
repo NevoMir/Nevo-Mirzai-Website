@@ -15,6 +15,9 @@
  * For the block view: a scene may pick by its own ray test instead of by parts (`pickRay`) and say it draws
  * its own ground (`grid: false`); the viewer can project a world point to stage pixels (`project`, for HTML
  * labels), report every drawn frame (`onFrame`), and ease the camera onto a box (`flyToBox`).
+ *
+ * A scene of parts may also draw things that are not parts (the stabilizer's added supports) and pick them by a ray
+ * test of their own (`overlayRay`); the nearer of that hit and the nearest part decides what is under the pointer.
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -51,12 +54,23 @@ export interface ViewerScene {
      * block view). When set, `parts` play no part in picking and hovering.
      */
     pickRay?(ray: THREE.Ray): ViewerRayHit | null;
+    /**
+     * Things drawn with the parts that are not parts (an overlay such as the added supports) and picked by a ray test of their
+     * own. Unlike `pickRay` the parts keep picking: the nearer of the two hits wins, so a part in front of an overlay is picked
+     * and an overlay in front of a part is. The id must not be a part's.
+     */
+    overlayRay?(ray: THREE.Ray): ViewerOverlayHit | null;
 }
 
 /** A hit of a scene's own ray test: an id the host understands, and the world point. */
 export interface ViewerRayHit {
     id: string;
     point: Vec3;
+}
+
+/** A hit of an overlay's ray test: also how far along the ray it is (world units), to tell which of it and a part is nearer. */
+export interface ViewerOverlayHit extends ViewerRayHit {
+    distance: number;
 }
 
 /** A scene with nothing in it (the stage before a model arrives). */
@@ -515,16 +529,21 @@ export function mountOrbitViewer(container: HTMLElement, handle: ViewerScene, op
             return own ? { id: own.id, point: own.point, normal: null, object: current.scene } : null;
         }
         // The nearest shown, pickable hit decides; a hidden part, or one isolate leaves out, is clicked through.
+        let part: (ViewerHit & { distance: number }) | null = null;
         for (const h of raycaster.intersectObjects([...current.parts.values()], true)) {
             if (!shown(h.object)) continue;
             let id: string | null = null;
             for (let o: THREE.Object3D | null = h.object; o && id === null; o = o.parent) if (typeof o.userData.componentId === "string") id = o.userData.componentId;
-            if (id === null) return null;
+            if (id === null) break;
             if (current.pickable && !current.pickable(id)) continue;
             const normal = h.face ? (h.face.normal.clone().transformDirection(h.object.matrixWorld).toArray() as Vec3) : null;
-            return { id, point: h.point.toArray() as Vec3, normal, object: h.object };
+            part = { id, point: h.point.toArray() as Vec3, normal, object: h.object, distance: h.distance };
+            break;
         }
-        return null;
+        // An overlay in front of the part (or with no part behind it) is what is under the pointer.
+        const over = current.overlayRay?.(raycaster.ray) ?? null;
+        if (over && (!part || over.distance < part.distance)) return { id: over.id, point: over.point, normal: null, object: current.scene };
+        return part ? { id: part.id, point: part.point, normal: part.normal, object: part.object } : null;
     };
     const pick = (clientX: number, clientY: number) => hit(clientX, clientY)?.id ?? null;
 

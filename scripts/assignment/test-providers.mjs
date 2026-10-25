@@ -10,6 +10,7 @@ import { falHunyuan, falMeshy, falRodin, falTripo } from "../../worker/providers
 import { PROVIDER_SPECS, listProviders, resolveProvider } from "../../worker/providers/index.ts";
 import { meshyDirect } from "../../worker/providers/meshy.ts";
 import { mockAdapter } from "../../worker/providers/mock.ts";
+import { openRouterDesigner } from "../../worker/providers/openrouter.ts";
 import { tencentHunyuan } from "../../worker/providers/tencent.ts";
 import { tripoParts, tripoTextured } from "../../worker/providers/tripo.ts";
 import { MAX_TRANSIENT_POLL_ERRORS, ProviderError, guardPoll, preparePrompt } from "../../worker/providers/types.ts";
@@ -867,7 +868,7 @@ test("cancel(): only adapters whose started tasks can be stopped define it (the 
     // Tencent has no cancel API for Professional jobs and Tripo v3 has none either: a "canceled" job there would keep
     // running and charging, so these must not get a cancel(), and Stop is refused for them.
     for (const adapter of [tencentHunyuan, tripoParts, tripoTextured]) assert.equal(adapter.cancel, undefined, adapter.via);
-    for (const adapter of [falHunyuan, falMeshy, falRodin, falTripo, meshyDirect, mockAdapter]) {
+    for (const adapter of [falHunyuan, falMeshy, falRodin, falTripo, meshyDirect, mockAdapter, openRouterDesigner]) {
         assert.equal(typeof adapter.cancel, "function", adapter.via);
     }
     await mockAdapter.cancel(ENV, "mock-1", null); // resolves, does nothing
@@ -878,6 +879,7 @@ test("cancel(): only adapters whose started tasks can be stopped define it (the 
     assert.equal(stoppable["tripo/tripo"], false);
     assert.equal(stoppable["tripo/fal"], true);
     assert.equal(stoppable["mock/mock"], true);
+    assert.equal(stoppable["muse/openrouter"], true); // Stop leaves a marker the queue consumer honours
 });
 
 test("preparePrompt: trims, cuts at a word boundary and counts code points", () => {
@@ -909,13 +911,13 @@ const availableOf = (env) => listProviders(env).filter((p) => p.available).map((
 test("registry: no keys means nothing is available and the mock is hidden", () => {
     assert.deepEqual(availableOf({}), []);
     assert.ok(!ids({}).includes("mock"));
-    assert.deepEqual(ids({}), ["tripo-parts", "tripo", "meshy", "rodin", "hunyuan"]);
+    assert.deepEqual(ids({}), ["tripo-parts", "tripo", "meshy", "rodin", "hunyuan", "muse"]);
     assert.equal(resolveProvider({}, "meshy"), null);
 });
 
 test("registry: FAL_KEY alone serves everything except the parts model", () => {
     const env = { FAL_KEY: "k" };
-    assert.deepEqual(viaOf(env), { "tripo-parts": null, tripo: "fal", meshy: "fal", rodin: "fal", hunyuan: "fal" });
+    assert.deepEqual(viaOf(env), { "tripo-parts": null, tripo: "fal", meshy: "fal", rodin: "fal", hunyuan: "fal", muse: null });
     assert.equal(resolveProvider(env, "tripo-parts"), null);
     assert.equal(resolveProvider(env, "tripo").adapter, falTripo);
     assert.equal(resolveProvider(env, "meshy").adapter, falMeshy);
@@ -940,15 +942,29 @@ test("registry: MESHY_API_KEY alone serves Meshy only", () => {
 
 test("registry: the direct API wins over fal when both keys exist", () => {
     const both = { FAL_KEY: "k", TRIPO_API_KEY: "k", MESHY_API_KEY: "k" };
-    assert.deepEqual(viaOf(both), { "tripo-parts": "tripo", tripo: "tripo", meshy: "meshy", rodin: "fal", hunyuan: "fal" });
+    assert.deepEqual(viaOf(both), { "tripo-parts": "tripo", tripo: "tripo", meshy: "meshy", rodin: "fal", hunyuan: "fal", muse: null });
     assert.equal(resolveProvider(both, "tripo").adapter, tripoTextured);
     assert.equal(resolveProvider(both, "meshy").adapter, meshyDirect);
-    assert.deepEqual(viaOf({ FAL_KEY: "k", TRIPO_API_KEY: "k" }), { "tripo-parts": "tripo", tripo: "tripo", meshy: "fal", rodin: "fal", hunyuan: "fal" });
-    assert.deepEqual(viaOf({ FAL_KEY: "k", MESHY_API_KEY: "k" }), { "tripo-parts": null, tripo: "fal", meshy: "meshy", rodin: "fal", hunyuan: "fal" });
+    assert.deepEqual(viaOf({ FAL_KEY: "k", TRIPO_API_KEY: "k" }), { "tripo-parts": "tripo", tripo: "tripo", meshy: "fal", rodin: "fal", hunyuan: "fal", muse: null });
+    assert.deepEqual(viaOf({ FAL_KEY: "k", MESHY_API_KEY: "k" }), { "tripo-parts": null, tripo: "fal", meshy: "meshy", rodin: "fal", hunyuan: "fal", muse: null });
+});
+
+test("registry: OPENROUTER_API_KEY alone serves the Muse designer only, through openrouter, after hunyuan", () => {
+    const env = { OPENROUTER_API_KEY: "k" };
+    assert.deepEqual(availableOf(env), ["muse"]);
+    assert.deepEqual(viaOf(env), { "tripo-parts": null, tripo: null, meshy: null, rodin: null, hunyuan: null, muse: "openrouter" });
+    assert.equal(resolveProvider(env, "muse").adapter, openRouterDesigner);
+    assert.equal(resolveProvider(env, "hunyuan"), null);
+    // with a Hunyuan route as well, hunyuan is listed (and so offered by default) before muse
+    const both = { FAL_KEY: "k", OPENROUTER_API_KEY: "k" };
+    assert.deepEqual(availableOf(both).filter((id) => id === "hunyuan" || id === "muse"), ["hunyuan", "muse"]);
+    assert.equal(availableOf(both).find((id) => id === "tripo-parts" || id === "hunyuan" || id === "muse"), "hunyuan");
+    const muse = listProviders(env).find((p) => p.id === "muse");
+    assert.deepEqual([muse.parts, muse.textured, muse.available, muse.via], [true, false, true, "openrouter"]);
 });
 
 test("registry: blank keys do not count; MOCK_PROVIDER=1 shows the mock", () => {
-    assert.deepEqual(availableOf({ FAL_KEY: "  ", TRIPO_API_KEY: "" }), []);
+    assert.deepEqual(availableOf({ FAL_KEY: "  ", TRIPO_API_KEY: "", OPENROUTER_API_KEY: "\n" }), []);
     const env = { MOCK_PROVIDER: "1" };
     assert.deepEqual(availableOf(env), ["mock"]);
     assert.equal(resolveProvider(env, "mock").via, "mock");
@@ -956,7 +972,7 @@ test("registry: blank keys do not count; MOCK_PROVIDER=1 shows the mock", () => 
 });
 
 test("registry: every model has a label, description, a realistic time and consistent flags", () => {
-    const expected = ["tripo-parts", "tripo", "meshy", "rodin", "hunyuan", "mock"];
+    const expected = ["tripo-parts", "tripo", "meshy", "rodin", "hunyuan", "muse", "mock"];
     assert.deepEqual(PROVIDER_SPECS.map((s) => s.id), expected);
     for (const spec of PROVIDER_SPECS) {
         assert.ok(spec.info.label && spec.info.vendor && spec.info.description, spec.id);

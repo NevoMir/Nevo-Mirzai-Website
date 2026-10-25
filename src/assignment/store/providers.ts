@@ -16,6 +16,7 @@ const FALLBACK_LABELS: Record<ModelProvider, string> = {
     meshy: "Meshy 7.1",
     rodin: "Rodin Gen-2.5",
     hunyuan: "Hunyuan 3D 3.1",
+    muse: "Muse Spark 1.3",
     mock: "Demo (offline)",
     example: "Ready-made example",
     stabilizer: "Stabilizer",
@@ -56,11 +57,49 @@ export function viaLabel(via: ProviderInfo["via"] | undefined): string | null {
             return "via Meshy";
         case "tencent":
             return "via Tencent";
+        case "openrouter":
+            return "via OpenRouter";
         case "mock":
             return "demo";
         default:
             return null;
     }
+}
+
+/**
+ * The via badge for a menu row, unless the maker's line already says it: the server calls Muse's maker "Meta via OpenRouter", so
+ * "Meta via OpenRouter · ~35 s · via OpenRouter" would name the key twice. null: nothing to add.
+ */
+export function viaSuffix(vendor: string, via: ProviderInfo["via"] | undefined): string | null {
+    const label = viaLabel(via);
+    return label && !vendor.toLowerCase().includes(label.toLowerCase()) ? label : null;
+}
+
+// ---------- AI designers ----------
+
+/**
+ * The models that DESIGN the object instead of sculpting it: a text model answers with a list of named parts and the app builds a
+ * multi-part GLB from it (Muse Spark through OpenRouter). The server marks them as returning parts and not textured; this is the one
+ * place the interface learns that they are a different kind of model, for the helper line, the badge and the stage wording.
+ */
+const DESIGNER_IDS: readonly string[] = ["muse"];
+
+/** Is this model an AI designer (builds the object from named parts)? */
+export const isDesigner = (id: string | undefined): boolean => id !== undefined && DESIGNER_IDS.includes(id);
+
+/** The short helper under a designer's name in the model picker. */
+export const DESIGNER_NOTE = "AI designer · builds the object from named parts";
+
+/** The helper line for a model, or null when it is an ordinary text-to-3D model. */
+export const designerNote = (info: Pick<ProviderInfo, "id"> | undefined): string | null => (info && isDesigner(info.id) ? DESIGNER_NOTE : null);
+
+/**
+ * A job's stage as the card shows it. The card draws its own moving dots after the words, so a stage that ends in an ellipsis
+ * ("Designing the parts…") loses it rather than showing two sets of dots. Empty means the job has not started: "Queued".
+ */
+export function stageText(stage: string | null | undefined): string {
+    const words = (stage ?? "").replace(/\s*(?:\u2026|\.{3})\s*$/, "").trim();
+    return words || "Queued";
 }
 
 /**

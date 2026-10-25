@@ -52,8 +52,26 @@ export interface StoredGlb {
 
 const SOURCE_ERROR = "Could not download the generated file from the provider.";
 
-/** Opens a provider URL: "asset:/path" (a file bundled with this site), a base64 "data:" URL, or https. */
+/** The keys an "r2:" source may name: the staging files of the Muse designer (worker/llm.ts), nothing else in the bucket. */
+const R2_SOURCE_KEY = /^llm\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.glb$/;
+
+/** Opens a provider URL: "asset:/path" (a file bundled with this site), "r2:key" (a staged file in our own bucket), a base64 "data:" URL, or https. */
 async function openSource(env: Env, source: string, timeoutMs: number): Promise<Response> {
+    if (source.startsWith("r2:")) {
+        const key = source.slice("r2:".length);
+        if (!R2_SOURCE_KEY.test(key)) throw new ModelFileError(SOURCE_ERROR);
+        let object: R2ObjectBody | null;
+        try {
+            object = await env.FILES.get(key);
+        } catch {
+            throw new ModelFileError(SOURCE_ERROR, true);
+        }
+        if (!object) throw new ModelFileError("The designed model is no longer available. Please generate it again.");
+        // The declared size is what storeOnce checks against the 150 MB limit before a byte is copied.
+        return new Response(object.body, {
+            headers: { "content-type": GLB_CONTENT_TYPE, "content-length": String(object.size) },
+        });
+    }
     if (source.startsWith("data:")) {
         const match = /^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(source);
         if (!match) throw new ModelFileError(SOURCE_ERROR);

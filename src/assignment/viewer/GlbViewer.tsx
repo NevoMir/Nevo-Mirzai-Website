@@ -10,15 +10,23 @@
  * One renderer serves every model the component is given: a new `url` aborts the load in flight,
  * swaps the scene and disposes the old one (geometries, materials, textures).
  *
+ * A stabilized model is shown on its SOURCE mesh: the 3D tab draws that mesh and, over it, only the blocks the stabilizer added
+ * (`supports`: solid cubes in their role colours, a legend chip with a switch, a tooltip and a card per cube; see
+ * useSupportsOverlay), and the block view maps the stabilized blocks over the same mesh. The toolbar's download can name another
+ * file than the one on stage (`downloadUrl`: the stabilized GLB).
+ *
  * Structural analysis (see src/assignment/analysis): `onModelReady` hands the workspace the loaded geometry to
  * analyse (and takes it back, with null, when that model leaves the stage); given the result and
  * `analysisView.mode === "blocks"`, the stage shows the assembly as 100 mm blocks with the checks drawn on it
- * instead of the model (useAnalysisView does the work). The workspace owns every control of that view; this
- * component only renders the state it is given and reports hover and clicks.
+ * instead of the model (useAnalysisView does the work). The workspace owns the state of that view; the stage owns
+ * its controls: the Colour chip and the legend under it (top left), the Layers popover and the Show menu (toolbar).
+ * They report a choice through `onViewChange`, and this component renders the state it is given and reports hover and
+ * clicks. Which version of a model is on stage (the original, or the stabilized model) is the workspace's switcher:
+ * a version is simply the result this component is given.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { AlertTriangle, Boxes, Layers, Loader2, RotateCcw } from "lucide-react";
-import type { AnalysisResult, AnalysisViewState, CompareMode, LoadedModel } from "@/assignment/analysis/types";
+import type { AnalysisResult, AnalysisViewState, LoadedModel } from "@/assignment/analysis/types";
 import type { AssemblyDescriptor } from "@/assignment/shared/assembly";
 import { Button } from "@/assignment/components/ui/button";
 import { TooltipProvider } from "@/assignment/components/ui/tooltip";
@@ -26,17 +34,22 @@ import { useIsDark } from "@/assignment/hooks/useIsDark";
 import { cn } from "@/assignment/lib/utils";
 import { AnalysisLegend } from "./AnalysisLegend.tsx";
 import { highlightCut, resolveColorBy } from "./analysisGeometry.ts";
-import { assemblyCounts, decorateAssemblyRows, topStep } from "./assemblyParts.ts";
-import { CompareChip } from "./CompareChip.tsx";
-import { compareState, hasAddedBlocks, stackHeight, type CompareStatus, type MeasuredStack } from "./compareState.ts";
-import { downloadStem, formatCount, num, partDetail, stageLabel } from "./format.ts";
+import { assemblyCounts, decorateAssemblyRows, stageStepOffset } from "./assemblyParts.ts";
+import { ColorChip } from "./ColorChip.tsx";
+import { downloadLabelFor, downloadStem, formatCount, num, partDetail, stageLabel } from "./format.ts";
 import { createModelHandle, type ModelHandle } from "./loadedModel.ts";
 import { PartsPanel } from "./PartsPanel.tsx";
 import { SelectionCard } from "./SelectionCard.tsx";
+import { stackHeight, type MeasuredStack } from "./stackHeight.ts";
 import { paintThumbnailBackground, stageBackgroundCss } from "./stage.ts";
+import { colorChipModel, layerCut } from "./stageControls.ts";
+import { SupportCard } from "./SupportCard.tsx";
+import { SupportsChip } from "./SupportsChip.tsx";
+import { describeSupport, hasAddedSupports, routeHover, supportCounts, supportIndexOf, supportsDrawn } from "./supports.ts";
 import type { PartRow, Px, ViewTheme } from "./types.ts";
 import { ViewerContextMenu, type MenuEntry } from "./ViewerContextMenu.tsx";
 import { useAnalysisView, type AnalysisBridge } from "./useAnalysisView.ts";
+import { useSupportsOverlay } from "./useSupportsOverlay.ts";
 import { ViewerToolbar, type SplitState } from "./ViewerToolbar.tsx";
 // Types only: the runtime of these is imported lazily below.
 import type { Environment, GlbScene } from "./glbScene.ts";
@@ -65,9 +78,10 @@ export interface GlbViewerProps {
      */
     onModelReady?: (model: LoadedModel | null) => void;
     /**
-     * The block view's data: the result to draw. For a stabilized model the workspace picks it by `analysisView.compare`
-     * (the model as it is, or the original blocks analysed on their own), so a switch is a new result here and never
-     * moves the camera. The blocks are only drawn when `analysisView.mode` is "blocks".
+     * The block view's data: the result to draw. The workspace picks it by the version on stage (the original, or the
+     * stabilized model), so a switch is a new result here and never moves the camera. While the new version's own analysis is
+     * on its way the workspace keeps handing the last version's result over the same mesh (components/workspace/stageHold.ts),
+     * so the stage never falls back to the plain model in between. The blocks are only drawn when `analysisView.mode` is "blocks".
      */
     analysis?: AnalysisResult | null;
     analysisView?: AnalysisViewState;
@@ -76,25 +90,43 @@ export interface GlbViewerProps {
      * colours, and the blocks each step adds flash once. Its `transform` must be the one of the model on stage.
      */
     previewResult?: AnalysisResult | null;
-    /** The Original | Stabilized | Overlay chip (shown for a model that is an assembly with added blocks) was used. */
-    onCompareChange?: (mode: CompareMode) => void;
     /**
-     * Where the analysis of the original half stands (the store's originalState): the chip shows a spinner on Original while it
-     * loads, and a failure puts the chip back on Stabilized (through onCompareChange) with a notice. Without it the viewer infers
-     * the wait from the result it is given and gives up after a while.
+     * A stage control of the block view was used: the Colour chip (`colorBy`), the Layers popover (`layerMax`, the highest layer
+     * shown, from 0) or the Show menu (`showCog`, `showGhost`). Without it those controls are not offered (the Colour chip only
+     * reports what is on stage).
      */
-    compareStatus?: CompareStatus;
-    /**
-     * The model on stage is a stabilized version of this one: the chip row says "Stabilized from "{title}"" with a button that
-     * calls onOpen (the workspace shows the original model). Not shown among the blocks; the report panel has its own link.
-     */
-    derivedFrom?: { title: string; onOpen(): void } | null;
+    onViewChange?: (patch: Partial<Pick<AnalysisViewState, "colorBy" | "layerMax" | "showGhost" | "showCog">>) => void;
+    /** The last pick raised the layer cut to keep its blocks in view: the stage says so (a chip, and a line in the Layers popover). */
+    layerRaised?: boolean;
     /** A block is under the pointer (null: none). Not called while the blocks are not on stage. */
     onBlockHover?: (index: number | null) => void;
     /** A click on a block, or on nothing (null). */
     onBlockClick?: (index: number | null) => void;
     /** An analysis is running: a subtle "Analysing…" chip on the stage. */
     analysisBusy?: boolean;
+    /**
+     * A stabilized model shown on its source mesh: the analysis of the stabilized assembly under that mesh's transform
+     * (`transform` maps the loaded mesh's frame to analysis mm). In the model view the blocks it holds with a role other than
+     * "original" are drawn over the mesh as solid cubes in their role colours; the legend chip, tooltip and card say what they
+     * are. Also the source of the step numbering and the block counts when the model on stage is a mesh. Ignored when the model
+     * on stage is itself an assembly (its own cubes are the blocks).
+     */
+    supports?: AnalysisResult | null;
+    /** The added supports are drawn (default true: the viewer keeps the switch itself unless this is given). */
+    showSupports?: boolean;
+    onShowSupportsChange?: (show: boolean) => void;
+    /**
+     * The file the toolbar's download saves, when it is not the one on stage (the stabilized assembly while its source mesh is
+     * shown). Omitted: `url`. null: no download button.
+     */
+    downloadUrl?: string | null;
+    /**
+     * Steps of earlier stabilizer runs the stabilized model behind `supports` carries, so its tooltips and cards number the run
+     * on screen from 1 ("added in step 1") as the Stabilize timeline does. The source mesh on stage has no log to read this from;
+     * the workspace knows it: assemblyParts.stepsBeforeOwnRun(topStep, the model's own step count). Omitted: the loaded
+     * assembly's own log (a stabilized model shown as itself), else 0.
+     */
+    stepOffset?: number;
 }
 
 type Phase = "idle" | "loading" | "ready" | "error" | "nowebgl" | "lost";
@@ -116,17 +148,12 @@ const CLICK_SLOP_PX = 6;
 const PARTS_PX = 272;
 const TOOLBAR_PX = 56;
 const CHIPS_PX = 28;
-/** The block view's chips (a summary and the colour legend) stand higher. */
-const BLOCK_CHIPS_PX = 62;
-/** The Compare control adds this to the block view's chips (it stays while the model is a stabilized one, so a switch never moves the framing, even while the stabilizer previews). */
-const COMPARE_CHIP_PX = 30;
-/** The "Stabilized from..." link adds this to the model view's chip. */
-const SOURCE_CHIP_PX = 26;
+/** The block view's chips (a summary, the Colour chip and the legend under it) stand higher. */
+const BLOCK_CHIPS_PX = 88;
+/** The added-supports legend chip adds this to the model view's chips. */
+const SUPPORTS_CHIP_PX = 28;
 /** The chip stack's distance from the top of the free rect (Tailwind's top-2). */
 const STACK_TOP_PX = 8;
-/** Original asked for, no word on its analysis from the workspace, and the stage still on the stabilized model: give up after this long. */
-const ORIGINAL_WAIT_MS = 10_000;
-const ORIGINAL_FAILED = "The original blocks could not be analysed, so the stabilized model is shown.";
 /** The identify tooltip goes below the pointer when there is less room than this above it. */
 const TIP_ROOM_PX = 58;
 
@@ -140,7 +167,31 @@ const nextFrames = (count: number) =>
         step(count);
     });
 
-export default function GlbViewer({ url, title, downloadName, insets, className, overlay, emptyState, onThumbnail, onLoadError, onModelReady, analysis: analysisProp, analysisView, previewResult, onCompareChange, compareStatus, derivedFrom, onBlockHover, onBlockClick, analysisBusy }: GlbViewerProps) {
+export default function GlbViewer({
+    url,
+    title,
+    downloadName,
+    insets,
+    className,
+    overlay,
+    emptyState,
+    onThumbnail,
+    onLoadError,
+    onModelReady,
+    analysis: analysisProp,
+    analysisView,
+    previewResult,
+    onViewChange,
+    layerRaised,
+    onBlockHover,
+    onBlockClick,
+    analysisBusy,
+    supports,
+    showSupports,
+    onShowSupportsChange,
+    downloadUrl: downloadUrlProp,
+    stepOffset: stepOffsetProp,
+}: GlbViewerProps) {
     const free = insets ?? NO_INSETS;
     const dark = useIsDark();
     const theme: ViewTheme = dark ? "dark" : "light";
@@ -192,6 +243,10 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
     const [stage, setStage] = useState({ width: 0, height: 0 });
     const [ring, setRing] = useState(false); // the stage was focused from the keyboard
     const pointerFocus = useRef(false);
+    /** The cube a click picked (a block index of the `supports` it was picked in: a new result forgets it). */
+    const [supportPick, setSupportPick] = useState<{ of: AnalysisResult; index: number } | null>(null);
+    /** The switch of the added supports while the host does not keep it. */
+    const [supportsLocal, setSupportsLocal] = useState(true);
 
     // The latest of everything the viewer's long-lived callbacks read.
     const looksRef = useRef(looks);
@@ -200,6 +255,8 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
     const insetsRef = useRef(free);
     const stageWidthRef = useRef(0);
     const callbacks = useRef({ onThumbnail, onLoadError, onModelReady });
+    /** The added supports, for the long-lived callbacks of the viewer (its hover is made once, with the viewer). */
+    const supportsRef = useRef<{ hoverable: boolean; setHover(index: number | null): void }>({ hoverable: false, setHover: () => undefined });
     useEffect(() => {
         rowsRef.current = rows;
         themeRef.current = theme;
@@ -234,7 +291,11 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
         setPhase("loading");
         setReloads((n) => n + 1);
     }, []);
-    const select = (ids: string[]) => applyLooks({ ...looksRef.current, selected: ids });
+    // Parts and an added support are picked one at a time: picking a part (from the stage or the parts list) lets go of the cube.
+    const select = (ids: string[]) => {
+        if (ids.length > 0) setSupportPick(null);
+        applyLooks({ ...looksRef.current, selected: ids });
+    };
     const toggleHidden = (ids: readonly string[]) => {
         const now = looksRef.current;
         const allHidden = ids.length > 0 && ids.every((id) => now.hidden.includes(id));
@@ -255,7 +316,8 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
     });
     const frame = (ids: readonly string[]) => viewerRef.current?.fit(objectsOf(ids));
     const stepBack = () => {
-        if (looksRef.current.selected.length) select([]);
+        if (supportSel !== null) setSupportPick(null);
+        else if (looksRef.current.selected.length) select([]);
         else if (looksRef.current.isolated) exitIsolate();
     };
     const nameOf = (id: string) => rows.find((r) => r.id === id)?.name ?? id;
@@ -325,15 +387,19 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                         insets: insetsRef.current,
                         // Focus is read when F is pressed: the selection, else everything (and among blocks, always everything).
                         focus: () => (bridgeRef.current?.isActive() ? [] : objectsOfRef.current(looksRef.current.selected)),
-                        hoverEnabled: () => rowsRef.current.length > 1 || !!bridgeRef.current?.isActive(),
+                        hoverEnabled: () => rowsRef.current.length > 1 || !!bridgeRef.current?.isActive() || supportsRef.current.hoverable,
                         onHover: (hit) => {
                             if (bridgeRef.current?.handleHover(hit)) return; // a block, not a part
-                            setHover(hit?.id ?? null);
+                            // An added support has an id of its own: it is lit by the overlay, not by the scene's parts. The pointer tracks
+                            // a one-part model only so its cubes can be hovered: that lone mesh gets no tint and no part tooltip.
+                            const route = routeHover(hit?.id, rowsRef.current.length);
+                            supportsRef.current.setHover(route.support);
+                            setHover(route.part);
                             if (hit) {
                                 tipAt.current = { x: hit.x, y: hit.y };
                                 placeTip();
                             }
-                            setTipId(hit?.id ?? null);
+                            setTipId(route.tip);
                         },
                         onContextLost: () => {
                             lostRef.current = true;
@@ -410,6 +476,7 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
         setNotice(null);
         setMenu(null);
         setTipId(null);
+        setSupportPick(null);
         if (url === null) {
             setPhase("idle");
             return;
@@ -453,7 +520,8 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                 if (callbacks.current.onThumbnail && !thumbnailed.current.has(url)) {
                     await nextFrames(2);
                     if (stale()) return;
-                    // Always the model, even if the block view happens to be on stage.
+                    // Always the model, even if the block view happens to be on stage. The added supports of a stabilized model are not
+                    // there yet (the workspace analyses the stabilized GLB after this mesh is up), so its cover is the bare mesh, as the original's.
                     const blob = await viewer.snapshot({ ...THUMBNAIL, scene, paintBackground: paintThumbnailBackground });
                     if (stale() || !blob) return;
                     thumbnailed.current.add(url);
@@ -497,22 +565,25 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
     const previewing = !!previewResult && analysisView?.mode === "blocks";
     const analysis = previewing ? previewResult : analysisProp;
     const colorBy = analysisView && analysis ? resolveColorBy(analysisView, analysis, previewing) : "status";
-    // A stabilized model: its parts are its roles; the chip compares its two versions.
-    const counts = useMemo(() => (assembly ? assemblyCounts(assembly) : null), [assembly]);
+    // A stabilized model on stage: its parts are its roles. One shown on its source mesh has none of that, but the result it is given
+    // (`supports`: the stabilized assembly) still says how many blocks it started with and how many were added, for its name.
+    const stageCounts = useMemo(() => (assembly ? assemblyCounts(assembly) : null), [assembly]);
+    const counts = useMemo(() => stageCounts ?? (supports?.assembly ? assemblyCounts(supports.assembly.descriptor) : null), [stageCounts, supports]);
     const viewRows = useMemo(() => decorateAssemblyRows(rows, assembly), [rows, assembly]);
-    // The chip stays (off) while the stabilizer previews a run, so its place in the chip stack, and with it the framing, does not change.
-    const compareOn = ready && !!counts && counts.added > 0 && !!onCompareChange && analysisView?.mode === "blocks";
-    // Original asked for while the stage still draws the whole stabilized model: its half is being analysed. The chip says what is
-    // on stage until it is, so the label never promises numbers the stage does not have.
-    const { value: chipValue, waiting: waitingForOriginal, failed: originalFailed, unreported: originalUnreported } = compareState({
-        on: compareOn,
-        requested: analysisView?.compare ?? "stabilized",
-        previewing,
-        addedOnStage: hasAddedBlocks(analysis),
-        status: compareStatus,
-    });
+    // The added supports: drawn over a mesh. Not when the model on stage is itself an assembly (its cubes are the blocks).
+    const supportsResult = supports && !assembly && hasAddedSupports(supports) ? supports : null;
+    const supportList = useMemo(() => (supportsResult ? supportCounts(supportsResult.blocks) : []), [supportsResult]);
+    const supportsAsked = showSupports ?? supportsLocal;
+    const setSupportsShown = (show: boolean) => {
+        setSupportsLocal(show);
+        if (!show) setSupportPick(null); // a card for a cube that is not drawn would point at nothing
+        onShowSupportsChange?.(show);
+    };
     // The tooltips number the steps of the run on screen from 1: a preview continues from the model's top step, a saved model from its own log.
-    const stepOffset = assembly ? (previewing ? topStep(assembly) : earlier) : 0;
+    // A stabilized model shown on its source mesh has no log on stage (`earlier` is 0 there): the host gives the offset (`stepOffset`).
+    const modelAssembly = assembly ?? supports?.assembly?.descriptor ?? null;
+    const savedStepOffset = stageStepOffset({ assembly: modelAssembly, previewing: false, hosted: stepOffsetProp, earlier });
+    const stepOffset = previewing ? stageStepOffset({ assembly: modelAssembly, previewing: true, earlier }) : savedStepOffset;
     // The block view: the analysis drawn as blocks, in place of the model's scene.
     const bridge = useAnalysisView({
         viewerRef,
@@ -538,13 +609,34 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
         bridgeRef.current = bridge;
     });
     const blocksOn = ready && bridge.active && !!analysis;
+    // The added supports: exploding the parts would leave them behind, so they are put away while it lasts.
+    const cubes = useSupportsOverlay({ viewerRef, sceneRef, ready, viewerEpoch, modelEpoch, theme, supports: supportsResult, visible: supportsAsked && explode === 0, stepOffset: savedStepOffset });
+    const supportSel = supportPick && supportPick.of === supportsResult ? supportPick.index : null;
+    const { setSelected: selectCube, setHover: hoverCube, epoch: cubesEpoch, frame: frameCube } = cubes;
+    useEffect(() => {
+        selectCube(blocksOn ? null : supportSel);
+    }, [selectCube, supportSel, blocksOn, cubesEpoch]);
+    const cubesDrawn = supportsDrawn({ has: !!supportsResult, shown: supportsAsked, explode, blocks: blocksOn });
+    useEffect(() => {
+        supportsRef.current = { hoverable: cubesDrawn, setHover: hoverCube };
+    });
+    const clearSupport = () => setSupportPick(null);
+    const pickSupport = (index: number) => {
+        if (!supportsResult) return;
+        select([]);
+        setSupportPick({ of: supportsResult, index });
+    };
+    const supportInfo = (index: number | null) => {
+        const block = supportsResult && index !== null ? supportsResult.blocks[index] : undefined;
+        return supportsResult && block ? describeSupport(block, supportsResult.settings, savedStepOffset) : null;
+    };
     const treeOpen = ready && !blocksOn && (treeUser ?? (multi && !compact));
     // ---- theme, insets, explode ----
     useEffect(() => {
         viewerRef.current?.setTheme(theme);
     }, [theme, viewerEpoch]);
     // The camera frames the model beside the viewer's own floating UI too: the parts list, the toolbar, the chips.
-    // The chip stack's real height, not a guess: the legend, the summary and the Compare control wrap on a narrow stage. The
+    // The chip stack's real height, not a guess: the legend, the summary and the Colour chip wrap on a narrow stage. The
     // constants stand in until it is measured (and for the first frame after the view changes). Only the stack that is always
     // there is measured; the chips that come and go (Analysing, notices) must not re-frame the camera.
     const stackRef = useRef<HTMLDivElement>(null);
@@ -562,7 +654,8 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
         observer.observe(el);
         return () => observer.disconnect();
     }, [ready, blocksOn]);
-    const stackEstimate = blocksOn ? BLOCK_CHIPS_PX + (compareOn ? COMPARE_CHIP_PX : 0) : CHIPS_PX + (derivedFrom ? SOURCE_CHIP_PX : 0);
+    const supportsChipOn = !blocksOn && !!supportsResult && supportList.length > 0;
+    const stackEstimate = blocksOn ? BLOCK_CHIPS_PX : CHIPS_PX + (supportsChipOn ? SUPPORTS_CHIP_PX : 0);
     const frameTop = free.top + (ready ? stackHeight(stack, blocksOn, stackEstimate, STACK_TOP_PX) : 0);
     const frameRight = free.right;
     const frameBottom = free.bottom + (ready ? TOOLBAR_PX : 0);
@@ -577,25 +670,9 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
     }, [frameTop, frameRight, frameBottom, frameLeft, setLabelInsets]);
     // An issue picked and then cut away by the layer slider glows nowhere: say so instead of showing an unexplained empty stage.
     const cutNote = blocksOn && analysis && analysisView && analysisView.highlight.length > 0 ? highlightCut(analysis.blocks, analysisView.highlight, analysisView.layerMax) : null;
-    // The original half did not come: back to the stabilized model, which is what is on stage, and say so. A failure is reported
-    // by the workspace (compareStatus); without that report a long wait is taken for one.
-    const compareChangeRef = useRef(onCompareChange);
-    useEffect(() => {
-        compareChangeRef.current = onCompareChange;
-    });
-    useEffect(() => {
-        if (!originalFailed && !originalUnreported) return;
-        const giveUp = () => {
-            compareChangeRef.current?.("stabilized");
-            setNotice(ORIGINAL_FAILED);
-        };
-        if (originalFailed) {
-            giveUp();
-            return;
-        }
-        const timer = setTimeout(giveUp, ORIGINAL_WAIT_MS);
-        return () => clearTimeout(timer);
-    }, [originalFailed, originalUnreported]);
+    // The block view's stage controls (the Colour chip, the Layers popover and the Show menu) read the view they are given and report a choice.
+    const layerState = useMemo(() => (blocksOn && analysis && analysisView ? layerCut(analysis.blocks, analysisView.layerMax, analysis.settings.blockSizeMm) : null), [blocksOn, analysis, analysisView]);
+    const colorModel = useMemo(() => (blocksOn && analysis ? colorChipModel({ analysis, colorBy, previewing, busy: !!analysisBusy }) : null), [blocksOn, analysis, colorBy, previewing, analysisBusy]);
     useEffect(() => {
         const scene = sceneRef.current;
         if (!scene) return;
@@ -668,6 +745,11 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
             : [{ label: "Clear selection", run: () => bridge.click(null) }]),
         { label: "Fit the 1 m volume", run: () => viewerRef.current?.setView("fit") },
     ];
+    const supportEntries = (index: number): MenuEntry[] => [
+        { label: "Frame support", run: () => frameCube(index) },
+        { label: "Hide added supports", run: () => setSupportsShown(false) },
+        { label: "Clear selection", run: clearSupport },
+    ];
     const onStagePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
         const viewer = viewerRef.current;
         if (!viewer || phase !== "ready") return;
@@ -687,15 +769,30 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
             menuPress.current = null;
             if (!near(down, event)) return;
             const id = viewer.pick(event.clientX, event.clientY);
+            const support = supportIndexOf(id);
+            if (support !== null) {
+                // An added support is not a part: its menu frames it or puts the supports away.
+                pickSupport(support);
+                setMenu({ at: { x: event.clientX, y: event.clientY }, entries: supportEntries(support) });
+                return;
+            }
             if (id && !looksRef.current.selected.includes(id)) select([id]);
+            if (id) clearSupport();
             setMenu({ at: { x: event.clientX, y: event.clientY }, entries: id ? entriesFor(looksRef.current.selected) : spaceEntries() });
             return;
         }
         if (event.button !== 0 || !near(press.current, event)) return;
-        // A click selects the part under it (Shift, Cmd or Ctrl adds or removes), or clears.
+        // A click selects the part under it (Shift, Cmd or Ctrl adds or removes), or clears. A click on an added support picks that
+        // cube (and lets go of the parts); a click on a part, or on nothing, lets go of the cube.
         const id = viewer.pick(event.clientX, event.clientY);
+        const support = supportIndexOf(id);
+        if (support !== null) {
+            pickSupport(support);
+            return;
+        }
         const adding = event.shiftKey || event.metaKey || event.ctrlKey;
         const selected = looksRef.current.selected;
+        if (id || !adding) clearSupport();
         select(id ? (adding ? toggled(selected, id) : [id]) : adding ? selected : []);
     };
     const onKeys = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -730,6 +827,9 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
 
     const selectedRows = viewRows.filter((r) => looks.selected.includes(r.id));
     const hoveredRow = tipId ? viewRows.find((r) => r.id === tipId) : undefined; // the decorated rows, so a role reads "9 blocks" here as in the list
+    const hoveredSupport = cubesDrawn ? supportInfo(supportIndexOf(tipId)) : null; // an added support under the pointer (not a part)
+    // The card describes a cube that is drawn: not one put away by the switch or by exploding the parts.
+    const pickedSupport = cubesDrawn ? supportInfo(supportSel) : null;
     const allSelectedHidden = looks.selected.length > 0 && looks.selected.every((id) => looks.hidden.includes(id));
     const stabilized = !!counts && counts.added > 0;
     const label = stageLabel(title, stabilized);
@@ -765,18 +865,21 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                             return;
                         }
                         const id = ready ? viewerRef.current?.pick(event.clientX, event.clientY) : null;
-                        if (id) frame([id]);
+                        const support = supportIndexOf(id);
+                        if (support !== null) frameCube(support);
+                        else if (id) frame([id]);
                     }}
                 />
                 <p id={helpId} className="sr-only">
                     Arrow keys orbit, Shift and the arrow keys pan, plus and minus zoom, F frames the selection (or everything), 0 frames everything, and 1 to 4 pick the Iso, Top, Front and Right views. A click selects a part, and
                     Shift-click adds one; Escape steps back. H hides or shows the selection, Shift+H shows everything, and I isolates the selection.
                     {blocksOn && " In the block view, hovering a block says where it is and why it is the colour it is, a click selects it, a double-click frames it, and Escape lets go."}
+                    {supportsChipOn && " The cubes the stabilizer added to the model are not parts: hovering one says what it is for, a click selects it, and a double-click frames it."}
                 </p>
                 {/* HTML labels pinned to the 3D scene (block tooltip, dimensions, COG note, callout); moved per frame, not by React. */}
                 <div ref={labelsHostRef} aria-hidden className="pointer-events-none absolute inset-0 z-[11] overflow-hidden" />
                 <p role="status" aria-live="polite" className="sr-only">
-                    {bridge.hoverText}
+                    {bridge.hoverText || hoveredSupport?.text || ""}
                 </p>
 
                 {/* Everything floating lives in the part of the stage the insets leave uncovered. */}
@@ -836,49 +939,23 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                     {ready && (
                         <>
                             {/* Chips: what is shown, isolated or hidden, and notices. */}
-                            <div className={cn("pointer-events-none absolute top-2 flex flex-col items-start gap-1", treeOpen ? "left-[17rem] max-w-[calc(100%-18rem)]" : "left-2 max-w-[calc(100%-1rem)]", selectedRows.length > 0 && !blocksOn && !compact && "pr-[15rem]")}>
+                            <div className={cn("pointer-events-none absolute top-2 flex flex-col items-start gap-1", treeOpen ? "left-[17rem] max-w-[calc(100%-18rem)]" : "left-2 max-w-[calc(100%-1rem)]", (selectedRows.length > 0 || pickedSupport) && !blocksOn && !compact && "pr-[15rem]")}>
                                 {/* The chips that are always there, measured for the framing (the ones below come and go). */}
                                 <div ref={stackRef} className="flex max-w-full flex-col items-start gap-1">
                                     {blocksOn && analysis && analysisView ? (
                                         <p className="rounded-md bg-background/85 px-2 py-0.5 text-[11px] text-muted-foreground backdrop-blur">
                                             {previewing ? "Stabilizer preview" : "Block view"} · {formatCount(analysis.blocks.length)} {analysis.blocks.length === 1 ? "block" : "blocks"} of {num(analysis.settings.blockSizeMm)} mm
-                                            {previewing && analysis.assembly ? ` (${formatCount(analysis.blocks.length - analysis.assembly.roleCounts[0])} added)` : ""} · model {analysis.sizeMm.map((v) => Math.round(v)).join(" × ")} mm
+                                            {previewing && analysis.assembly ? ` (${formatCount(analysis.blocks.length - analysis.assembly.roleCounts[0])} added)` : ""}
                                         </p>
                                     ) : (
                                         <p className="rounded-md bg-background/85 px-2 py-0.5 text-[11px] text-muted-foreground backdrop-blur">
-                                            {counts ? `Block assembly · ${formatCount(counts.original + counts.added)} blocks${counts.added > 0 ? ` (${formatCount(counts.added)} added)` : ""} · ${formatCount(rows.length)} ${rows.length === 1 ? "role" : "roles"}` : `GLB · ${formatCount(rows.length)} ${rows.length === 1 ? "part" : "parts"} · ${formatCount(stats.triangles)} triangles`}
+                                            {stageCounts ? `Block assembly · ${formatCount(stageCounts.original + stageCounts.added)} blocks${stageCounts.added > 0 ? ` (${formatCount(stageCounts.added)} added)` : ""} · ${formatCount(rows.length)} ${rows.length === 1 ? "role" : "roles"}` : `GLB · ${formatCount(rows.length)} ${rows.length === 1 ? "part" : "parts"} · ${formatCount(stats.triangles)} triangles`}
                                         </p>
                                     )}
-                                    {derivedFrom && !blocksOn && (
-                                        <p className={cn(chip, "max-w-full")}>
-                                            <span className="min-w-0 truncate" title={derivedFrom.title}>
-                                                {`Stabilized from "${derivedFrom.title}"`}
-                                            </span>
-                                            <span aria-hidden>·</span>
-                                            <button
-                                                type="button"
-                                                className={cn(chipButton, "shrink-0")}
-                                                title="Show the model this one was made from"
-                                                onClick={() => {
-                                                    derivedFrom.onOpen();
-                                                    refocus();
-                                                }}
-                                            >
-                                                View original
-                                            </button>
-                                        </p>
+                                    {supportsChipOn && (
+                                        <SupportsChip counts={supportList} shown={supportsAsked} onShownChange={setSupportsShown} note={supportsAsked && explode > 0 ? "hidden while exploded" : undefined} />
                                     )}
-                                    {blocksOn && compareOn && counts && analysisView && onCompareChange && (
-                                        <CompareChip
-                                            value={chipValue}
-                                            onChange={onCompareChange}
-                                            originalCount={counts.original}
-                                            addedCount={counts.added}
-                                            originalAvailable={counts.original > 0}
-                                            pending={waitingForOriginal}
-                                            disabled={previewing ? "Compare is off while the stabilizer previews a run" : undefined}
-                                        />
-                                    )}
+                                    {colorModel && analysisView && <ColorChip model={colorModel} onChange={onViewChange ? (next) => onViewChange({ colorBy: next }) : undefined} />}
                                     {blocksOn && analysis && analysisView && <AnalysisLegend analysis={analysis} colorBy={colorBy} theme={theme} />}
                                 </div>
                                 {analysisBusy && (
@@ -895,10 +972,25 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                                             : `${cutNote.hidden} of ${cutNote.total} highlighted blocks are above the layer cut.`}
                                     </p>
                                 )}
+                                {blocksOn && layerRaised && (
+                                    <p role="status" className="pointer-events-none flex items-center gap-1.5 rounded-md bg-background/85 px-2 py-0.5 text-[11px] text-foreground shadow-sm backdrop-blur">
+                                        <Layers className="h-3 w-3 shrink-0" aria-hidden />
+                                        Layer cut raised to show this.
+                                    </p>
+                                )}
                                 {bridge.buildFailed && !blocksOn && (
                                     <p role="alert" className={chip}>
                                         <AlertTriangle className="h-3 w-3 shrink-0 text-warning" aria-hidden />
                                         The block view could not be loaded.
+                                        <button type="button" className={chipButton} onClick={() => window.location.reload()}>
+                                            Reload the page
+                                        </button>
+                                    </p>
+                                )}
+                                {!blocksOn && cubes.failed && (
+                                    <p role="alert" className={chip}>
+                                        <AlertTriangle className="h-3 w-3 shrink-0 text-warning" aria-hidden />
+                                        The added supports could not be loaded.
                                         <button type="button" className={chipButton} onClick={() => window.location.reload()}>
                                             Reload the page
                                         </button>
@@ -976,6 +1068,18 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                                 />
                             )}
 
+                            {pickedSupport && !blocksOn && (
+                                <SupportCard
+                                    info={pickedSupport}
+                                    compact={compact}
+                                    onFrame={() => frameCube(pickedSupport.index)}
+                                    onClear={() => {
+                                        clearSupport();
+                                        refocus();
+                                    }}
+                                />
+                            )}
+
                             <div className="pointer-events-none absolute inset-x-2 bottom-2 z-20 flex justify-center">
                                 <ViewerToolbar
                                     compact={compact}
@@ -990,13 +1094,29 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                                     onZoom={(steps) => viewerRef.current?.zoomBy(steps)}
                                     canExplode={multi}
                                     explode={explode}
-                                    onExplode={setExplode}
+                                    onExplode={(value) => {
+                                        if (value > 0) clearSupport(); // the cubes are put away while exploded; so is the card for one
+                                        setExplode(value);
+                                    }}
                                     canSplit={stats.canSplit && !assembly}
                                     split={split}
                                     splitProgress={splitProgress}
                                     onSplit={() => void toggleSplit()}
-                                    downloadUrl={url}
+                                    downloadUrl={downloadUrlProp !== undefined ? downloadUrlProp : url}
                                     downloadName={downloadName || downloadStem(title, stabilized)}
+                                    downloadLabel={downloadLabelFor(downloadUrlProp, url)}
+                                    layers={layerState && onViewChange ? { cut: layerState, onChange: (layerMax) => onViewChange({ layerMax }), raised: !!layerRaised } : undefined}
+                                    show={
+                                        blocksOn && analysisView && onViewChange
+                                            ? {
+                                                  cog: analysisView.showCog,
+                                                  onCog: (showCog) => onViewChange({ showCog }),
+                                                  // A block assembly has no model behind its blocks: they are the model.
+                                                  ghost: assembly ? null : analysisView.showGhost,
+                                                  onGhost: (showGhost) => onViewChange({ showGhost }),
+                                              }
+                                            : undefined
+                                    }
                                 />
                             </div>
                         </>
@@ -1018,6 +1138,15 @@ export default function GlbViewer({ url, title, downloadName, insets, className,
                     <div ref={tipRef} role="tooltip" className="pointer-events-none absolute z-20 max-w-[16rem] rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md">
                         <p className="font-medium">{hoveredRow.name}</p>
                         <p className="text-muted-foreground">{partDetail(hoveredRow)}</p>
+                    </div>
+                )}
+                {ready && !blocksOn && hoveredSupport && !menu && (
+                    <div ref={tipRef} role="tooltip" className="pointer-events-none absolute z-20 max-w-[16rem] rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md">
+                        <p className="flex items-center gap-1.5 font-medium">
+                            <span aria-hidden className="inline-block h-2.5 w-2.5 shrink-0 rounded-[3px] ring-1 ring-black/25" style={{ background: hoveredSupport.color }} />
+                            {hoveredSupport.tooltip}
+                        </p>
+                        <p className="text-muted-foreground">{hoveredSupport.zRange}</p>
                     </div>
                 )}
             </div>

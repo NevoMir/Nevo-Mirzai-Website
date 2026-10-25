@@ -14,15 +14,26 @@ export interface Env {
     MESHY_API_KEY?: string;
     TENCENTCLOUD_SECRET_ID?: string; // Tencent Cloud API key pair for Hunyuan 3D (HY 3D Global)
     TENCENTCLOUD_SECRET_KEY?: string;
+    OPENROUTER_API_KEY?: string; // OpenRouter: the Muse assembly designer (an LLM that returns the parts of an object)
     ACCESS_CODE?: string; // when set, POST /generate needs it in the x-access-code header
     // Vars
+    OPENROUTER_MODEL?: string; // default "meta/muse-spark-1.3-contributor"
+    // Queue binding: the LLM call runs in the queue consumer (worker/llm.ts), not in the request that started the job.
+    LLM_QUEUE?: Queue<LlmJob>;
     DAILY_GENERATION_LIMIT?: string;
     DAILY_DERIVED_LIMIT?: string; // stabilized uploads per UTC day (default 300)
     ALLOW_OPEN_GENERATION?: string; // "1" lets paid generation run without an ACCESS_CODE (deliberate opt-out)
     MOCK_PROVIDER?: string; // "1" enables the offline mock provider (local dev only)
 }
 
-export type Via = "fal" | "tripo" | "meshy" | "tencent" | "mock";
+export type Via = "fal" | "tripo" | "meshy" | "tencent" | "openrouter" | "mock";
+
+/** The queue message that asks the consumer to design one object (never carries a key). */
+export interface LlmJob {
+    taskId: string; // uuid; the staging objects in R2 are llm/<taskId>.json / .glb / .cancel
+    prompt: string;
+    model: string;
+}
 
 /** JSON-serialisable adapter state, persisted in jobs.provider_state between polls. */
 export type AdapterState = Record<string, unknown> | null;
@@ -41,7 +52,7 @@ export type PollResult =
       }
     | {
           status: "succeeded";
-          /** https URL of the GLB, or "asset:/path" for a file served by env.ASSETS (mock provider). */
+          /** https URL of the GLB, "asset:/path" for a file served by env.ASSETS (mock provider), or "r2:key" for an object in env.FILES. */
           glbUrl: string;
           thumbnailUrl?: string | null;
           state?: AdapterState;
@@ -61,6 +72,11 @@ export interface ProviderAdapter {
      * tasks cost nothing to leave alone (the mock) therefore still defines a no-op cancel().
      */
     cancel?(env: Env, taskId: string, state: AdapterState): Promise<void>;
+    /**
+     * Best-effort, optional: the job is over (its model is saved, or it failed or was canceled), so the adapter may delete
+     * whatever it staged for it. Never throws. Most vendors keep their results on their own side and define nothing.
+     */
+    cleanup?(env: Env, taskId: string, state: AdapterState): Promise<void>;
 }
 
 /** One selectable model in the UI, with the APIs that can serve it, in order of preference. */

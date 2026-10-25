@@ -44,6 +44,15 @@ export function downloadStem(title: string | undefined, stabilized = false): str
     return stabilized && !saysStabilized(title) ? `${stem}-stabilized` : stem;
 }
 
+/**
+ * The toolbar download's label. The host passes another file than the one on stage only for a stabilized model shown on its
+ * source mesh, and that file is the stabilized block assembly: say so from the moment the toolbar is there, not once an analysis
+ * has counted the added blocks (it may be late, fail, or find none). undefined: the toolbar's own "Download GLB".
+ */
+export function downloadLabelFor(downloadUrl: string | null | undefined, url: string | null): string | undefined {
+    return downloadUrl && downloadUrl !== url ? "Download stabilized GLB" : undefined;
+}
+
 /** What the parts list and the hover tooltip say about a part: its own line ("12 blocks" for a role), else its triangle count. */
 export function partDetail(row: { detail?: string; triangles: number }): string {
     return row.detail ?? `${formatCount(row.triangles)} triangles`;

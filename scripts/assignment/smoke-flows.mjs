@@ -2,7 +2,7 @@
 //   npx wrangler dev --port 8787 --local     (MOCK_PROVIDER=1, migrations applied; dist/ built so /assignment_alex/examples is served)
 //   BASE=http://127.0.0.1:8787 node scripts/assignment/smoke-flows.mjs
 //
-//   A  open an example -> original active on the Analysis tab -> stress and verdict -> "Stabilized version ready" -> Compare
+//   A  open an example -> original active on the Stability tab -> stress and verdict -> "Stabilized version ready" -> the stabilized model's own analysis and its Added blocks colours
 //   B  a generated (offline demo) model -> Stabilize (the real search, streamed steps and live preview) -> upload -> Models
 //      grouping -> chat card -> reload keeps it -> same upload twice is one model -> delete puts the original back
 //
@@ -144,7 +144,7 @@ console.log(`Flows against ${BASE}`);
 const cleanup = [];
 
 // =====================================================================================================================
-console.log("\n== flow A: example -> Analysis -> Stabilized version ready -> Compare");
+console.log("\n== flow A: example -> Stability -> Stabilized version ready -> the stabilized model's own analysis");
 let exProject;
 await test("openExample(desk-lamp): project in the store, original active, Analysis tab, router told, hub told", async () => {
     S.clearAnalysisCache();
@@ -193,16 +193,15 @@ await test("the original is analysed like the viewer does it: stress, problems, 
     assert.equal(result.summary.errors, manifest.original.analysis.errors);
 });
 
-await test("Compare: the card's request for the stabilized model survives the model change and lands as Overlay on its analysis", async () => {
-    // WorkspaceShell effect order: the card sets the request, then the model changes.
-    an.getState().requestCompare(exStabilized.id, "overlay");
+await test("the stabilized example: its analysis lands on its own blocks, and \"Added blocks\" paints what the stabilizer added", async () => {
+    // WorkspaceShell effect order: the model changes, the runner analyses it.
     ws.getState().setActiveModel(exStabilized.id);
     an.getState().modelChanged(exStabilized.id, exStabilized.glb_url);
-    assert.deepEqual(an.getState().pendingCompare, { modelId: exStabilized.id, mode: "overlay" }, "not dropped by the model change");
     const { result, assembly } = await analyseLikeTheRunner(exStabilized);
     assert.ok(assembly, "the stabilized GLB declares its blocks");
-    assert.equal(an.getState().view.compare, "overlay");
-    assert.equal(an.getState().view.colorBy, "role", "Overlay paints by role");
+    assert.equal(an.getState().view.colorBy, "status", "a model starts on the status colours");
+    an.getState().setColorBy("role");
+    assert.equal(an.getState().view.colorBy, "role", "Colour > Added blocks paints by role");
     assert.equal(result.summary.errors, 0);
     assert.equal(result.summary.warnings, 0);
     assert.ok(result.assembly && result.assembly.steps > 0, "the added blocks carry the step that added them");
@@ -213,26 +212,11 @@ await test("Compare: the card's request for the stabilized model survives the mo
     assert.equal(exStabilized.derived.added_blocks, manifest.stabilized.added_blocks);
 });
 
-await test("a Compare asked for another model is dropped when that model is not the one opened", () => {
-    an.getState().requestCompare("00000000-0000-4000-8000-000000000000", "overlay");
-    an.getState().modelChanged(exOriginal.id, exOriginal.glb_url);
-    assert.equal(an.getState().pendingCompare, null);
-});
-
-await test("Original | Stabilized | Overlay: the stage result follows the chip, the original half has no added blocks", async () => {
-    an.getState().modelChanged(exStabilized.id, exStabilized.glb_url);
-    await analyseLikeTheRunner(exStabilized);
-    an.getState().setCompare("stabilized");
+await test("there is no original half on the stage: the stage draws the model's own result, the original is a model of its own (the top bar's switch)", () => {
     assert.equal(S.selectStageResult(an.getState()), an.getState().result);
-    an.getState().setCompare("original");
-    await until(() => an.getState().originalResult !== null, 10000, "the original half");
-    const half = S.selectStageResult(an.getState());
-    assert.equal(half, an.getState().originalResult);
-    assert.ok(half.blocks.length < an.getState().result.blocks.length, "fewer blocks than the stabilized version");
-    assert.equal(half.assembly?.steps ?? 0, 0, "nothing added in the original half");
-    assert.ok(half.stress, "the original half has its own stress estimate");
-    an.getState().setCompare("overlay");
-    assert.equal(S.selectStageResult(an.getState()), an.getState().result);
+    for (const gone of ["originalResult", "originalFor", "originalState", "ensureOriginal", "setCompare", "requestCompare", "pendingCompare"]) assert.ok(!(gone in an.getState()), `${gone} is gone`);
+    an.getState().setColorBy("status");
+    assert.equal(an.getState().view.colorBy, "status");
 });
 
 // =====================================================================================================================
@@ -292,7 +276,7 @@ await test("Stabilize: the steps stream into the timeline and the stage preview,
     assert.equal(ws.getState().activeModelId, savedModel.id, "the new version is the one in the viewer");
     const last = ws.getState().messages[ws.getState().messages.length - 1];
     assert.deepEqual(last.model_ids, [savedModel.id]);
-    assert.ok(S.toasts.some((t) => t.title === "Saved as a stabilized version"));
+    assert.ok(S.toasts.some((t) => t.title === "Switched to the stabilized version"), "saved: the new version is on the stage and the toast says so");
 });
 
 await test("both models are in the project: grouping puts the version under its source", () => {

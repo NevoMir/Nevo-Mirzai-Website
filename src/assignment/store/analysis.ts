@@ -1,26 +1,24 @@
-// The analysis tool's state: the settings, the run (progress, error), the result for the model in the viewer,
-// what the viewer should show of it (colour mode, layer cut, highlight, which half of a stabilized model) and which
-// issue is selected.
+// The analysis tool's state: the settings, the run (progress, error), the result for the model in the viewer, what the
+// viewer should show of it (colour mode, layer cut, highlight, focus) and which issue is selected.
 //
 // The analysis itself is run by components/analysis/useAnalysisRunner.ts; this file only holds what it
 // reports and what the panel and the viewer read. Pure rules live in analysisLogic.ts.
 //
-// Three results can be on the stage: `result` (the model's own analysis, which the report panel always reads), the
-// `originalResult` (the stabilized model's first half, analysed on its own, for Compare) and the `preview` (the
-// stabilizer's work in progress, store/stabilize.ts). stageResultOf says which one the viewer draws; block numbers differ
-// between them, so a pick made against the report is translated by grid cell (mapBlockIndices).
+// Two results can be on the stage: `result` (the model's own analysis, which the report panel always reads) and the
+// `preview` (the stabilizer's work in progress, store/stabilize.ts). stageResultOf says which one the viewer draws; block
+// numbers differ between them, so a pick made against the report is translated by grid cell (mapBlockIndices). Which VERSION of
+// a model is on the stage is not decided here: the top bar's Original | Stabilized switch changes the active model
+// (components/workspace/versionActions.ts), and the analysis follows it.
 
 import { create } from "zustand";
 
 import { DEFAULT_ANALYSIS_VIEW } from "@/assignment/analysis/types";
-import { toast } from "@/assignment/components/ui/sonner";
 import type {
     AnalysisColorBy,
     AnalysisResult,
     AnalysisSettings,
     AnalysisViewState,
     CheckKey,
-    CompareMode,
     LoadedModel,
     Vec3,
 } from "@/assignment/analysis/types";
@@ -47,6 +45,7 @@ import {
     type SelectionState,
 } from "@/assignment/store/analysisLogic";
 import { useWorkspaceStore } from "@/assignment/store/useWorkspaceStore";
+import { meshFailures, versionFamily } from "@/assignment/store/versions";
 
 /** What the viewer is told, minus `mode`, which the workspace tab decides. */
 export type ViewBits = Omit<AnalysisViewState, "mode">;
@@ -67,7 +66,6 @@ const INITIAL_VIEW: ViewBits = {
     showGhost: DEFAULT_ANALYSIS_VIEW.showGhost,
     showCog: DEFAULT_ANALYSIS_VIEW.showCog,
     highlight: NO_BLOCKS,
-    compare: DEFAULT_ANALYSIS_VIEW.compare,
     focus: null,
 };
 
@@ -92,18 +90,11 @@ function clearedPick(
 
 /** The result the viewer draws (see the header). */
 export const selectStageResult = (s: AnalysisState): AnalysisResult | null =>
-    stageResultOf({
-        result: s.result,
-        resultModelId: s.resultModelId,
-        compare: s.view.compare,
-        originalResult: s.originalResult,
-        originalFor: s.originalFor,
-        preview: s.preview,
-    });
+    stageResultOf({ result: s.result, resultModelId: s.resultModelId, preview: s.preview });
 
 /**
  * Applies `patch`, then re-derives the colour mode the stage uses from the user's choice: stress needs an estimate, role
- * needs added blocks, and Overlay and the live preview always paint by role. Every change that can alter what is
+ * (the added blocks) needs added blocks, and the live preview always paints by role. Every change that can alter what is
  * possible goes through here.
  */
 function settle(s: AnalysisState, patch: Partial<AnalysisState>): Partial<AnalysisState> {
@@ -112,7 +103,7 @@ function settle(s: AnalysisState, patch: Partial<AnalysisState>): Partial<Analys
     const colorBy = resolveColorBy(next.colorChoice, {
         stress: !!stage?.stress,
         roles: hasAddedBlocks(stage),
-        forceRole: next.view.compare === "overlay" || (next.preview !== null && next.preview.modelId === next.resultModelId),
+        forceRole: next.preview !== null && next.preview.modelId === next.resultModelId,
     });
     return colorBy === next.view.colorBy ? patch : { ...patch, view: { ...next.view, colorBy } };
 }
@@ -126,31 +117,15 @@ function toReportIndex(s: AnalysisState, index: number | null): number | null {
     return mapped.length > 0 ? mapped[0] : null;
 }
 
-let originalToken = 0;
-
 /**
- * The first half of a stabilized model on its own: the blocks it started from, analysed (and stress-estimated) in the
- * stabilized model's frame, so Compare can show what the stabilizer was given. Loaded on first use: the engine is not part
- * of the page.
+ * The url of the GLB the viewer shows for a model. A stabilized model is shown over the mesh it was made from (store/versions.ts),
+ * so that is the mesh whose handle counts as "this model's"; the caller may still pass the model's own url (it cannot know), and
+ * a model the project does not have is shown from the url it was given.
  */
-async function computeOriginal(result: AnalysisResult): Promise<AnalysisResult | null> {
-    const desc = result.assembly?.descriptor;
-    if (!desc) return null;
-    const { analyzeAssembly, originalOf } = await import("@/assignment/analysis/assembly");
-    const half = originalOf(desc);
-    if (!half) return null;
-    // The lattice is the same; only the transform of the stabilized model's GLB places it in the viewer.
-    const base = { ...analyzeAssembly(half, null, result.settings, desc), transform: result.transform };
-    try {
-        const { applyStress, computeStress } = await import("@/assignment/analysis/stress");
-        const { solveFrameTs } = await import("@/assignment/analysis/fem/index");
-        // Let the page paint "Analysing the original blocks" before the solve (some 0.6 s at 1000 blocks) holds the thread.
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        // The TypeScript solver: this is one small model, and the page does not load the WASM one.
-        return applyStress(base, computeStress(base, { solve: solveFrameTs, backend: "ts" }));
-    } catch {
-        return base;
-    }
+function shownUrlOf(modelId: string | null, glbUrl: string | null): string | null {
+    if (modelId === null) return glbUrl;
+    const family = versionFamily(useWorkspaceStore.getState().models, modelId, meshFailures());
+    return family && family.display.id !== modelId ? family.display.glb_url : glbUrl;
 }
 
 interface SelectOptions {
@@ -176,17 +151,10 @@ interface AnalysisState {
     summaries: Record<string, AnalysisSummary>;
     view: ViewBits;
     /**
-     * The colour mode the user picked. `view.colorBy` is what the stage uses: the same, unless it cannot be drawn or a
-     * mode forces its own (Overlay, the stabilizer's preview).
+     * The colour mode the user picked. `view.colorBy` is what the stage uses: the same, unless it cannot be drawn or the
+     * stabilizer's live preview forces its own (the role colours).
      */
     colorChoice: AnalysisColorBy;
-    /** Stabilized models: the blocks the stabilizer started from, analysed on their own (null until asked for, or when there are none). */
-    originalResult: AnalysisResult | null;
-    /** The `result` that `originalResult` was made from: a re-run makes it stale. */
-    originalFor: AnalysisResult | null;
-    originalState: "idle" | "loading" | "error";
-    /** A Compare mode waiting for its model's analysis (see requestCompare). */
-    pendingCompare: { modelId: string; mode: CompareMode } | null;
     /** The stabilizer's work in progress (store/stabilize.ts), drawn instead of `result` while it is for the model on screen. */
     preview: PreviewState | null;
     selection: AnalysisSelection | null;
@@ -216,7 +184,8 @@ interface AnalysisState {
     /**
      * The model in the viewer changed (to this id, this url). The viewer's handle for any other url is stale (its
      * scene is gone or reloading, so its triangles read as empty) and a pick made on another model's result no
-     * longer means anything: both go at once, not when the next run starts.
+     * longer means anything: both go at once, not when the next run starts. For a stabilized version the handle that
+     * stays is the one of the mesh it is shown on (its source's), whatever url is passed.
      */
     modelChanged: (modelId: string | null, glbUrl: string | null) => void;
     updateSettings: (patch: Partial<AnalysisSettings>) => void;
@@ -230,20 +199,11 @@ interface AnalysisState {
 
     setColorBy: (colorBy: AnalysisColorBy) => void;
     /**
-     * Paint the stage by stress, unless that cannot be seen: there is no estimate, Overlay or the stabilizer's preview
-     * paints by role, or it already is. The stress rows and cards call it (through the picks below), so "Show" on a stress
+     * Paint the stage by stress, unless that cannot be seen: there is no estimate, the stabilizer's preview paints by
+     * role, or it already is. The stress rows and cards call it (through the picks below), so "Show" on a stress
      * point shows the heat map the point belongs to instead of a highlight on status colours.
      */
     showStress: () => void;
-    /** Original | Stabilized | Overlay. Not offered for a result that is no block assembly. */
-    setCompare: (mode: CompareMode) => void;
-    /** Computes `originalResult` for the current result unless it is there. */
-    ensureOriginal: () => void;
-    /**
-     * Show `mode` for the model `modelId` as soon as its analysis is on screen: a banner's Compare button opens a model that
-     * is not loaded yet, and a model starts on its own view (`compare` is reset by every model change).
-     */
-    requestCompare: (modelId: string, mode: CompareMode) => void;
     /** The stabilizer's work in progress for `modelId`; null removes it. */
     setPreview: (modelId: string, result: AnalysisResult | null) => void;
     setLayerMax: (layerMax: number) => void;
@@ -251,8 +211,14 @@ interface AnalysisState {
     setShowCog: (show: boolean) => void;
 
     selectIssues: (ids: readonly string[], options?: SelectOptions) => void;
-    /** A group of blocks that is no issue (the cantilevered-blocks row): highlight them and look at their middle. */
+    /** A group of blocks that is no issue (the overhanging-blocks row): highlight them and look at their middle. */
     selectBlocks: (blocks: readonly number[], options: { check: CheckKey; label: string }) => void;
+    /**
+     * Look at a point that is no block or issue (the balance point of a model that stands): the camera flies to `mm` and a callout
+     * names it. Nothing is highlighted. It is a pick like the others (Esc and Clear let go; the layer cut rises to show it; a phone's
+     * sheet closes), with an empty selection that carries the label.
+     */
+    focusPoint: (mm: Vec3, label: string) => void;
     /** A stabilizer step (a timeline click): highlight the blocks it added and fly to `atMm`. */
     selectStepBlocks: (step: number, options: { atMm: Vec3; label: string }) => void;
     /** A click on an issue card: select it, or clear it when it is the one selected. */
@@ -276,10 +242,6 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
     summaries: {},
     view: INITIAL_VIEW,
     colorChoice: INITIAL_VIEW.colorBy,
-    originalResult: null,
-    originalFor: null,
-    originalState: "idle",
-    pendingCompare: null,
     preview: null,
     selection: null,
     stepSelection: null,
@@ -296,18 +258,12 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
     modelFailed: (url, message) => set({ viewerFailure: { url, message } }),
     modelChanged: (modelId, glbUrl) =>
         set((s) => {
+            const shownUrl = shownUrlOf(modelId, glbUrl);
             const other = s.resultModelId !== modelId;
             const cleared = other ? (clearedPick(s) as Partial<PickState>) : {};
-            // Another model starts on its stabilized (own) view, with nothing computed for Compare.
-            const base = cleared.view ?? s.view;
-            const view = other && base.compare !== "stabilized" ? { ...base, compare: "stabilized" as const } : base;
             return settle(s, {
-                ...(s.loaded && s.loaded.url !== glbUrl ? { loaded: null } : {}),
-                // A Compare asked for another model is not wanted any more: it must not fire when that one is visited later.
-                ...(s.pendingCompare && s.pendingCompare.modelId !== modelId ? { pendingCompare: null } : {}),
+                ...(s.loaded && s.loaded.url !== shownUrl ? { loaded: null } : {}),
                 ...cleared,
-                ...(view !== s.view ? { view } : {}),
-                ...(other && s.originalResult ? { originalResult: null, originalFor: null, originalState: "idle" as const } : {}),
             });
         }),
 
@@ -341,9 +297,6 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
             );
             // The kept pick may have moved up (other settings, other blocks): the cut still must not hide it.
             if (kept) layerMax = layerMaxForSelection(result, kept.highlight, s.view.focus?.mm ?? null, layerMax);
-            // Compare only exists for a block assembly, and only for the model it was chosen on (or asked for in advance).
-            const asked = s.pendingCompare && s.pendingCompare.modelId === modelId && result.assembly ? s.pendingCompare.mode : null;
-            const compare = asked ?? (same && result.assembly ? s.view.compare : "stabilized");
             return settle(s, {
                 run: { ...IDLE_RUN },
                 result,
@@ -354,20 +307,15 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
                 stepSelection: null,
                 hoverIssueId: null,
                 layerRaised: kept ? s.layerRaised : false,
-                pendingCompare: s.pendingCompare && s.pendingCompare.modelId === modelId ? null : s.pendingCompare,
-                ...(same ? {} : { originalResult: null, originalFor: null, originalState: "idle" as const }),
                 view: {
                     ...s.view,
                     layerMax,
-                    compare,
                     highlight: kept ? kept.highlight : NO_BLOCKS,
                     // The callout belongs to the pick: with the pick gone it must not hang in the scene.
                     focus: kept ? s.view.focus : null,
                 },
             });
         });
-        // The original half is for the last result only: a re-run while it is on screen computes it again.
-        if (get().view.compare === "original") get().ensureOriginal();
     },
     runFailed: (modelId, message) =>
         set((s) =>
@@ -375,60 +323,12 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
         ),
     retry: () => set((s) => ({ attempt: s.attempt + 1 })),
 
-    setColorBy: (colorBy) =>
-        set((s) => {
-            // Overlay is the role colouring: any other colouring is the stabilized view.
-            const compare = s.view.compare === "overlay" && colorBy !== "role" ? "stabilized" : s.view.compare;
-            if (s.colorChoice === colorBy && compare === s.view.compare) return {};
-            return settle(s, { colorChoice: colorBy, view: { ...s.view, compare } });
-        }),
+    setColorBy: (colorBy) => set((s) => (s.colorChoice === colorBy ? {} : settle(s, { colorChoice: colorBy }))),
     showStress: () => {
         const s = get();
         if (!s.result?.stress || s.colorChoice === "stress") return;
-        if (s.view.compare === "overlay" || (s.preview !== null && s.preview.modelId === s.resultModelId)) return;
+        if (s.preview !== null && s.preview.modelId === s.resultModelId) return;
         get().setColorBy("stress");
-    },
-    setCompare: (mode) => {
-        const now = get();
-        if (mode === now.view.compare) return;
-        const info = now.result?.assembly ?? null;
-        if (mode !== "stabilized" && !info) return;
-        if (mode === "original" && (info?.roleCounts[0] ?? 0) === 0) return;
-        set((s) => {
-            // The pick's block numbers belong to the half that was on screen.
-            const cleared = clearedPick(s) as Partial<PickState>;
-            return settle(s, { ...cleared, view: { ...(cleared.view ?? s.view), compare: mode } });
-        });
-        if (mode === "original") get().ensureOriginal();
-    },
-    ensureOriginal: () => {
-        const { result, originalFor } = get();
-        if (!result?.assembly || originalFor === result) return;
-        const token = ++originalToken;
-        set({ originalState: "loading" });
-        computeOriginal(result).then(
-            (original) => {
-                // Superseded, or the model moved on while the engine loaded.
-                if (token !== originalToken || get().result !== result) return;
-                set((s) => settle(s, { originalResult: original, originalFor: result, originalState: "idle" }));
-            },
-            () => {
-                if (token !== originalToken) return;
-                // Without the half, "Original" would go on drawing the stabilized blocks under its name: go back to them.
-                const wasShown = get().view.compare === "original";
-                set((s) => settle(s, { originalState: "error", ...(wasShown ? { view: { ...s.view, compare: "stabilized" as const } } : {}) }));
-                if (wasShown) toast.error("Could not show the original blocks", { description: "The stabilized model is shown instead." });
-            },
-        );
-    },
-    requestCompare: (modelId, mode) => {
-        const s = get();
-        if (s.resultModelId === modelId && s.result?.assembly) {
-            set({ pendingCompare: null });
-            get().setCompare(mode);
-            return;
-        }
-        set({ pendingCompare: { modelId, mode } });
     },
     setPreview: (modelId, result) =>
         set((s) => {
@@ -449,9 +349,6 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
     setShowCog: (showCog) => set((s) => (s.view.showCog === showCog ? {} : { view: { ...s.view, showCog } })),
 
     selectIssues: (ids, options = {}) => {
-        // The issues are the stabilized model's: a card pressed in the panel shows that half. (A block clicked in the viewer
-        // stays where it is: its issue is shown on the blocks the half has.)
-        if (options.focus !== false && get().view.compare === "original") get().setCompare("stabilized");
         if (options.focus !== false) {
             const issues = get().result?.issues ?? [];
             if (options.check === "stress" || ids.some((id) => STRESS_KINDS.includes(issues.find((issue) => issue.id === id)?.kind ?? ""))) get().showStress();
@@ -490,7 +387,6 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
         }));
     },
     selectBlocks: (blocks, options) => {
-        if (get().view.compare === "original") get().setCompare("stabilized");
         if (options.check === "stress") get().showStress();
         const state = get();
         const { result, view } = state;
@@ -515,8 +411,22 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
             },
         }));
     },
+    focusPoint: (mm, label) => {
+        const state = get();
+        const stage = selectStageResult(state);
+        if (!state.result || !stage) return;
+        const { view } = state;
+        // Like every pick: a layer cut that hides the point's layer rises to show it.
+        const layerMax = layerMaxForSelection(stage, NO_BLOCKS, mm, view.layerMax);
+        set((s) => ({
+            selection: { ids: [], check: null, label },
+            stepSelection: null,
+            selectionSerial: s.selectionSerial + 1,
+            layerRaised: layerMax > view.layerMax,
+            view: { ...view, layerMax, highlight: NO_BLOCKS, focus: { mm, token: ++focusToken, label } },
+        }));
+    },
     selectStepBlocks: (step, options) => {
-        if (get().view.compare === "original") get().setCompare("stabilized");
         const state = get();
         const { view } = state;
         const stage = selectStageResult(state);
@@ -556,14 +466,10 @@ export const useAnalysisStore = create<AnalysisState>()((set, get) => ({
     setSheetOpen: (sheetOpen) => set({ sheetOpen }),
 }));
 
-/**
- * Show the analysis of a model: make it the one in the viewer and switch to the Analysis tab. For the chat
- * cards and the Models list. `compare`: for a stabilized model, open it on that view (Overlay for a card's Compare button).
- */
-export function openAnalysisFor(modelId: string, options: { compare?: CompareMode } = {}): void {
+/** Show the analysis of a model: make it the one in the viewer and switch to the Stability tab. For the chat cards and the Models list. */
+export function openAnalysisFor(modelId: string): void {
     const workspace = useWorkspaceStore.getState();
     workspace.setActiveModel(modelId);
     workspace.setWorkspaceTab("analysis");
-    if (options.compare) useAnalysisStore.getState().requestCompare(modelId, options.compare);
     useAnalysisStore.setState((s) => ({ openRequest: s.openRequest + 1, panelOpen: true, sheetOpen: true }));
 }

@@ -13,7 +13,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { GhostSource } from "./analysisLayer.ts";
 import { explodeFactor, explodeOffsets, unionCentre, worldDeltaToLocal } from "./explode.ts";
 import { countTriangles, extractParts, extractTriangleSoup, meshesOf } from "./glbParts.ts";
-import type { ViewerScene } from "./orbitViewer.ts";
+import type { ViewerOverlayHit, ViewerScene } from "./orbitViewer.ts";
 import { splitGeometries, type SplitOptions } from "./splitComponents.ts";
 import type { LookPatch, PartRow, Vec3 } from "./types.ts";
 
@@ -127,6 +127,22 @@ export interface SplitSummary {
     components: number;
 }
 
+/**
+ * Something drawn with the model that is not part of it: the cubes of the stabilizer's added supports. The scene adds `object`
+ * to itself, frames `framed` and joins `box` to its bounds while `object` is visible, and offers `pick` to the viewer's
+ * pointer tests. The owner (see useSupportsOverlay) builds it, shows or hides it and disposes it; the scene never frees it.
+ */
+export interface SceneOverlay {
+    /** Goes into the scene (the display frame). Hidden with `object.visible`. */
+    object: THREE.Object3D;
+    /** The part of `object` Fit frames (the marks of a hover are left out). */
+    framed: THREE.Object3D;
+    /** World bounds of what is framed: joined to the scene's bounds while the overlay is shown. */
+    box: THREE.Box3;
+    /** The nearest thing a world ray meets: its id (never a part's), the world point and the distance along the ray. */
+    pick?(ray: THREE.Ray): ViewerOverlayHit | null;
+}
+
 export interface GlbScene extends ViewerScene {
     /** The parts as the list and the card say them (the glTF's, or the split pieces). */
     readonly rows: readonly PartRow[];
@@ -149,6 +165,14 @@ export interface GlbScene extends ViewerScene {
     extractTriangles(): Float32Array;
     /** The glTF's meshes as loaded (geometry shared, not copied), for the block view's ghost of the model. */
     ghostSources(): GhostSource[];
+    /**
+     * Puts an overlay (or none) beside the parts. It is framed with them (Fit, the presets, the thumbnail), counts in the bounds and
+     * is picked by the viewer, all while its `object` is visible; it is not a part: no row, no hiding, no isolating, no explode.
+     * Replacing it takes the old one out of the scene (the caller disposes that one). No-op once the scene is disposed.
+     */
+    setOverlay(overlay: SceneOverlay | null): void;
+    /** Shows or hides the overlay (bounds and framing follow); true when that changed something. */
+    setOverlayVisible(visible: boolean): boolean;
     /** Cuts the model into connected pieces. Resets selection, hiding and isolation. */
     split(options?: SplitOptions): Promise<SplitSummary>;
     unsplit(): void;
@@ -221,9 +245,12 @@ export function buildGlbScene(gltfScene: THREE.Object3D, options: GlbSceneOption
 
     const bounds = new THREE.Box3();
     let revision = 0;
+    /** What is drawn with the parts without being one (see SceneOverlay). */
+    let overlay: SceneOverlay | null = null;
     const refreshBounds = () => {
         bounds.makeEmpty();
         for (const part of parts.values()) bounds.union(new THREE.Box3().setFromObject(part));
+        if (overlay?.object.visible) bounds.union(overlay.box);
         revision += 1;
     };
     refreshBounds();
@@ -473,7 +500,30 @@ export function buildGlbScene(gltfScene: THREE.Object3D, options: GlbSceneOption
         },
         pickable: (id) => !isolatedIds || isolatedIds.has(id),
         revision: () => revision,
-        framed: () => [...parts].filter(([id]) => !ghosted(id)).map(([, part]) => part),
+        framed: () => {
+            const framed = [...parts].filter(([id]) => !ghosted(id)).map(([, part]) => part);
+            if (overlay) framed.push(overlay.framed); // dropped by the viewer while it is hidden (an invisible ancestor)
+            return framed;
+        },
+        overlayRay: (ray) => (!disposed && overlay?.pick && overlay.object.visible ? overlay.pick(ray) : null),
+
+        setOverlay(next) {
+            if (disposed || next === overlay) return;
+            overlay?.object.removeFromParent();
+            overlay = next;
+            if (next) scene.add(next.object);
+            scene.updateMatrixWorld(true);
+            refreshBounds();
+            options.onChange?.();
+        },
+
+        setOverlayVisible(visible) {
+            if (disposed || !overlay || overlay.object.visible === visible) return false;
+            overlay.object.visible = visible;
+            refreshBounds();
+            options.onChange?.();
+            return true;
+        },
         objectsOf: (id) => {
             const part = parts.get(id);
             return part ? [part] : [];
@@ -616,6 +666,7 @@ export function buildGlbScene(gltfScene: THREE.Object3D, options: GlbSceneOption
             dropSplit();
             disposeObject(gltfScene);
             parts.clear();
+            overlay = null; // its owner frees it
             scene.clear();
         },
     };

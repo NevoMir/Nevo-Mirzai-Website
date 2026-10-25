@@ -1,12 +1,15 @@
 import { ArrowLeftRight } from "lucide-react";
 
-import { pairOf } from "@/assignment/components/workspace/modelGroups";
+import { pairLinks } from "@/assignment/components/workspace/versionLogic";
 import { cn } from "@/assignment/lib/utils";
 import type { ModelAsset } from "@/assignment/shared/contract";
+import { versionFamily } from "@/assignment/store/versions";
 
 /**
- * "Original" on a stabilized version, "Stabilized" on the model it was made from: one click puts the other one in
- * the viewer. Nothing when there is no other one (a plain generated model, or a version whose source is gone).
+ * The way to the other versions of a model, from its row in the Models list or its card in the chat: "Stabilized" on the model
+ * it was made from, "Original" on a stabilized version (and "Previous" on a version made from another version). They resolve
+ * like the bar's two halves (versionLogic pairLinks), so the same word never opens a different model. Nothing when there is no
+ * other one (a plain generated model, or a version whose original is gone).
  */
 export function ModelPairLink({
     model,
@@ -19,23 +22,29 @@ export function ModelPairLink({
     onView: (model: ModelAsset) => void;
     className?: string;
 }) {
-    const pair = pairOf(model, models);
-    if (!pair) return null;
+    const links = pairLinks(versionFamily(models, model.id), models);
+    if (links.length === 0) return null;
     return (
-        <button
-            type="button"
-            data-testid="model-pair-link"
-            onClick={() => onView(pair.model)}
-            title={`Show the ${pair.label.toLowerCase()} version in the viewer`}
-            aria-label={`Show the ${pair.label.toLowerCase()} version`}
-            className={cn(
-                "inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors",
-                "hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                className,
-            )}
-        >
-            <ArrowLeftRight className="h-3 w-3 shrink-0" aria-hidden />
-            {pair.label}
-        </button>
+        <>
+            {links.map((link) => (
+                <button
+                    key={link.label}
+                    type="button"
+                    data-testid="model-pair-link"
+                    data-label={link.label}
+                    onClick={() => onView(link.model)}
+                    title={`Show the ${link.label.toLowerCase()} version in the viewer`}
+                    aria-label={`Show the ${link.label.toLowerCase()} version`}
+                    className={cn(
+                        "inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors",
+                        "hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        className,
+                    )}
+                >
+                    <ArrowLeftRight className="h-3 w-3 shrink-0" aria-hidden />
+                    {link.label}
+                </button>
+            ))}
+        </>
     );
 }

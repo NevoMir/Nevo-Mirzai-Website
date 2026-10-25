@@ -144,14 +144,18 @@ export function triBoxOverlap(
 
 // ---------- Voxelisation ----------
 
-interface Bounds {
+/** Bounding box of a soup's usable triangles, and how many there are. */
+export interface FiniteBounds {
     min: Vec3;
     max: Vec3;
     valid: number;
 }
 
-/** Bounding box of the triangles whose nine coordinates are all finite. */
-function finiteBounds(p: Float32Array, triCount: number): Bounds {
+/**
+ * Bounding box of the triangles whose nine coordinates are all finite (the ones voxelize() uses; a triangle with a NaN or an
+ * Infinity is skipped whole). `valid` is how many there are: 0 leaves min at +Infinity and max at -Infinity.
+ */
+export function finiteBounds(p: Float32Array, triCount: number): FiniteBounds {
     let minX = Infinity;
     let minY = Infinity;
     let minZ = Infinity;
@@ -178,6 +182,49 @@ function finiteBounds(p: Float32Array, triCount: number): Bounds {
     return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ], valid };
 }
 
+/** What the placement needs of a bounding box. */
+export interface PlacementBounds {
+    min: Vec3;
+    max: Vec3;
+}
+
+/** How a model with a given bounding box sits in the target volume: the transform, and what follows from it. */
+export interface Placement {
+    transform: AnalysisTransform;
+    /** The scaled bounding box, mm. [0, 0, 0] when the bounds are not a finite box. */
+    sizeMm: Vec3;
+    /** false for no bounds at all or a single point: nothing to scale, nothing to voxelise. */
+    hasGeometry: boolean;
+}
+
+/**
+ * The one place that decides how a mesh is scaled and put into the target volume: the longest side becomes `targetSizeMm`,
+ * the model is centred in X/Y inside the footprint and its lowest point is on z = 0. Bounds that are not finite (the bounds
+ * of nothing: min +Infinity, max -Infinity) place an empty model.
+ */
+export function placementForBounds(bounds: PlacementBounds, settings: Pick<AnalysisSettings, "targetSizeMm">): Placement {
+    const { min, max } = bounds;
+    const isBox = min.every(Number.isFinite) && max.every(Number.isFinite) && max[0] >= min[0] && max[1] >= min[1] && max[2] >= min[2];
+    const ext: Vec3 = isBox ? [max[0] - min[0], max[1] - min[1], max[2] - min[2]] : [0, 0, 0];
+    const longest = Math.max(ext[0], ext[1], ext[2]);
+    const hasGeometry = isBox && Number.isFinite(longest) && longest > 0;
+    const factor = hasGeometry ? settings.targetSizeMm / longest : 1;
+    const modelMin: Vec3 = isBox ? [min[0], min[1], min[2]] : [0, 0, 0];
+    const sizeMm: Vec3 = [ext[0] * factor, ext[1] * factor, ext[2] * factor];
+    const offsetMm: Vec3 = [(settings.targetSizeMm - sizeMm[0]) / 2, (settings.targetSizeMm - sizeMm[1]) / 2, 0];
+    return { transform: { factor, modelMin, offsetMm }, sizeMm, hasGeometry };
+}
+
+/**
+ * The transform voxelize() gives a mesh whose bounding box is `bounds`: mm = (p - modelMin) * factor + offsetMm. Pure maths of
+ * the bounds, so it does not change when the mesh is moved or scaled uniformly (the viewer's normalised copy of a model and a
+ * script's raw copy of it get the same cells), and it is how the blocks of a stabilized model are placed over the source mesh
+ * they were made from (store/versions.ts, the runner): the stabilizer works in the source's grid.
+ */
+export function transformForBounds(bounds: PlacementBounds, settings: Pick<AnalysisSettings, "targetSizeMm">): AnalysisTransform {
+    return placementForBounds(bounds, settings).transform;
+}
+
 /** Voxelises the soup. `settings` must already be normalised (normalizeSettings). */
 export function voxelize(soup: TriangleSoup, settings: AnalysisSettings, onProgress?: ProgressFn): VoxelGrid {
     const started = performance.now();
@@ -194,14 +241,9 @@ export function voxelize(soup: TriangleSoup, settings: AnalysisSettings, onProgr
     const PP = P * P;
 
     // ----- transform -----
-    const ext: Vec3 = [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]];
-    const longest = Math.max(ext[0], ext[1], ext[2]);
-    const hasGeometry = bounds.valid > 0 && Number.isFinite(longest) && longest > 0;
-    const factor = hasGeometry ? settings.targetSizeMm / longest : 1;
-    const modelMin: Vec3 = bounds.valid > 0 ? bounds.min : [0, 0, 0];
-    const sizeMm: Vec3 = bounds.valid > 0 ? [ext[0] * factor, ext[1] * factor, ext[2] * factor] : [0, 0, 0];
-    const offsetMm: Vec3 = [(settings.targetSizeMm - sizeMm[0]) / 2, (settings.targetSizeMm - sizeMm[1]) / 2, 0];
-    const transform: AnalysisTransform = { factor, modelMin, offsetMm };
+    // Decided by placementForBounds, which transformForBounds also uses: the two cannot drift apart.
+    const { transform, sizeMm, hasGeometry } = placementForBounds(bounds, settings);
+    const { factor, modelMin, offsetMm } = transform;
 
     const solid = new Uint16Array(g * g * g);
     const grid: VoxelGrid = {

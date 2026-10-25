@@ -1,9 +1,10 @@
 // Downloads: a JSON report of the whole analysis and a CSV of the blocks.
 
-import type { AnalysisResult, Block, CheckRow, Issue, StressMode } from "./types.ts";
+import type { AnalysisResult, Block, CheckRow, Issue, IssueKind, StressMode } from "./types.ts";
 import { BLOCK_ROLES, type BlockRole, type DerivedMeta, type MaterialId } from "../shared/contract.ts";
 import { DEFINITIONS, STRESS_ASSUMPTIONS } from "./definitions.ts";
 import type { Definition } from "./definitions.ts";
+import { COVERAGE_WARN, EDGE_MARGIN_MM } from "./issues.ts";
 import { STRESS_FAIL, STRESS_WARN, materialOf } from "./materials.ts";
 
 export interface ReportMeta {
@@ -21,6 +22,28 @@ export interface ReportMeta {
 const r1 = (v: number): number => Math.round(v * 10) / 10;
 const r3 = (v: number): number => Math.round(v * 1000) / 1000;
 
+/**
+ * One finding as a measurement, for a reader who wants the numbers: what was measured (in the engine's terms), its value, the limit it
+ * is held to and the cells it is about. The screen words the same finding for a student; the report keeps this beside the plain `title`
+ * and `detail`, and beside the sentence in `technical`.
+ */
+export interface IssueTechnicalSummary {
+    /** The issue's kind, repeated so the summary reads on its own. */
+    kind: IssueKind;
+    /** What was measured: "Centre-of-gravity margin to the support base", "Cantilever reach", "Joint utilisation". */
+    metric: string;
+    /** The measured value in `unit`; null when it could not be measured (nothing touches the ground). */
+    measured: number | null;
+    /** What it is held to; null when no limit applies. */
+    limit: number | null;
+    /** mm; blocks (a count of blocks); ratio (0.73 = 73 % of the allowable, 0.8 = 80 % of the model's volume). */
+    unit: "mm" | "blocks" | "ratio";
+    /** "max": the measured value must not exceed the limit; "min": it must not fall short of it; null when there is no limit. */
+    bound: "max" | "min" | null;
+    /** The grid cells (i, j, k) the measurement is about: the peak block of a joint, the blocks past the limit, the floating blocks. */
+    cells: Array<[number, number, number]>;
+}
+
 export interface ReportDocument {
     report: "block-structure-analysis";
     version: 1;
@@ -30,7 +53,17 @@ export interface ReportDocument {
     settings: AnalysisResult["settings"];
     scaling: { size_mm: [number, number, number]; scale_factor: number; offset_mm: [number, number, number]; grid: [number, number, number] };
     checks: CheckRow[];
-    issues: Array<Omit<Issue, "blocks" | "focusMm"> & { focus_mm: [number, number, number]; blocks: number[]; cells: Array<[number, number, number]> }>;
+    /** `title` and `detail` are what the screen says (plain words); `technical` is the same finding in the engine's terms, with the figures. */
+    issues: Array<
+        Omit<Issue, "blocks" | "focusMm"> & {
+            technical: string;
+            /** The same finding as a measurement: kind, measured value against its limit, cells. Absent in reports that predate it. */
+            technical_summary?: IssueTechnicalSummary;
+            focus_mm: [number, number, number];
+            blocks: number[];
+            cells: Array<[number, number, number]>;
+        }
+    >;
     stability: {
         cog_mm: [number, number, number];
         inside_base: boolean;
@@ -99,6 +132,110 @@ export interface ReportDocument {
     stabilization?: DerivedMeta;
 }
 
+const pct = (v: number): string => `${Math.round(v * 100)}%`;
+const triple = (v: readonly number[]): string => `(${v.map(r1).join(", ")})`;
+
+/**
+ * An issue in the engine's own terms and units, for the exported report: the screen words every finding for a student ("Arm too
+ * long: 6 blocks (max 4)"), the report keeps the cantilever, the centre of gravity, the utilisation and the cells.
+ */
+export function technicalLine(issue: Issue, result: AnalysisResult): string {
+    const { settings, stability, stats, stress, blocks } = result;
+    switch (issue.kind) {
+        case "empty":
+            return `No block is at least ${pct(settings.fillThreshold)} filled (fill threshold), so no component is left to analyse.`;
+        case "cog-outside": {
+            if (!stability) return "The centre of gravity could not be judged: no block touches the ground.";
+            const cog = `Centre of gravity ${triple(stability.cogMm)} mm`;
+            if (stability.inside) return `${cog} projects ${r1(stability.marginMm)} mm inside the edge of the support base: balanced on the edge (margin under 1 mm).`;
+            const tip = stability.tipDirection ? `; it tips about ${triple(stability.pivotMm)} mm towards (${stability.tipDirection.map(r3).join(", ")})` : "";
+            return `${cog} projects ${r1(-stability.marginMm)} mm outside the support base${tip}.`;
+        }
+        case "cantilever-too-long": {
+            const run = result.cantilevers.find((r) => `cantilever-${r.id}` === issue.id);
+            if (!run) return `Cantilever longer than the limit of ${settings.cantileverLimit} blocks.`;
+            return `Cantilever run ${run.id}: reach ${run.reach} blocks against a limit of ${settings.cantileverLimit}; ${run.overLimit.length} of its ${run.blocks.length} blocks are over the limit (layers k ${run.layers[0]} to ${run.layers[1]}).`;
+        }
+        case "floating": {
+            const body = result.bodies.find((b) => `floating-${b.id}` === issue.id);
+            return `Floating structure ${body ? `${body.id}: ${body.blocks.length} blocks` : `of ${issue.blocks.length} blocks`}, not connected to a block on the ground (no load path).`;
+        }
+        case "too-many-blocks":
+            return `Components used: ${stats.blockCount} against a budget of ${settings.maxBlocks}.`;
+        case "thin-features": {
+            // Two findings share the kind (issues.ts), told apart the way technicalSummary tells them: too little of the model kept
+            // (coverage under the warning level), or thin joints a lower fill threshold would keep, which connect floating parts.
+            if (stats.coverage < COVERAGE_WARN) return `Coverage ${pct(stats.coverage)} (warning below ${pct(COVERAGE_WARN)}) at a fill threshold of ${pct(settings.fillThreshold)}.`;
+            const n = issue.blocks.length;
+            return `${n} floating ${n === 1 ? "block" : "blocks"} would be connected at a lower fill threshold (now ${pct(settings.fillThreshold)}); coverage is ${pct(stats.coverage)}.`;
+        }
+        case "overstressed":
+        case "highly-stressed": {
+            const peak = issue.blocks[0];
+            const point = stress?.points.find((p) => p.blocks.includes(peak));
+            const u = stress && peak !== undefined ? stress.byBlock[peak] : Number.NaN;
+            const cell = peak !== undefined && blocks[peak] ? ` at block (${blocks[peak].cell.join(", ")})` : "";
+            const load = point ? `: ${point.mode} ${Math.round(point.tensionKPa)} of ${Math.round(point.allowableKPa)} kPa allowable` : "";
+            return `Joint utilisation ${Number.isFinite(u) ? pct(u) : "n/a"} of the allowable stress${load}${cell}; ${issue.kind === "overstressed" ? "over 100% (overstressed)" : "over 75% (highly stressed)"}.`;
+        }
+    }
+}
+
+/**
+ * An issue as a measurement (see IssueTechnicalSummary): the number the check looked at, the limit it was held to, and where. The
+ * limits are the engine's own (settings, issues.ts, materials.ts), so this never disagrees with `technical` or with the verdict.
+ */
+export function technicalSummary(issue: Issue, result: AnalysisResult, cells: Array<[number, number, number]>): IssueTechnicalSummary {
+    const { settings, stability, stats, stress, blocks } = result;
+    const base = { kind: issue.kind, cells };
+    switch (issue.kind) {
+        case "empty":
+            return { ...base, metric: `Blocks filled to at least ${pct(settings.fillThreshold)} (fill threshold)`, measured: 0, limit: 1, unit: "blocks", bound: "min" };
+        case "cog-outside":
+            return {
+                ...base,
+                metric: "Centre-of-gravity margin to the support base",
+                // Signed: negative is outside the base. An error is held to 0, the edge warning to the report's 1 mm.
+                measured: stability ? r1(stability.marginMm) : null,
+                limit: issue.severity === "error" ? 0 : EDGE_MARGIN_MM,
+                unit: "mm",
+                bound: "min",
+            };
+        case "cantilever-too-long": {
+            const run = result.cantilevers.find((r) => `cantilever-${r.id}` === issue.id);
+            const reaches = issue.blocks.map((id) => blocks[id]?.reach ?? 0);
+            const reach = run ? run.reach : reaches.length > 0 ? Math.max(...reaches) : null;
+            return { ...base, metric: "Cantilever reach", measured: reach, limit: settings.cantileverLimit, unit: "blocks", bound: "max" };
+        }
+        case "floating": {
+            const body = result.bodies.find((b) => `floating-${b.id}` === issue.id);
+            return { ...base, metric: "Blocks with no load path to the ground", measured: body ? body.blocks.length : issue.blocks.length, limit: 0, unit: "blocks", bound: "max" };
+        }
+        case "too-many-blocks":
+            return { ...base, metric: "Components used", measured: stats.blockCount, limit: settings.maxBlocks, unit: "blocks", bound: settings.maxBlocks === null ? null : "max" };
+        case "thin-features":
+            // Two findings share the kind: too little of the model kept (coverage), or thin joints that would connect floating parts.
+            return stats.coverage < COVERAGE_WARN
+                ? { ...base, metric: "Coverage (share of the model's volume inside blocks)", measured: r3(stats.coverage), limit: COVERAGE_WARN, unit: "ratio", bound: "min" }
+                : { ...base, metric: "Floating blocks a lower fill threshold would connect", measured: issue.blocks.length, limit: 0, unit: "blocks", bound: "max" };
+        case "overstressed":
+        case "highly-stressed": {
+            const peak = issue.blocks[0];
+            const u = stress && peak !== undefined ? stress.byBlock[peak] : Number.NaN;
+            return {
+                ...base,
+                metric: "Joint utilisation (share of the allowable stress)",
+                measured: Number.isFinite(u) ? r3(u) : null,
+                limit: issue.kind === "overstressed" ? STRESS_FAIL : STRESS_WARN,
+                unit: "ratio",
+                bound: "max",
+                // A joint is its peak block; the rest of the issue's blocks are the region around it.
+                cells: peak !== undefined && blocks[peak] ? [[...blocks[peak].cell]] : [],
+            };
+        }
+    }
+}
+
 /** The analysis as a plain object (what buildReportJson prints). */
 export function buildReport(result: AnalysisResult, meta: ReportMeta = {}): ReportDocument {
     const { blocks, stability, stress, assembly } = result;
@@ -128,6 +265,8 @@ export function buildReport(result: AnalysisResult, meta: ReportMeta = {}): Repo
             severity: issue.severity,
             title: issue.title,
             detail: issue.detail,
+            technical: technicalLine(issue, result),
+            technical_summary: technicalSummary(issue, result, cells(issue.blocks)),
             focus_mm: issue.focusMm.map(r1) as [number, number, number],
             blocks: issue.blocks,
             cells: cells(issue.blocks),

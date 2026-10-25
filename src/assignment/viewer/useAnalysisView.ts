@@ -10,11 +10,10 @@
  * frames the whole 1 m volume. When the scene cannot be built (its chunk is gone after a deploy), `buildFailed`
  * says so, so the stage can tell the user instead of quietly showing the plain model.
  *
- * The result it is given is the one to show: the workspace picks it (the stabilized model, or the original blocks
- * on their own for the Compare chip), and a new result replaces the scene in place, so a switch never moves the
- * camera. The colouring is the view's, resolved against the result (resolveColorBy): Overlay and a preview of the
- * stabilizer (`previewing`) are role colours, Stress without a stress analysis is status. While previewing, blocks
- * that were not in the previous result flash once.
+ * The result it is given is the one to show: the workspace picks it (the original or the stabilized version), and a
+ * new result replaces the scene in place, so a switch never moves the camera. The colouring is the view's, resolved
+ * against the result (resolveColorBy): a preview of the stabilizer (`previewing`) is in role colours, Stress without a
+ * stress analysis is status. While previewing, blocks that were not in the previous result flash once.
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { AnalysisResult, AnalysisViewState } from "@/assignment/analysis/types";
@@ -38,10 +37,13 @@ const PLACEMENT: Record<SceneLabel["kind"], { placement: Placement; offset: numb
 
 const prefersReducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/** What the stage shows when the view is not set: the block view with everything at its default. */
-const FALLBACK_VIEW: AnalysisViewState = { mode: "blocks", colorBy: "status", layerMax: 99, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
+/** The part of the view the block scene is painted from. */
+type LookOfView = Pick<AnalysisViewState, "colorBy" | "layerMax" | "showGhost" | "showCog" | "highlight">;
 
-const patchOf = (view: AnalysisViewState, analysis: AnalysisResult, previewing: boolean): BlocksViewPatch => ({
+/** What the stage shows when the view is not set: the block view with everything at its default. */
+const FALLBACK_VIEW: LookOfView = { colorBy: "status", layerMax: 99, showGhost: false, showCog: true, highlight: [] };
+
+const patchOf = (view: LookOfView, analysis: AnalysisResult, previewing: boolean): BlocksViewPatch => ({
     colorBy: resolveColorBy(view, analysis, previewing),
     layerMax: view.layerMax,
     showGhost: view.showGhost,
@@ -63,7 +65,7 @@ export interface AnalysisBridgeArgs {
     modelEpoch: number;
     url: string | null;
     theme: ViewTheme;
-    /** The result to draw (the workspace chooses between the stabilized model and the original blocks, or a preview of the stabilizer). */
+    /** The result to draw (the workspace chooses the version on stage, or a preview of the stabilizer). */
     analysis: AnalysisResult | null | undefined;
     view: AnalysisViewState | undefined;
     /** `analysis` is a preview the stabilizer streams: drawn in role colours, with the blocks each step adds flashing once. */

@@ -4,8 +4,7 @@
 //
 //   node scripts/assignment/test-projects.mjs
 //
-// Bundled with esbuild like test-store.mjs: `react` is a no-op shim, the toast library becomes a log, and the analysis
-// store is a recorder (this file is about what the projects UI asks of it, not about the analysis). No DOM, no
+// Bundled with esbuild like test-store.mjs: `react` is a no-op shim and the toast library becomes a log. No DOM, no
 // network: `fetch` is replaced by a small in-memory server.
 import { build } from "esbuild";
 import assert from "node:assert/strict";
@@ -35,24 +34,6 @@ export const toast = Object.assign(make("message"), {
 });
 export const Toaster = () => null;
 `;
-// What the projects UI asks of the analysis store: open a model's analysis, watch for its result and switch to the
-// overlay. `analysisApi.land` stands for the engine finishing a model.
-const ANALYSIS_SHIM = `
-export const analysisCalls = [];
-let state = { result: null, resultModelId: null, setCompare: (mode) => analysisCalls.push(["compare", mode]) };
-const listeners = new Set();
-export const analysisApi = {
-    land: (modelId, assembly) => {
-        const prev = state;
-        state = { ...state, resultModelId: modelId, result: { assembly } };
-        [...listeners].forEach((l) => l(state, prev));
-    },
-    clear: () => { state = { ...state, result: null, resultModelId: null }; listeners.clear(); },
-    listeners,
-};
-export const useAnalysisStore = { getState: () => state, subscribe: (l) => (listeners.add(l), () => listeners.delete(l)) };
-export const openAnalysisFor = (id) => { analysisCalls.push(["open", id]); };
-`;
 const ENTRY = `
 export * from "@/assignment/store/useWorkspaceStore";
 export * from "@/assignment/store/examples";
@@ -62,7 +43,6 @@ export * from "@/assignment/components/workspace/format";
 export * from "@/assignment/components/workspace/modelGroups";
 export * from "@/assignment/lib/api";
 export { toasts } from "@/assignment/components/ui/sonner";
-export { analysisCalls, analysisApi } from "@/assignment/store/analysis";
 `;
 
 await build({
@@ -81,11 +61,9 @@ await build({
                 const shims = {
                     "react-shim": REACT_SHIM,
                     "toast-shim": TOAST_SHIM,
-                    "analysis-shim": ANALYSIS_SHIM,
                 };
                 b.onResolve({ filter: /^react$/ }, () => ({ path: "react-shim", namespace: "shim" }));
                 b.onResolve({ filter: /^@\/assignment\/components\/ui\/sonner$/ }, () => ({ path: "toast-shim", namespace: "shim" }));
-                b.onResolve({ filter: /^@\/assignment\/store\/analysis$/ }, () => ({ path: "analysis-shim", namespace: "shim" }));
                 b.onLoad({ filter: /.*/, namespace: "shim" }, (args) => ({ contents: shims[args.path], loader: "js" }));
             },
         },
@@ -230,8 +208,6 @@ const reset = () => {
     events.length = 0;
     navigated.length = 0;
     lib.toasts.length = 0;
-    lib.analysisCalls.length = 0;
-    lib.analysisApi.clear();
     storage.clear();
     fake.examples = [example("shelf-arm"), example("footbridge")];
     fake.examplesStatus = 200;
@@ -425,6 +401,69 @@ await test("hasPaidProvider ignores the offline demo and a list that has not arr
     assert.equal(lib.hasPaidProvider([info("mock", true)]), false, "the free demo costs nothing");
     assert.equal(lib.hasPaidProvider([info("meshy", false), info("mock", true)]), false);
     assert.equal(lib.hasPaidProvider([info("meshy", true), info("mock", true)]), true);
+});
+
+await test("Muse Spark is an AI designer: a name when the server no longer lists it, a helper line, an OpenRouter badge", () => {
+    assert.equal(lib.providerLabel(undefined, "muse"), "Muse Spark 1.3", "a job made before the key was removed still has a name");
+    assert.equal(lib.providerLabel([{ ...info("muse", true), label: "Muse Spark 1.3 (live)" }], "muse"), "Muse Spark 1.3 (live)", "the server's label wins");
+    assert.equal(lib.viaLabel("openrouter"), "via OpenRouter");
+    assert.deepEqual(["fal", "tripo", "meshy", "tencent", "mock", null, undefined].map(lib.viaLabel), ["via fal", "via Tripo", "via Meshy", "via Tencent", "demo", null, null]);
+    assert.equal(lib.isDesigner("muse"), true);
+    assert.deepEqual(["hunyuan", "tripo-parts", "mock", undefined].map(lib.isDesigner), [false, false, false, false], "a model that returns parts is not a designer for that");
+    assert.equal(lib.designerNote({ id: "muse" }), "AI designer · builds the object from named parts");
+    assert.equal(lib.designerNote({ id: "hunyuan" }), null);
+    assert.equal(lib.designerNote(undefined), null);
+    // It is a usable paid model like the others: the hero offers to generate, and the picker may select it.
+    assert.equal(lib.hasPaidProvider([info("muse", true)]), true);
+    assert.deepEqual(lib.initialSelection([info("hunyuan", true), info("muse", true)], ["muse"], "hunyuan"), ["muse"]);
+    assert.deepEqual(lib.initialSelection([info("muse", false)], ["muse"], null), [], "no key, no model");
+});
+
+await test("viaSuffix: the menu row names the key once, even when the maker's line already says it", () => {
+    assert.equal(lib.viaSuffix("Meta via OpenRouter", "openrouter"), null, "the server's line for Muse");
+    assert.equal(lib.viaSuffix("meta VIA openrouter", "openrouter"), null, "whatever the case");
+    assert.equal(lib.viaSuffix("Meta", "openrouter"), "via OpenRouter");
+    assert.equal(lib.viaSuffix("Tencent", "tencent"), "via Tencent");
+    assert.equal(lib.viaSuffix("Tencent via Tencent Cloud", "tencent"), null);
+    assert.equal(lib.viaSuffix("Meta via OpenRouter", null), null, "no key: no badge");
+    assert.equal(lib.viaSuffix("Meta via OpenRouter", "fal"), "via fal", "another key than the one the line names still shows");
+    assert.equal(lib.viaSuffix("Offline", "mock"), "demo");
+});
+
+await test("stageText: the card draws its own dots, so a stage that ends in an ellipsis loses it", () => {
+    assert.equal(lib.stageText("Designing the parts\u2026"), "Designing the parts");
+    assert.equal(lib.stageText("Building the 3D model..."), "Building the 3D model");
+    assert.equal(lib.stageText("Building the 3D model"), "Building the 3D model");
+    assert.equal(lib.stageText("Waiting for provider\u2026 "), "Waiting for provider");
+    assert.equal(lib.stageText("In queue (position 3)"), "In queue (position 3)", "nothing else is touched");
+    for (const empty of ["", "  ", "\u2026", null, undefined]) assert.equal(lib.stageText(empty), "Queued", JSON.stringify(empty));
+});
+
+await test("a project is a new chat only when it has no message, no model and no job (the hero never covers a model)", () => {
+    const has = () => lib.selectProjectHasContent(S());
+    assert.equal(has(), false, "a new chat");
+    const { original, detail } = exampleProject();
+    // A project made through the API: a model, and no chat at all.
+    S().setProject({ ...detail, models: [original], jobs: [], data: { messages: [], active_model_id: original.id } });
+    assert.equal(S().messages.length, 0);
+    assert.equal(has(), true, "a model alone is content");
+    // Messages alone (the first send's message before its model lands).
+    S().setProject({ ...detail, models: [], jobs: [], data: { messages: detail.data.messages, active_model_id: null } });
+    assert.equal(has(), true, "a message alone is content");
+    // A job alone (a run begun in another tab, whose message was never saved).
+    S().setProject({ ...detail, models: [], jobs: [{ id: uuid(), project_id: detail.id, provider: "muse", prompt: "a lamp", status: "running", progress: 10, stage: "Designing the parts\u2026", created_at: iso(), updated_at: iso(), model: null, error: null }], data: { messages: [], active_model_id: null } });
+    assert.equal(has(), true, "a running job alone is content");
+    // A project with nothing in it is empty, as is the chat that was just cleared.
+    S().setProject({ ...detail, models: [], jobs: [], data: { messages: [], active_model_id: null } });
+    assert.equal(has(), false, "an empty project still starts with the hero");
+    S().setProject({ ...detail, models: [original], jobs: [], data: { messages: [], active_model_id: original.id } });
+    S().startNewChat();
+    assert.equal(has(), false, "starting over clears it");
+    // Adding a model to an empty chat flips it, and deleting the last one flips it back.
+    S().addModel(original);
+    assert.equal(has(), true);
+    S().removeModels([original.id]);
+    assert.equal(has(), false);
 });
 
 await test("the hero starts on examples unless something paid can generate (and there are examples to open)", () => {
@@ -718,49 +757,9 @@ await test("deleteStabilized keeps everything when the server says no", async ()
     assert.equal(lib.toasts.at(-1).kind, "error");
 });
 
-/** What openAnalysisFor does to the workspace, which the shim leaves out. */
-const showing = (m) => S().setProject({ ...exampleProject().detail, models: [m], data: { messages: [], active_model_id: m.id } });
-
-await test("openCompare on the model already analysed switches to the overlay at once", () => {
-    const twin = stabilizedOf(model());
-    showing(twin);
-    lib.analysisApi.land(twin.id, { roleCounts: [10, 4] });
-    lib.analysisCalls.length = 0;
-    lib.openCompare(twin);
-    assert.deepEqual(lib.analysisCalls, [["open", twin.id], ["compare", "overlay"]]);
-});
-
-await test("openCompare waits for the model's analysis to land, then asks for the overlay once", async () => {
-    const twin = stabilizedOf(model());
-    showing(twin);
-    lib.openCompare(twin);
-    assert.deepEqual(lib.analysisCalls, [["open", twin.id]], "nothing to compare yet");
-    lib.analysisApi.land("some-other-model", { roleCounts: [1] });
-    await sleep(5);
-    assert.deepEqual(lib.analysisCalls, [["open", twin.id]], "another model's result is not it");
-    lib.analysisApi.land(twin.id, null);
-    await sleep(5);
-    assert.deepEqual(lib.analysisCalls, [["open", twin.id]], "a result without an assembly has no halves");
-    lib.analysisApi.land(twin.id, { roleCounts: [10, 4] });
-    await sleep(5);
-    assert.deepEqual(lib.analysisCalls, [["open", twin.id], ["compare", "overlay"]]);
-    assert.equal(lib.analysisApi.listeners.size, 0, "the watch ends with the switch");
-    lib.analysisApi.land(twin.id, { roleCounts: [10, 5] });
-    await sleep(5);
-    assert.equal(lib.analysisCalls.length, 2, "a later run does not switch it again");
-});
-
-await test("openCompare gives up when another model is chosen first", async () => {
-    const twin = stabilizedOf(model());
-    const other = model();
-    S().setProject({ ...exampleProject().detail, models: [twin, other], data: { messages: [], active_model_id: twin.id } });
-    lib.openCompare(twin);
-    S().setActiveModel(other.id);
-    lib.analysisApi.land("x", { roleCounts: [1] }); // any store update after the switch
-    assert.equal(lib.analysisApi.listeners.size, 0, "unsubscribed");
-    lib.analysisApi.land(twin.id, { roleCounts: [10, 4] });
-    await sleep(5);
-    assert.deepEqual(lib.analysisCalls.map((c) => c[0]), ["open"], "the overlay was never forced on the other model");
+await test("there is no Compare any more: the top bar switches versions, so the models module only deletes them", () => {
+    assert.ok(!("openCompare" in lib), "no way to open a version on an overlay from here");
+    assert.deepEqual(Object.keys(lib).filter((k) => /compare/i.test(k)), []);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

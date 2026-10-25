@@ -45,8 +45,10 @@ export { React, renderToStaticMarkup, MemoryRouter };
 export * from "@/assignment/store/useWorkspaceStore";
 export * from "@/assignment/store/analysis";
 export * from "@/assignment/store/analysisLogic";
+export { verdictOfResult } from "@/assignment/components/analysis/useAnalysis";
 export * from "@/assignment/store/stabilize";
 export * from "@/assignment/store/stabilizeLogic";
+export * from "@/assignment/store/analysisBrief";
 export * from "@/assignment/store/examples";
 export * from "@/assignment/lib/api";
 export { analyzeAssembly } from "@/assignment/analysis/assembly";
@@ -57,9 +59,13 @@ export { readAssemblyGlb } from "@/assignment/shared/assemblyGlb";
 export { STRESS_WARN_SHARE } from "@/assignment/viewer/analysisGeometry";
 export { StabilizeCard } from "@/assignment/components/analysis/StabilizeCard";
 export { StabilizeTimeline } from "@/assignment/components/analysis/StabilizeTimeline";
-export { StressSection } from "@/assignment/components/analysis/StressSection";
-export { AnalysisPeek, AnalysisDock } from "@/assignment/components/analysis/AnalysisDock";
-export { CompareNotice } from "@/assignment/components/analysis/CompareNotice";
+export { AnalysisDock } from "@/assignment/components/analysis/AnalysisDock";
+export { AnalysisPeekCard } from "@/assignment/components/analysis/AnalysisPeekCard";
+export { SelectionPeek } from "@/assignment/components/analysis/SelectionPeek";
+export { StabilizeAction } from "@/assignment/components/analysis/StabilizeAction";
+export { StabilizerLog } from "@/assignment/components/analysis/StabilizerLog";
+export { StrengthDetails } from "@/assignment/components/analysis/StrengthDetails";
+export { useStabilizerLog } from "@/assignment/components/analysis/useStabilizerLog";
 export { HeroStart } from "@/assignment/components/chat/HeroStart";
 export { ModelCard } from "@/assignment/components/chat/ModelCard";
 export { toasts } from "@/assignment/components/ui/sonner";
@@ -124,6 +130,8 @@ const lib = await import(pathToFileURL(path.join(outDir, "bundle.mjs")).href);
 const { React, renderToStaticMarkup, MemoryRouter } = lib;
 const h = React.createElement;
 const render = (el) => renderToStaticMarkup(el);
+/** Text as it stands in markup: "Won't stand" is "Won&#x27;t stand". */
+const esc = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 
 let passed = 0;
 const failures = [];
@@ -191,7 +199,7 @@ const stub = (over = {}) => ({
 });
 const VERDICT = (kind, short) => ({ kind, errors: kind === "fail" ? 2 : 0, warnings: kind === "warn" ? 1 : 0, blocks: 28, custom: null, headline: short, short });
 
-const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
+const INITIAL_VIEW = { colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], focus: null };
 function resetAll() {
     lib.setStabilizeDeps();
     if (ST().status === "running") ST().cancel();
@@ -202,8 +210,8 @@ function resetAll() {
     });
     lib.useAnalysisStore.setState({
         settings: lib.sanitizeSettings(null), loaded: null, viewerFailure: null, run: lib.IDLE_RUN, result: null, resultModelId: null,
-        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, colorChoice: "status", originalResult: null, originalFor: null,
-        originalState: "idle", pendingCompare: null, preview: null, selection: null, stepSelection: null, selectionSerial: 0, layerRaised: false,
+        blockIssues: new Map(), summaries: {}, view: INITIAL_VIEW, colorChoice: "status",
+        preview: null, selection: null, stepSelection: null, selectionSerial: 0, layerRaised: false,
         hoverIssueId: null, attempt: 0, panelOpen: true, sheetOpen: false, openRequest: 0,
     });
     lib.useWorkspaceStore.setState({ models: [], activeModelId: null, activeProjectId: null, messages: [], providers: null });
@@ -242,15 +250,15 @@ await test("ux-1: one remaining problem reads 'remains', several 'remain'", () =
 await test("ux-1: a run that added nothing says why, from the way it stopped", () => {
     const options = { targetUtilisation: 0.9, maxBlocks: 50 };
     const stable = lib.nothingLine({ stop: "stable", before: metrics({ blocks: 85, max_utilisation: 0.846 }) }, { ...options, targetUtilisation: 0.9 });
-    assert.match(stable, /already meets the target \(peak stress 85% against 90%\)/);
+    assert.match(stable, /already meets the aim \(strength used 85%, aim under 90%\)/);
     assert.doesNotMatch(stable, /no move/i);
-    assert.match(lib.nothingLine({ stop: "stable", before: metrics({ max_utilisation: null }) }, options), /^This model already meets the target\. /);
+    assert.match(lib.nothingLine({ stop: "stable", before: metrics({ max_utilisation: null }) }, options), /^This model already meets the aim\. /);
     const budget = lib.nothingLine({ stop: "max-blocks", before: metrics({ blocks: 85 }) }, options);
     assert.match(budget, /block budget \(50 blocks\) leaves no room: the model has 85 blocks already/);
-    assert.match(budget, /Raise the budget in Options/);
-    assert.match(lib.nothingLine({ stop: "no-improving-move", before: metrics() }, { targetUtilisation: 0.75, maxBlocks: 120 }), /no move that improves this model within the options \(target stress 75%, up to 120 blocks\)/);
+    assert.match(budget, /Raise the (block )?budget in (Options|Settings)/);
+    assert.match(lib.nothingLine({ stop: "no-improving-move", before: metrics() }, { targetUtilisation: 0.75, maxBlocks: 120 }), /no move that improves this model within the options \(aim for strength used under 75%, up to 120 blocks\)/);
     assert.match(lib.nothingLine({ stop: "time-budget", before: metrics() }, options), /stopped before it added anything\. It ran out of time\./);
-    assert.match(lib.nothingLine({ stop: "no-improving-move", before: metrics() }, null), /target stress 75%, up to the block budget/, "without options the defaults are named");
+    assert.match(lib.nothingLine({ stop: "no-improving-move", before: metrics() }, null), /aim for strength used under 75%, up to the block budget/, "without options the defaults are named");
 });
 
 await test("ux-1: the banner for a run that added nothing names the reason (rendered)", () => {
@@ -266,19 +274,26 @@ await test("ux-1: the banner for a run that added nothing names the reason (rend
     assert.doesNotMatch(html, /found no move/);
 });
 
-await test("ux-1: the saved banner is green only when the report has nothing left to say", () => {
+await test("ux-1: a stabilized version's row is green only when the report has nothing left to say (rendered)", () => {
     const m = model("m1");
-    const kid = model("s1", { kind: "stabilized", source_model_id: "m1", derived: derivedMeta() });
-    lib.useWorkspaceStore.setState({ models: [m, kid], activeModelId: "s1" });
-    const base = { status: "saved", sourceModelId: "m1", sourcePrompt: "a shelf", savedModelId: "s1", steps: [], moves: [] };
-    const card = () => render(h(lib.StabilizeCard, { model: kid, result: measured(plainDesc(armCells(5))), verdict: VERDICT("pass", "Stable"), analysing: false }));
-    lib.useStabilizeStore.setState({ ...base, result: stub({ after: metrics({ warnings: 1 }), meta: derivedMeta({ after: metrics({ warnings: 1 }) }) }) });
-    const warned = card();
-    assert.match(warned, /data-testid="stabilize-saved"/);
-    assert.match(warned, /1 warning/);
-    assert.doesNotMatch(warned, /all checks pass/);
-    lib.useStabilizeStore.setState({ result: stub() });
-    assert.match(card(), /all checks pass/);
+    const kidWith = (after) => model("s1", { kind: "stabilized", source_model_id: "m1", derived: derivedMeta({ after }) });
+    const base = { status: "saved", sourceModelId: "m1", sourcePrompt: "a shelf", savedModelId: "s1", steps: [], moves: [], result: stub() };
+    const card = (kid, verdict) => {
+        lib.useWorkspaceStore.setState({ models: [m, kid], activeModelId: "s1" });
+        return render(h(lib.StabilizeCard, { model: kid, result: measured(plainDesc(armCells(5))), verdict, analysing: false }));
+    };
+    lib.useStabilizeStore.setState(base);
+    const clean = card(kidWith(metrics()), VERDICT("pass", "Stable"));
+    assert.match(clean, /data-testid="stabilize-saved"[^>]*data-complete="true"/);
+    assert.match(clean, />Stabilized</);
+    assert.match(clean, /\+4 blocks/);
+    assert.doesNotMatch(clean, /stabilize-start/, "nothing left to fix: no button");
+    const warned = card(kidWith(metrics({ warnings: 1 })), { ...VERDICT("warn", "1 warning"), warnings: 1 });
+    assert.match(warned, /data-testid="stabilize-saved"[^>]*data-complete="false"/);
+    assert.match(warned, /Stabilized, 1 warning left/);
+    assert.doesNotMatch(warned, /data-complete="true"/);
+    assert.match(warned, /data-testid="stabilize-start"/);
+    assert.match(warned, /Stabilize again/, "the way on is the one button");
 });
 
 // ================= ux-2: the run is visible from the pill, and the sheet gets out of its way =================
@@ -320,28 +335,56 @@ await test("ux-2: starting a run folds the phone's report sheet away so the stag
     ST().cancel();
 });
 
-await test("ux-2: the collapsed pill and the phone's pill carry the run, and Stop only while it runs (rendered)", () => {
-    const snapshot = { phase: "ready", result: null, verdict: VERDICT("fail", "3 problems"), run: lib.IDLE_RUN, viewResult: null, previewResult: null, ready: true, unavailable: null };
-    const peek = () => render(h(lib.AnalysisPeek, { snapshot }));
+await test("ux-2: the collapsed pill carries the run, and Stop only while it runs (rendered)", () => {
+    const result = measured(plainDesc(armCells(5)));
+    const snapshot = { phase: "done", result, verdict: lib.verdictOfResult(result), run: lib.IDLE_RUN, viewResult: null, previewResult: null, ready: true, unavailable: null };
     const dock = () => render(h(lib.AnalysisDock, { model: null, snapshot }));
+    const pill = lib.verdictSentence(result).pill;
     lib.useAnalysisStore.setState({ panelOpen: false });
-    assert.match(peek(), /3 problems/);
-    assert.doesNotMatch(peek(), /analysis-stop/);
+    assert.ok(pill.length > 0);
+    assert.ok(dock().includes(esc(pill)), `the pill says the answer in a few words: ${pill}`);
+    assert.doesNotMatch(dock(), /analysis-stop/);
     lib.useStabilizeStore.setState({ status: "running", steps: [stepLog(1, "column", 4), stepLog(2, "footing", 1)] });
-    for (const html of [peek(), dock()]) {
-        assert.match(html, /Stabilizing… 2 steps/);
-        assert.match(html, /data-testid="analysis-stop"/);
-        assert.doesNotMatch(html, /3 problems/, "the run is the news");
-    }
+    assert.match(dock(), /Stabilizing… 2 steps/);
+    assert.match(dock(), /data-testid="analysis-stop"/);
+    assert.ok(!dock().includes(esc(pill)), "the run is the news");
     lib.useStabilizeStore.setState({ status: "canceled" });
-    for (const html of [peek(), dock()]) {
-        assert.match(html, /Stopped: save or discard/);
-        assert.doesNotMatch(html, /analysis-stop/);
-    }
+    assert.match(dock(), /Stopped: save or discard/);
+    assert.doesNotMatch(dock(), /analysis-stop/);
     lib.useStabilizeStore.setState({ status: "finished", result: stub({ complete: false, meta: derivedMeta({ complete: false }) }) });
-    assert.match(peek(), /Review stabilized version/);
+    assert.match(dock(), /Review stabilized version/);
     lib.useStabilizeStore.setState({ status: "error", errorKind: "save", result: stub() });
     assert.match(dock(), /Could not save/);
+});
+
+await test("ux-2: the phone's peek card carries the answer, the figures and the action, and the run with its Stop (rendered)", () => {
+    const m = model("m1");
+    lib.useWorkspaceStore.setState({ models: [m], activeModelId: "m1" });
+    const result = measured(plainDesc(armCells(5)));
+    const snapshot = { phase: "done", result, verdict: lib.verdictOfResult(result), run: lib.IDLE_RUN, viewResult: null, previewResult: null, ready: true, unavailable: null };
+    const card = () => render(h(lib.AnalysisPeekCard, { model: m, snapshot }));
+    let html = card();
+    assert.match(html, /data-testid="analysis-peek-card"/);
+    assert.match(html, /data-testid="analysis-peek"/);
+    assert.ok(html.includes(esc(lib.verdictSentence(result).text)), "the sentence");
+    assert.equal((html.match(/data-testid="key-chip"/g) ?? []).length, 4, "four figures");
+    assert.match(html, /data-testid="stabilize-start"/);
+    assert.doesNotMatch(html, /stabilize-options|Adds supports/, "the secondary controls are in the full panel");
+    lib.useStabilizeStore.setState({ status: "running", sourceModelId: "m1", steps: [stepLog(1, "column", 4)], startMetrics: mt() });
+    html = card();
+    assert.match(html, /data-testid="stabilize-stop"/);
+    assert.doesNotMatch(html, /data-testid="stabilize-start"/);
+    assert.match(html, /Before stabilizing/);
+    // Without a model there is nothing to show.
+    assert.equal(render(h(lib.AnalysisPeekCard, { model: null, snapshot: { ...snapshot, phase: "no-model", result: null, verdict: null } })), "");
+});
+
+await test("ux-2: the phone's selection chip shows what is on the model and clears it", () => {
+    assert.equal(render(h(lib.SelectionPeek)), "");
+    lib.useAnalysisStore.setState({ selection: { ids: ["x"], check: null, label: "Arm too long: 6 blocks" } });
+    const html = render(h(lib.SelectionPeek));
+    assert.match(html, /Arm too long: 6 blocks/);
+    assert.match(html, /aria-label="Clear the highlight"/);
 });
 
 // ================= ux-3: the live list is a box of its own =================
@@ -363,18 +406,15 @@ function stressedResult() {
     return result;
 }
 
-await test("ux-4: the Stress section has a switch for the heat map, with its legend once it is on (rendered)", () => {
+await test("ux-4: the strength details list the most loaded joints with Show, and have no heat-map switch (rendered)", () => {
     const result = stressedResult();
     lib.useAnalysisStore.setState({ result, resultModelId: "m1" });
-    const before = render(h(lib.StressSection, { result }));
-    assert.match(before, /Colour blocks by stress/);
-    assert.match(before, /role="switch"[^>]*aria-checked="false"|aria-checked="false"[^>]*role="switch"/);
-    assert.doesNotMatch(before, /data-testid="stress-legend"/);
+    const html = render(h(lib.StrengthDetails, { result, onAbout() {} }));
+    assert.ok((html.match(/data-testid="stress-point"/g) ?? []).length >= 1);
+    assert.match(html, /Where it is loaded most/);
+    assert.doesNotMatch(html, /role="switch"|Colour blocks by stress|stress-legend/, "the colour is the stage's menu, and picking a point switches it");
     AS().setColorBy("stress");
     assert.equal(AS().view.colorBy, "stress");
-    const after = render(h(lib.StressSection, { result }));
-    assert.match(after, /aria-checked="true"/);
-    assert.match(after, /data-testid="stress-legend"/);
 });
 
 await test("ux-4: 'Show' on a stress point (or the stress check, or a stress issue) paints the model by stress", () => {
@@ -412,11 +452,8 @@ await test("ux-4: other picks, a click in the viewer, Overlay and the preview ke
     AS().selectIssues([stressIssue.id], { focus: false });
     assert.equal(AS().view.colorBy, "status", "a click on a block is already looking at it");
     AS().clearSelection();
-    // Overlay and the preview paint by role: showing a stress point must not take them away.
-    lib.useAnalysisStore.setState({ view: { ...AS().view, compare: "overlay", colorBy: "role" } });
-    AS().showStress();
-    assert.equal(AS().view.compare, "overlay");
-    lib.useAnalysisStore.setState({ view: { ...AS().view, compare: "stabilized", colorBy: "role" }, preview: { modelId: "m1", result } });
+    // The preview paints by role: showing a stress point must not take that away.
+    lib.useAnalysisStore.setState({ view: { ...AS().view, colorBy: "role" }, preview: { modelId: "m1", result } });
     AS().showStress();
     assert.equal(AS().colorChoice, "status");
     // No estimate (nothing on the ground): nothing to show.
@@ -443,13 +480,13 @@ await test("ux-5: on another model the banner names the model the run is for, of
     const other = card(b);
     assert.match(other, /For “a tall shelf with a very long descripti…”\. Nothing is saved yet\./);
     assert.match(other, /data-testid="stabilize-open-source"/);
-    assert.match(other, /Open that model/);
-    assert.doesNotMatch(other, /data-testid="stabilize-timeline"/, "the steps are blocks of the other model");
+    assert.match(other, /Go to that model/);
+    assert.doesNotMatch(other, /stabilize-steps-toggle|data-testid="stabilize-timeline"/, "the steps are blocks of the other model");
     assert.match(other, /Save partial/);
     const own = card(a);
     assert.doesNotMatch(own, /For “/);
     assert.doesNotMatch(own, /stabilize-open-source/);
-    assert.match(own, /data-testid="stabilize-timeline"/);
+    assert.doesNotMatch(own, /data-testid="stabilize-steps-toggle"|data-testid="timeline-step"/, "once the run is over its steps are in the details ('What the stabilizer did'), not in the strip as well");
     assert.match(own, /The blocks added so far are shown in the viewer/);
     assert.equal(lib.clipText("  a   lamp \n with   space "), "a lamp with space");
     assert.equal(lib.clipText("x".repeat(60), 10).length, 10);
@@ -518,47 +555,20 @@ await test("ux-7: a run that reached its goal shows the saving banner, not the p
     assert.doesNotMatch(html, /not fully stable|stabilize-partial/);
 });
 
-// ================= ux-8: Original while the half is made, and when it cannot be =================
+// ================= ux-8: the panel does not switch versions =================
 
-await test("ux-8: the notice says the stage has not changed yet, then that the report is about the stabilized model (rendered)", () => {
-    assert.equal(render(h(lib.CompareNotice)), "", "nothing on the stabilized view");
-    const result = measured(addedDesc(armCells(5), TIP_COLUMN));
-    lib.useAnalysisStore.setState({ result, resultModelId: "s1", view: { ...INITIAL_VIEW, compare: "original" }, originalState: "loading" });
-    let html = render(h(lib.CompareNotice));
-    assert.match(html, /data-loading="true"/);
-    assert.match(html, /Preparing the original blocks/);
-    assert.match(html, /Show stabilized/);
-    lib.useAnalysisStore.setState({ originalState: "idle", originalFor: result, originalResult: result });
-    html = render(h(lib.CompareNotice));
-    assert.match(html, /data-loading="false"/);
-    assert.match(html, /report below is about the stabilized model/);
-});
-
-await test("ux-8: when the original half cannot be made, Original goes back to the stabilized view and says so", async () => {
-    const good = measured(addedDesc(armCells(5), TIP_COLUMN));
-    // A descriptor the engine cannot read: the half's analysis throws.
-    const broken = { ...good, assembly: { ...good.assembly, descriptor: { ...good.assembly.descriptor, cells: null } } };
-    lib.useAnalysisStore.setState({ result: broken, resultModelId: "s1" });
-    AS().setCompare("original");
-    assert.equal(AS().view.compare, "original", "the chip moves at once");
-    await until(() => AS().originalState === "error");
-    assert.equal(AS().view.compare, "stabilized");
-    assert.ok(lib.toasts.some((t) => t.kind === "error" && /original blocks/i.test(t.title)));
-    // A model that never asked for Original is not touched by a failure of an earlier ask.
-    AS().ensureOriginal();
-    await until(() => AS().originalState === "error");
-    assert.equal(AS().view.compare, "stabilized");
-});
-
-await test("ux-8: when the original half is made, Original shows it", async () => {
-    const good = measured(addedDesc(armCells(5), TIP_COLUMN));
-    lib.useAnalysisStore.setState({ result: good, resultModelId: "s1" });
-    AS().setCompare("original");
-    await until(() => AS().originalResult !== null);
-    assert.equal(AS().view.compare, "original");
-    assert.equal(AS().originalState, "idle");
-    assert.equal(AS().originalFor, good);
-    assert.equal(lib.toasts.length, 0);
+await test("ux-8: an original with a stabilized version says so and points at the top bar; the panel has no Open or Compare (rendered)", () => {
+    const m = model("m1");
+    const kid = model("s1", { kind: "stabilized", source_model_id: "m1", derived: derivedMeta() });
+    lib.useWorkspaceStore.setState({ models: [m, kid], activeModelId: "m1" });
+    const html = render(h(lib.StabilizeCard, { model: m, result: measured(plainDesc(armCells(5))), verdict: VERDICT("fail", "2 problems"), analysing: false }));
+    assert.match(html, /data-testid="stabilize-ready"/);
+    assert.match(html, /Stabilized version ready/);
+    assert.match(html, /All checks pass\. Switch to it at the top/, "words, not the figures the version has itself");
+    assert.match(html, /data-testid="stabilize-again"[^>]*>[\s\S]*?Make another version/, "a new run is still one button away, and nothing was run before for 'again'");
+    assert.doesNotMatch(html, /Run again/);
+    assert.doesNotMatch(html, /stabilize-open"|stabilize-compare|Open stabilized version|Compare|Show original|View original/);
+    assert.equal((html.match(/bg-primary text-primary-foreground/g) ?? []).length, 0, "no filled button: the way on is the bar's switch");
 });
 
 // ================= ux-9: a stabilized twin that added nothing =================
@@ -575,7 +585,6 @@ await test("ux-9: a stabilized version that added no block says 'same blocks' an
     assert.doesNotMatch(same, /\+0 blocks/);
     const more = render(router(h(lib.ModelCard, { model: withBlocks, models: [original, withBlocks], active: false, onView() {} })));
     assert.match(more, /\+4 blocks/);
-    assert.match(more, /Compare/);
 });
 
 // ================= ux-10: the hero does not start on the wrong row =================
@@ -690,24 +699,35 @@ await test("ux-11: the Saving banner keeps Download GLB in reach", () => {
     assert.doesNotMatch(html, /data-testid="stabilize-discard"/, "it cannot be discarded while it uploads");
 });
 
-// ================= ux-12: the log of a saved run is one button away =================
+// ================= ux-12: the log of a saved version is one section away =================
 
-await test("ux-12: the saved banner offers the steps of the run behind 'View n steps', once the version is on screen", () => {
+await test("ux-12: a stabilized version's log is its own section: figures, what was added, and the steps (rendered)", () => {
     const m = model("m1");
-    const kid = model("s1", { kind: "stabilized", source_model_id: "m1", derived: derivedMeta() });
+    const meta = derivedMeta({ added_blocks: 4, added_by_role: { column: 3, footing: 1 }, steps: [stepLog(1, "column", 3), stepLog(2, "footing", 1)] });
+    const kid = model("s1", { kind: "stabilized", source_model_id: "m1", derived: meta });
     lib.useWorkspaceStore.setState({ models: [m, kid], activeModelId: "s1" });
-    const steps = [stepLog(1, "column", 3), stepLog(2, "footing", 1)];
-    lib.useStabilizeStore.setState({ status: "saved", sourceModelId: "m1", sourcePrompt: "a shelf", savedModelId: "s1", result: stub(), steps, moves: [] });
     const saved = measured(addedDesc(armCells(5), TIP_COLUMN));
-    const card = () => render(h(lib.StabilizeCard, { model: kid, result: saved, verdict: VERDICT("pass", "Stable"), analysing: false }));
-    // The new version's analysis has not landed yet: its steps cannot be shown.
-    assert.doesNotMatch(card(), /stabilize-steps-toggle/);
-    lib.useAnalysisStore.setState({ result: saved, resultModelId: "s1" });
-    const html = card();
-    assert.match(html, /data-testid="stabilize-steps-toggle"/);
-    assert.match(html, /View 2 steps/);
-    assert.match(html, /aria-expanded="false"/);
-    assert.doesNotMatch(html, /data-testid="timeline-step"/, "collapsed by default");
+    const log = { source: "saved", steps: meta.steps, added: meta.added_blocks, meta };
+    const html = render(h(lib.StabilizerLog, { log, result: saved }));
+    assert.equal((html.match(/data-testid="timeline-step"/g) ?? []).length, 2);
+    assert.match(html, /Columns/);
+    assert.match(html, /Strength used/);
+    // The section exists for the version, not for the original (and a run that is not saved yet has its own).
+    const hook = (model1) => {
+        let seen = null;
+        const Probe = () => {
+            seen = lib.useStabilizerLog(model1);
+            return null;
+        };
+        render(h(Probe));
+        return seen;
+    };
+    assert.equal(hook(kid).source, "saved");
+    assert.equal(hook(kid).steps.length, 2);
+    assert.equal(hook(m), null);
+    lib.useStabilizeStore.setState({ status: "canceled", sourceModelId: "m1", steps: [stepLog(1, "column", 3)], moves: [] });
+    assert.equal(hook(m).source, "run", "a stopped run waits for its decision with its log");
+    assert.equal(hook(m).steps.length, 1);
 });
 
 // ================= the timeline's offset for a saved run =================

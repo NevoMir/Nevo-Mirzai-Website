@@ -207,6 +207,12 @@ export interface AssemblyInfo {
 export interface AnalysisResult {
     settings: AnalysisSettings;
     gridSize: Vec3; // cells per axis (10, 10, 10)
+    /**
+     * Where the lattice sits in the frame of the mesh the viewer draws it over. For a mesh: its own voxelisation transform.
+     * For a stabilized model: the transform of the mesh on stage, which is its SOURCE's (the same one voxelising the source
+     * gives, voxelize.ts transformForBounds) while the viewer shows the original, or the stabilized GLB's own when that is
+     * what is on stage (the source is gone).
+     */
     transform: AnalysisTransform;
     sizeMm: Vec3; // the scaled model's bounding box
     blocks: Block[];
@@ -227,13 +233,6 @@ export interface AnalysisResult {
 
 export type AnalysisColorBy = "status" | "reach" | "layer" | "stress" | "role";
 
-/**
- * Which version of a stabilized model the stage shows. "stabilized": the model as it is. "original": only the blocks
- * that were in the analysed model, analysed on their own (so its floating parts and long arms show). "overlay": the
- * stabilized model with its added blocks in their role colours (forces colorBy "role").
- */
-export type CompareMode = "stabilized" | "original" | "overlay";
-
 /** How the viewer shows an analysis. Owned by the workspace, passed to <GlbViewer analysisView>. */
 export interface AnalysisViewState {
     mode: "model" | "blocks"; // "blocks" = the analysis view (block assembly + overlays)
@@ -242,7 +241,6 @@ export interface AnalysisViewState {
     showGhost: boolean; // the original model, faint, inside the blocks
     showCog: boolean; // COG marker, drop line, support base outline
     highlight: number[]; // block indices to emphasise (others dimmed); [] = none
-    compare: CompareMode; // only meaningful for a stabilized model
     /** Bumped to ask the viewer to frame `focusMm` (an issue was clicked); the viewer animates the camera to it. */
     focus: { mm: Vec3; token: number; label?: string } | null;
 }
@@ -254,7 +252,6 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisViewState = {
     showGhost: false,
     showCog: true,
     highlight: [],
-    compare: "stabilized",
     focus: null,
 };
 

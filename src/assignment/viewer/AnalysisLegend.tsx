@@ -1,8 +1,9 @@
 /**
- * What the block colours mean, on the stage beside the blocks: the four statuses with their counts, the reach
- * ramp against the cantilever limit, the layer ramp, the stress ramp (with its ticks, the blocks that carry no
- * load and how many joints are over the limits), or the roles of a stabilized model with their counts. The swatches
- * are drawn from the very functions the 3D view colours blocks with, so the two cannot drift apart.
+ * What the block colours mean, on the stage right under the Colour chip (the only legend there is): the four statuses
+ * with their counts, the overhang ramp against the longest allowed overhang, the layer ramp, the strength ramp (with
+ * its ticks, the blocks that carry no weight, how many are heavily loaded (75-100%) or overloaded (above 100%), and that it counts
+ * the model's own weight only), or the added blocks of a stabilized model with their counts. The swatches are drawn from the very
+ * functions the 3D view colours blocks with, so the two cannot drift apart.
  */
 import { BLOCK_ROLES } from "@/assignment/shared/contract";
 import type { AnalysisColorBy, AnalysisResult, BlockStatus } from "@/assignment/analysis/types";
@@ -23,6 +24,7 @@ import {
     resolveColorBy,
     roleColor,
     statusColor,
+    stressBands,
     stressColor,
     stressGradientCss,
     topLayer,
@@ -60,10 +62,12 @@ export function AnalysisLegend({ analysis, colorBy: asked, theme, className }: {
     if (colorBy === "stress" && analysis.stress) {
         const stress = analysis.stress;
         const material = MATERIAL_LABELS[stress.material] ?? stress.material;
+        // The same three bands the report's Strength section prints (the estimate's own count of "stressed" blocks includes the overloaded ones).
+        const { over, heavy } = stressBands(stress);
         return (
-            <div role="group" aria-label="Block colours: joint stress" className={box}>
+            <div role="group" aria-label="Block colours: strength used" className={box}>
                 <span className="flex items-center gap-2">
-                    <span className="text-muted-foreground">% of allowable joint stress (self-weight, {material})</span>
+                    <span className="text-muted-foreground">Strength used (% of what the joints take)</span>
                     {/* The bar with a tick and a label at 0, 25, 50, 75 and 100%+: the colours are not the only cue. */}
                     <span aria-hidden className="relative block h-[22px] w-40 shrink-0">
                         <span className="absolute inset-x-0 top-0 block h-2 rounded-sm ring-1 ring-black/20" style={{ background: stressGradientCss() }} />
@@ -77,21 +81,23 @@ export function AnalysisLegend({ analysis, colorBy: asked, theme, className }: {
                 </span>
                 <span className="flex items-center gap-1.5">
                     <Swatch color={stressColor(STRESS_WARN_SHARE)} />
-                    Above {percentText(STRESS_WARN_SHARE)}
-                    <span className={cn("tabular-nums", stress.stressedBlocks === 0 ? "text-muted-foreground" : "font-medium")}>{stress.stressedBlocks}</span>
+                    Heavily loaded ({Math.round(STRESS_WARN_SHARE * 100)}–{percentText(STRESS_FAIL_SHARE)})
+                    <span className={cn("tabular-nums", heavy === 0 ? "text-muted-foreground" : "font-medium")}>{heavy}</span>
                 </span>
                 <span className="flex items-center gap-1.5">
                     <Swatch color={stressColor(STRESS_FAIL_SHARE)} />
-                    Above {percentText(STRESS_FAIL_SHARE)}
-                    <span className={cn("tabular-nums", stress.overstressedBlocks === 0 ? "text-muted-foreground" : "font-medium")}>{stress.overstressedBlocks}</span>
+                    Overloaded (above {percentText(STRESS_FAIL_SHARE)})
+                    <span className={cn("tabular-nums", over === 0 ? "text-muted-foreground" : "font-medium")}>{over}</span>
                 </span>
                 {stress.unsupportedBlocks > 0 && (
                     <span className="flex items-center gap-1.5">
                         <Swatch color={stressColor(Number.NaN, theme)} />
-                        No load path (floating)
+                        Not carrying weight (floating)
                         <span className="tabular-nums text-muted-foreground">{stress.unsupportedBlocks}</span>
                     </span>
                 )}
+                {/* In words on the stage, not in a tooltip: the chip stack does not take the pointer, and a touch screen has no hover. */}
+                <span className="text-muted-foreground">From its own weight only ({material})</span>
             </div>
         );
     }
@@ -99,7 +105,7 @@ export function AnalysisLegend({ analysis, colorBy: asked, theme, className }: {
     if (colorBy === "role" && analysis.assembly) {
         const byRole = countByRole(analysis.blocks);
         return (
-            <ul role="group" aria-label="Block colours: role" className={box}>
+            <ul role="group" aria-label="Block colours: added blocks" className={box}>
                 {BLOCK_ROLES.filter((role) => role === "original" || byRole[role] > 0).map((role) => (
                     <li key={role} className="flex items-center gap-1.5">
                         <Swatch color={roleColor(role, theme)} />
@@ -114,24 +120,24 @@ export function AnalysisLegend({ analysis, colorBy: asked, theme, className }: {
     if (colorBy === "reach") {
         const steps = Array.from({ length: limit }, (_, i) => reachColor(i + 1, limit));
         return (
-            <div role="group" aria-label="Block colours: blocks from support" className={box}>
+            <div role="group" aria-label="Block colours: overhang" className={box}>
                 <span className="flex items-center gap-1.5">
                     <Swatch color={statusColor("supported", theme)} />
-                    On a support
+                    {STATUS_LABELS.supported}
                 </span>
                 <span className="flex items-center gap-1.5">
                     <span className="tabular-nums text-muted-foreground">1</span>
                     <Ramp colors={steps.length > 1 ? steps : [steps[0], steps[0]]} />
-                    <span className="tabular-nums text-muted-foreground">{limit} blocks out</span>
+                    <span className="tabular-nums text-muted-foreground">{limit} blocks from support</span>
                 </span>
                 <span className="flex items-center gap-1.5">
                     <Swatch color={reachColor(limit + 1, limit)} />
-                    Over the limit
+                    {STATUS_LABELS.overreach}
                 </span>
                 {counts.floating > 0 && (
                     <span className="flex items-center gap-1.5">
                         <Swatch color={statusColor("floating", theme)} />
-                        Floating
+                        {STATUS_LABELS.floating}
                     </span>
                 )}
             </div>
@@ -140,9 +146,9 @@ export function AnalysisLegend({ analysis, colorBy: asked, theme, className }: {
 
     const stops = Array.from({ length: Math.min(layers, 12) }, (_, i) => layerColor(Math.round((i / Math.max(1, Math.min(layers, 12) - 1)) * (layers - 1)), layers));
     return (
-        <div role="group" aria-label="Block colours: layer" className={box}>
+        <div role="group" aria-label="Block colours: layers" className={box}>
             <span className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Layer</span>
+                <span className="text-muted-foreground">Layers</span>
                 <span className="tabular-nums">1</span>
                 <Ramp colors={stops.length > 1 ? stops : [stops[0], stops[0]]} />
                 <span className="tabular-nums">{layers}</span>

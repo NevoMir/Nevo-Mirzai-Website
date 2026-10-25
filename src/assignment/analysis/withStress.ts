@@ -1,5 +1,5 @@
 // The two stages of an analysis in one place: the structural analysis (analyze.ts, assembly.ts), then the joint-stress
-// estimate (stress.ts). The analysis worker, runAnalysis's main-thread fallback, the stabilizer and the compare view all
+// estimate (stress.ts). The analysis worker, runAnalysis's main-thread fallback, and the stabilizer all
 // go through here, so a result means the same wherever it was made.
 //
 // Loaded lazily by everything that is not the worker: it pulls in the FEM solver and its WebAssembly loader.
@@ -69,7 +69,7 @@ export async function withStress(result: AnalysisResult, options: StressOptions 
 /**
  * Analyses a block assembly (no voxelising) and estimates its stress. `soup`: the bounds of the GLB's triangles in the
  * viewer's frame, or null for a headless analysis. `frame`: the assembly those bounds belong to, when `desc` is only a
- * part of it (the compare view's "original" blocks).
+ * part of it (for instance the original blocks of a stabilized model, analysed on their own).
  */
 export async function analyzeAssemblyWithStress(
     desc: AssemblyDescriptor,

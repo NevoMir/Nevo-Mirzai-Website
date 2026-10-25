@@ -6,7 +6,13 @@
 // scene on the stub context (levels of detail, picking, labels, disposal). And the stabilized-model side: the
 // stress ramp and its legend, role colours, the colouring a result can do, the stress tooltip and pins, blocks that
 // flash when the stabilizer's preview adds them, the assembly a GLB declares (loaded through GLTFLoader), its roles
-// in the parts list, and the hook's compare / preview behaviour (the scene is swapped in place, the camera is kept).
+// in the parts list, and the hook's version-switch / preview behaviour (the scene is swapped in place, the camera is kept).
+// The stage's own view controls: the Colour chip's options (and why one is greyed), the layer cut as the Layers button and its
+// popover read it, the legend wording, and the markup of the chip, the toolbar and the legend (server-rendered, so a menu
+// that is closed shows only its trigger).
+// Last, the added supports (a stabilized model shown on its source mesh): which blocks they are, the chip / tooltip / card
+// wording, the cell -> display mapping under a transform, the cube layer (colours, edges, picking, marks, disposal), the
+// overlay in the model's scene (bounds, framing, picking against the parts) and the hook that builds and swaps it.
 //
 //   node scripts/assignment/test-viewer.mjs
 //
@@ -36,6 +42,7 @@ const loadGlbModule = await viewer("loadGlb");
 const { buildGlbScene, disposeObject } = await viewer("glbScene");
 const { mountOrbitViewer, createEmptyViewerScene } = await viewer("orbitViewer");
 const geom = await viewer("analysisGeometry");
+const vocab = await import("../../src/assignment/components/analysis/vocabulary.ts");
 const labelsModule = await viewer("overlayLabels");
 const { createBlocksScene } = await viewer("analysisLayer");
 const { planFocus } = await viewer("analysisFocus");
@@ -1553,17 +1560,25 @@ await test("colours: statuses per theme, the reach ramp against the limit, the l
     assert.ok(b > 0.2);
 });
 
-await test("a block's tooltip says where it is and why: supported, cantilever, overreach, floating", () => {
+await test("a block's tooltip says where it is and why: supported, overhang, overhang too long, floating", () => {
     const a = makeAnalysis();
     const info = (i) => geom.describeBlock(a.blocks[i], a.settings);
-    assert.equal(info(0).text, "Block (4, 4, 0) · z 0–100 mm · Supported · rests on the ground");
+    assert.equal(info(0).text, "Block, 0–100 mm up · Supported · rests on the ground");
     assert.equal(info(3).detail, "carried down to the ground");
-    assert.equal(info(6).text, "Block (5, 4, 5) · z 500–600 mm · Cantilever · 1 block from support");
-    assert.equal(info(8).detail, "3 blocks from support");
-    assert.equal(info(10).text, "Block (9, 4, 5) · z 500–600 mm · Over the limit · 5 blocks from support, the limit is 4");
+    assert.equal(info(6).text, "Block, 500–600 mm up · Overhang · 1 block from the nearest support");
+    assert.equal(info(8).detail, "3 blocks from the nearest support");
+    assert.equal(info(10).text, "Block, 500–600 mm up · Overhang too long · 5 blocks from the nearest support, the limit is 4");
     assert.equal(info(10).status, "overreach");
     assert.equal(info(11).detail, "not connected to the ground");
-    assert.equal(info(11).title, "Block (1, 1, 7)");
+    assert.equal(info(11).title, "Block");
+    assert.equal(info(11).zRange, "700–800 mm up", "where it is in words, not as cell coordinates");
+    for (let i = 0; i < a.blocks.length; i++) {
+        assert.doesNotMatch(info(i).text, /\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|\bz \d|kPa/, `block ${i}: ${info(i).text}`);
+        assert.deepEqual(vocab.technicalWordsIn(info(i).text), [], `block ${i}: ${info(i).text}`);
+    }
+    // The stage speaks plainly; the engine's words (cantilever, overreach) stay in the report files.
+    assert.deepEqual(geom.STATUS_LABELS, { supported: "Supported", cantilever: "Overhang", overreach: "Overhang too long", floating: "Floating" });
+    assert.deepEqual(a.blocks.map((b) => geom.describeBlock(b, a.settings).statusLabel).filter((v, i, all) => all.indexOf(v) === i), ["Supported", "Overhang", "Overhang too long", "Floating"]);
 });
 
 await test("counts, layers and the cut", () => {
@@ -1617,7 +1632,7 @@ await test("the tip arrow starts at the pivot, points the way it tips, and reach
     near(arrow.to[0], 500 + 330, 1e-9, "past the ground point (220 mm out) by a block and a bit");
     assert.equal(geom.tipArrow(makeAnalysis({ inside: true }).stability, 100), null);
     assert.equal(geom.cogSummary(a.stability).sub, "Outside the base by 220 mm: tips over");
-    assert.equal(geom.cogSummary(makeAnalysis({ inside: true }).stability).sub, "Inside the base, 50 mm margin");
+    assert.equal(geom.cogSummary(makeAnalysis({ inside: true }).stability).sub, "Inside the base by 50 mm");
 });
 
 await test("scene labels: the 1000 mm dimensions always, the COG and tip only with the COG shown, the cut only when something is hidden", () => {
@@ -1721,7 +1736,7 @@ await test("the COG label says when floating blocks are left out of it, and keep
     assert.equal(geom.cogSummary(a.stability).note, undefined, "nothing floats: nothing to add");
     const some = geom.cogSummary(a.stability, 28);
     assert.equal(some.note, "Grounded blocks only, 28 floating left out");
-    assert.equal(some.sub, "Inside the base, 50 mm margin", "the verdict line is as it was");
+    assert.equal(some.sub, "Inside the base by 50 mm", "the verdict line is the plain one");
     assert.equal(some.tone, "ok");
     assert.equal(geom.cogSummary(makeAnalysis({ inside: false }).stability, 1).tone, "bad");
     // The scene counts them from the blocks themselves (the hand-built analysis has one floating block).
@@ -1976,7 +1991,7 @@ await test("the label builders say what the hover, the scene labels and the call
     const info = geom.describeBlock(a.blocks[10], a.settings);
     const tooltip = labelsModule.blockTooltip(info, "#ef4444");
     assert.equal(tooltip.attrs.role, "tooltip");
-    assert.ok(tooltip.textContent.includes("Block (9, 4, 5)") && tooltip.textContent.includes("z 500–600 mm") && tooltip.textContent.includes("Over the limit") && tooltip.textContent.includes("5 blocks from support"));
+    assert.ok(tooltip.textContent.includes("Block") && tooltip.textContent.includes("500–600 mm up") && !/\(9, 4, 5\)/.test(tooltip.textContent) && tooltip.textContent.includes("Overhang too long") && tooltip.textContent.includes("5 blocks from the nearest support"));
     const labels = geom.sceneLabels(a, { showCog: true, layerMax: 3 });
     const text = (id) => labelsModule.sceneLabelElement(labels.find((l) => l.id === id)).textContent;
     assert.equal(text("dim-x"), "1000 mm");
@@ -2420,7 +2435,7 @@ register("./react-shim-hooks.mjs", import.meta.url);
 const { renderHook } = await import("./react-hook-shim.mjs");
 const { useAnalysisView } = await viewer("useAnalysisView");
 
-const BLOCKS_VIEW = { mode: "blocks", colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], compare: "stabilized", focus: null };
+const BLOCKS_VIEW = { mode: "blocks", colorBy: "status", layerMax: 9, showGhost: false, showCog: true, highlight: [], focus: null };
 const wait = (ms = 15) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The hook with a stand-in viewer (it records flights and frames) and the real label layer over a fake DOM. */
@@ -2699,11 +2714,10 @@ await test("the legend bar and the blocks share one function: the bar's stops ar
     assert.equal(geom.percentText(0.734), "73%");
 });
 
-await test("the thresholds and strengths this file keeps are the engine's (it cannot import them: that pulls the FEM solver into the page)", () => {
+await test("the thresholds and labels this file keeps are the engine's (it cannot import them: that pulls the FEM solver into the page)", () => {
     assert.equal(geom.STRESS_WARN_SHARE, materialsEngine.STRESS_WARN);
     assert.equal(geom.STRESS_FAIL_SHARE, materialsEngine.STRESS_FAIL);
     for (const id of sharedContract.MATERIAL_IDS) {
-        near(geom.JOINT_TENSION_KPA[id], materialsEngine.materialOf(id).fem.jointTension / 1000, 1e-9, id);
         assert.equal(geom.MATERIAL_LABELS[id], materialsEngine.materialOf(id).label);
     }
 });
@@ -2738,44 +2752,54 @@ await test("roles: original blocks are the theme's slate, each added role has on
     assert.deepEqual(geom.countByRole(STABILIZED.blocks), { original: 12, column: 5, footing: 0, bracket: 1, bridge: 0, reinforcement: 0 });
     assert.equal(geom.ROLE_LABELS.column, "Column");
     assert.equal(geom.ROLE_PLURALS.original, "Original blocks");
-    assert.deepEqual(Object.values(sharedAssembly.ROLE_NODE_NAMES), Object.values(geom.ROLE_PLURALS), "the legend and the parts list name the roles alike");
+    assert.equal(geom.ROLE_LABELS.reinforcement, "Thicker joint");
+    assert.equal(geom.ROLE_PLURALS.reinforcement, "Thicker joints");
+    assert.equal(geom.ROLE_PLURALS.footing, "Footings");
+    // The legend, the parts list and the panel say the roles with one set of words; only the GLB's node names (the file keeps them) are older.
+    assert.deepEqual(geom.ROLE_PLURALS, vocab.ROLE_WORDS, "the legend and the panel name the roles alike");
+    assert.deepEqual(geom.STATUS_LABELS, vocab.STATUS_WORDS);
+    assert.deepEqual(geom.COLOR_MODE_LABELS, vocab.COLOR_WORDS);
+    assert.deepEqual(Object.values(sharedAssembly.ROLE_NODE_NAMES), ["Original blocks", "Columns", "Footing", "Brackets", "Bridges", "Reinforcement"], "the stored files keep their node names: renaming them would break reading a saved model");
 });
 
-await test("the colouring the stage uses: the view's, unless the result cannot do it; Overlay and a preview are role colours", () => {
+await test("the colouring the stage uses: the view's, unless the result cannot do it; a preview is in role colours", () => {
     const plain = makeAnalysis(); // a voxelised mesh: no stress, no assembly
-    const view = (colorBy, compare = "stabilized") => ({ colorBy, compare });
+    const view = (colorBy) => ({ colorBy });
     assert.equal(geom.resolveColorBy(view("stress"), plain), "status", "no stress analysis");
     assert.equal(geom.resolveColorBy(view("role"), plain), "status", "no assembly");
     assert.equal(geom.resolveColorBy(view("reach"), plain), "reach");
     assert.equal(geom.resolveColorBy(view("stress"), STABILIZED), "stress");
     assert.equal(geom.resolveColorBy(view("role"), STABILIZED), "role");
-    assert.equal(geom.resolveColorBy(view("stress", "overlay"), STABILIZED), "role", "Overlay forces role colours");
-    assert.equal(geom.resolveColorBy(view("status", "original"), STABILIZED), "status", "Original keeps the view's colouring");
+    assert.equal(geom.resolveColorBy(view("status"), STABILIZED), "status", "the version on stage does not touch the colouring");
     assert.equal(geom.resolveColorBy(view("stress"), STABILIZED, true), "role", "a preview of the stabilizer");
-    assert.equal(geom.resolveColorBy(view("stress", "overlay"), plain), "status", "Overlay means nothing for a mesh");
-    assert.equal(geom.resolveColorBy(view("stress", "overlay"), null), "status");
-    assert.equal(geom.resolveColorBy({ colorBy: "layer" }, STABILIZED), "layer", "no compare in the view");
+    assert.equal(geom.resolveColorBy(view("stress"), plain, true), "status", "a preview means nothing for a mesh");
+    assert.equal(geom.resolveColorBy(view("stress"), null), "status");
+    assert.equal(geom.resolveColorBy({ colorBy: "layer" }, STABILIZED), "layer");
 });
 
-await test("the stress tooltip: share of the allowable and the tension against it; the peak of a point has the solver's own numbers", () => {
+await test("the stress tooltip: the share used and what the joint is going through, in words; the peak of a point has the solver's own mode", () => {
     // A hand-made stress: block 0 is a point's peak (73 %, 146 of 200 kPa); block 1 is 50 %; block 2 has no load path.
     const stress = {
         material: "concrete",
         byBlock: Float32Array.from([0.73, 0.5, Number.NaN]),
         points: [{ rank: 1, blocks: [0], cell: [0, 0, 0], centreMm: [50, 50, 50], utilisation: 0.73, mode: "tension", tensionKPa: 146, allowableKPa: 200, joint: null }],
     };
-    assert.equal(geom.describeStress({ stress }, 0).text, "Stress 73% of allowable (tension 146 of 200 kPa)");
-    assert.equal(geom.describeStress({ stress }, 1).text, "Stress 50% of allowable (tension 100 of 200 kPa)", "another block: its share of the material's tension strength");
-    assert.equal(geom.describeStress({ stress: { ...stress, material: "timber" } }, 1).text, "Stress 50% of allowable (tension 200 of 400 kPa)");
-    assert.deepEqual(geom.describeStress({ stress }, 2), { utilisation: null, text: "No load path (not connected to the ground)" });
+    assert.equal(geom.describeStress({ stress }, 0).text, "Strength used 73% (being pulled apart)");
+    assert.equal(geom.describeStress({ stress }, 1).text, "Strength used 50% (being pulled apart)", "another block: its share, read as tension");
+    assert.equal(geom.describeStress({ stress: { ...stress, material: "timber" } }, 1).text, "Strength used 50% (being pulled apart)", "no kPa: the share says it for either material");
+    assert.deepEqual(geom.describeStress({ stress }, 2), { utilisation: null, text: "Not carrying weight (not connected to the ground)" });
     assert.equal(geom.describeStress({ stress }, 9), null, "a block the stress does not cover");
     assert.equal(geom.describeStress({ stress: null }, 0), null, "no stress analysis: nothing to say");
     const shear = { ...stress, points: [{ ...stress.points[0], mode: "shear" }] };
-    assert.equal(geom.describeStress({ stress: shear }, 0).text, "Stress 73% of allowable (shear)");
+    assert.equal(geom.describeStress({ stress: shear }, 0).text, "Strength used 73% (being sheared)");
+    const crush = { ...stress, points: [{ ...stress.points[0], mode: "compression" }] };
+    assert.equal(geom.describeStress({ stress: crush }, 0).text, "Strength used 73% (being crushed)");
     // On the real result: the text carries the real peak.
     const peak = ORIGINAL.stress.points[0];
     const real = geom.describeStress(ORIGINAL, peak.blocks[0]);
-    assert.equal(real.text, `Stress ${Math.round(peak.utilisation * 100)}% of allowable (tension ${Math.round(peak.tensionKPa)} of ${Math.round(peak.allowableKPa)} kPa)`);
+    assert.equal(real.text, `Strength used ${Math.round(peak.utilisation * 100)}% (${{ tension: "being pulled apart", compression: "being crushed", shear: "being sheared" }[peak.mode]})`);
+    assert.deepEqual(vocab.technicalWordsIn(real.text), [], real.text);
+    assert.doesNotMatch(real.text, /kPa|\d+ of \d+/);
 });
 
 await test("the block tooltip text says what was added and, when there is a stress analysis, the stress", () => {
@@ -2785,12 +2809,12 @@ await test("the block tooltip text says what was added and, when there is a stre
     assert.ok(plainText.text.endsWith("Column, added in step 1"));
     assert.equal(plainText.stress, undefined);
     const withStress = geom.describeBlock(column, STABILIZED.settings, geom.describeStress(STABILIZED, column.index));
-    assert.match(withStress.text, / · Column, added in step 1 · Stress \d+% of allowable \(tension \d+ of 200 kPa\)$/);
+    assert.match(withStress.text, / · Column, added in step 1 · Strength used \d+% \(being (pulled apart|crushed|sheared)\)$/);
     const original = STABILIZED.blocks.find((b) => b.role === "original");
     assert.equal(geom.describeBlock(original, STABILIZED.settings).added, undefined, "an original block was not added");
     // A mesh's block: exactly the old wording.
     const old = makeAnalysis();
-    assert.equal(geom.describeBlock(old.blocks[0], old.settings).text, "Block (4, 4, 0) · z 0–100 mm · Supported · rests on the ground");
+    assert.equal(geom.describeBlock(old.blocks[0], old.settings).text, "Block, 0–100 mm up · Supported · rests on the ground");
 });
 
 await test("the tooltip element shows the lines (fake DOM)", () => {
@@ -2849,7 +2873,7 @@ await test("the block scene paints by stress and by role from the same functions
     assert.equal(stress.labels().filter((l) => l.kind === "stress").length, 0, "the label cache follows the colouring");
     // Tooltips of the scene carry the stress.
     stress.setView({ ...DEFAULT_VIEW, colorBy: "stress" });
-    assert.match(stress.info(ORIGINAL.stress.maxBlock).text, /Stress 148% of allowable \(tension 297 of 200 kPa\)/);
+    assert.match(stress.info(ORIGINAL.stress.maxBlock).text, /Strength used 148% \(being pulled apart\)/);
     stress.dispose();
 
     const role = createBlocksScene({ analysis: STABILIZED, view: { ...DEFAULT_VIEW, colorBy: "role" }, theme: "light" });
@@ -2999,6 +3023,12 @@ await test("an assembly's GLB shows as its roles in the parts list (names, colou
     assert.equal(rows[0].triangles, scene.rows[0].triangles, "the rest of the row is untouched");
     assert.equal(assemblyParts.decorateAssemblyRows(scene.rows, null), scene.rows, "a mesh's rows are returned as they are");
     assert.equal(assemblyParts.decorateAssemblyRows([{ id: "p1", name: "Gear", triangles: 4, size: null }], STABILIZED_DESC)[0].detail, undefined, "a part that is no role stays");
+    // The file's node names for two of the roles are older words; the list says them as the panel and the legend do.
+    assert.deepEqual(
+        assemblyParts.decorateAssemblyRows([{ id: "p8", name: "Footing", triangles: 12, size: null }, { id: "p9", name: "Reinforcement", triangles: 12, size: null }], STABILIZED_DESC).map((r) => [r.id, r.name]),
+        [["p8", "Footings"], ["p9", "Thicker joints"]],
+        "the pick ids are the rows' identity; only the shown name changes",
+    );
     assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED_DESC), { original: 12, added: 6 });
     assert.deepEqual(assemblyParts.assemblyCounts(ORIGINAL_DESC), { original: 12, added: 0 });
     assert.equal(assemblyParts.roleOfPart("Columns"), "column");
@@ -3025,14 +3055,14 @@ await test("an assembly's GLB shows as its roles in the parts list (names, colou
 
 // ---------- the hook: compare, preview, pins ----------
 
-await test("hook: switching Original | Stabilized | Overlay swaps the scene in place; the camera is not touched", async () => {
+await test("hook: switching the version on stage (a new result) and the colouring swaps the scene in place; the camera is not touched", async () => {
     const t = await hookStage({ analysis: STABILIZED, view: { ...BLOCKS_VIEW, colorBy: "stress" } });
     const first = t.viewer.scene();
     assert.ok(first?.analysis === STABILIZED, "the stabilized result is on stage");
     assert.equal(t.log.fits, 1, "the first look at this model's blocks frames the volume once");
     const camera = { fits: t.log.fits, refreshes: t.log.refreshes, flights: t.log.flights.length };
-    // Original: the workspace hands over the original blocks' result.
-    await t.update({ analysis: ONLY_ORIGINAL, view: { ...t.props.view, compare: "original" } });
+    // The original version: the workspace hands over the original blocks' result.
+    await t.update({ analysis: ONLY_ORIGINAL });
     const second = t.viewer.scene();
     assert.notEqual(second, first, "a new scene");
     assert.ok(second.analysis === ONLY_ORIGINAL);
@@ -3040,16 +3070,18 @@ await test("hook: switching Original | Stabilized | Overlay swaps the scene in p
     assert.equal(t.log.fits, camera.fits, "no re-framing");
     assert.equal(t.log.refreshes, camera.refreshes, "no re-fit of the camera");
     assert.equal(t.log.flights.length, camera.flights, "no flight");
-    // Overlay: the full result again, in role colours whatever the colouring asked for.
-    await t.update({ analysis: STABILIZED, view: { ...t.props.view, compare: "overlay" } });
-    const overlay = t.viewer.scene();
-    assert.ok(overlay.analysis === STABILIZED);
-    STABILIZED.blocks.forEach((b) => assert.equal(overlay.colorOf(b.index), geom.roleColor(b.role, "light"), `block ${b.index}`));
-    assert.equal(overlay.labels().filter((l) => l.kind === "stress").length, 0, "no pins in role colours");
-    // Back to the model as it is: the asked-for colouring (stress) returns, with its pins.
-    await t.update({ view: { ...t.props.view, compare: "stabilized" } });
+    ONLY_ORIGINAL.blocks.forEach((b) => assert.equal(second.colorOf(b.index), geom.stressColor(ONLY_ORIGINAL.stress.byBlock[b.index]), "the colouring chosen survives a switch of version"));
+    // Back to the stabilized model, then "Added blocks" from the Colour menu: what was added in its role colours, no pins.
+    await t.update({ analysis: STABILIZED });
+    await t.view({ colorBy: "role" });
+    const added = t.viewer.scene();
+    assert.ok(added.analysis === STABILIZED);
+    STABILIZED.blocks.forEach((b) => assert.equal(added.colorOf(b.index), geom.roleColor(b.role, "light"), `block ${b.index}`));
+    assert.equal(added.labels().filter((l) => l.kind === "stress").length, 0, "no pins in role colours");
+    // Strength again: the colours and the pins return, on the same scene (nothing to rebuild for a colouring).
+    await t.view({ colorBy: "stress" });
     const back = t.viewer.scene();
-    assert.equal(back, overlay, "the same scene recoloured: nothing to rebuild for a colouring");
+    assert.equal(back, added, "the same scene recoloured");
     STABILIZED.blocks.forEach((b) => assert.equal(back.colorOf(b.index), geom.stressColor(STABILIZED.stress.byBlock[b.index])));
     assert.equal(back.labels().filter((l) => l.kind === "stress").length, 3);
     assert.equal(t.log.fits, camera.fits);
@@ -3104,9 +3136,9 @@ await test("hook: a preview of the stabilizer is drawn in role colours and the b
 });
 
 await test("hook: a mesh's block view is unchanged by all of this (status colours, no pins, no flash)", async () => {
-    const t = await hookStage({ view: { ...BLOCKS_VIEW, colorBy: "role", compare: "overlay" } });
+    const t = await hookStage({ view: { ...BLOCKS_VIEW, colorBy: "role" } });
     const scene = t.viewer.scene();
-    assert.equal(scene.colorOf(0), geom.statusColor("supported", "light"), "role and overlay mean nothing for a mesh");
+    assert.equal(scene.colorOf(0), geom.statusColor("supported", "light"), "added blocks mean nothing for a mesh");
     assert.equal(scene.flashing(), false);
     assert.equal(scene.labels().some((l) => l.kind === "stress"), false);
     t.hook.unmount();
@@ -3114,7 +3146,7 @@ await test("hook: a mesh's block view is unchanged by all of this (status colour
 
 // ---------- findings: labels, step numbering, ghost, chip text ----------
 
-console.log("compare chip, steps, ghost, labels (review findings)");
+console.log("steps, ghost, labels (review findings)");
 
 await test("the stage's name and the download name tell a stabilized version from its source (V4)", () => {
     const { stageLabel, downloadStem } = viewerFormat;
@@ -3231,41 +3263,1005 @@ await test("hook: the block tooltip counts the run on screen from step 1 (V3)", 
     again.hook.unmount();
 });
 
-const compareStateModule = await viewer("compareState");
-
-await test("the Compare chip says what is on stage: Original asked for with the whole model still drawn is a wait, not a promise (V1)", () => {
-    const { compareState, hasAddedBlocks } = compareStateModule;
-    assert.equal(hasAddedBlocks(STABILIZED), true);
-    assert.equal(hasAddedBlocks(ONLY_ORIGINAL), false, "the original half has no added blocks");
-    assert.equal(hasAddedBlocks(makeAnalysis()), false, "a mesh has no roles at all");
-    assert.equal(hasAddedBlocks(null), false);
-    const on = { on: true, requested: "original", previewing: false, addedOnStage: true };
-    // The click: the store says Original at once, the stage still has the stabilized model.
-    assert.deepEqual(compareState({ ...on, status: "loading" }), { value: "stabilized", waiting: true, failed: false, unreported: false });
-    // The original half arrived and is on stage: the chip says Original.
-    assert.deepEqual(compareState({ ...on, addedOnStage: false, status: "idle" }), { value: "original", waiting: false, failed: false, unreported: false });
-    // It could not be analysed: the viewer has to put the chip (and the store) back on Stabilized.
-    assert.deepEqual(compareState({ ...on, status: "error" }), { value: "stabilized", waiting: true, failed: true, unreported: false });
-    // No word from the workspace: a wait that the viewer gives up after a while.
-    assert.equal(compareState(on).unreported, true);
-    assert.equal(compareState({ ...on, status: "idle" }).unreported, true, "nothing is loading, yet the stage never changed");
-    assert.equal(compareState({ ...on, status: "loading" }).unreported, false);
-    // The other modes are what they say; Overlay and Stabilized never wait.
-    for (const requested of ["stabilized", "overlay"]) assert.deepEqual(compareState({ ...on, requested, status: "idle" }), { value: requested, waiting: false, failed: false, unreported: false });
-    // The chip is off (the model view, or no added blocks): no wait.
-    assert.equal(compareState({ ...on, on: false }).waiting, false);
-    // The stabilizer's preview is on stage: none of the three is.
-    assert.deepEqual(compareState({ ...on, previewing: true, status: "loading" }), { value: null, waiting: false, failed: false, unreported: false });
-});
+const stageControls = await viewer("stageControls");
+const { stackHeight } = await viewer("stackHeight");
 
 await test("the chip stack's height is the measured one for the view on screen, else the estimate (V6, V8)", () => {
-    const { stackHeight } = compareStateModule;
     assert.equal(stackHeight(null, true, 92, 8), 92, "not measured yet");
     assert.equal(stackHeight({ blocks: true, px: 114 }, true, 92, 8), 114, "the legend wrapped: more than the estimate");
     assert.equal(stackHeight({ blocks: true, px: 63 }, true, 92, 8), 63);
     assert.equal(stackHeight({ blocks: false, px: 29 }, true, 92, 8), 92, "measured in the other view: no word on this one");
     assert.equal(stackHeight({ blocks: true, px: 8 }, true, 92, 8), 92, "an element with no size (hidden): the estimate");
     assert.equal(stackHeight({ blocks: true, px: 0 }, true, 92, 8), 92);
+});
+
+// ---------- the added supports: a stabilized model shown on its source mesh ----------
+
+console.log("added supports (a stabilized model on its source mesh)");
+
+const supportsModule = await viewer("supports");
+const { createSupportsLayer } = await viewer("supportsLayer");
+const { useSupportsOverlay } = await viewer("useSupportsOverlay");
+
+/** makeAnalysis' tower and arm with some blocks given a role: [index, role, step]. The transform is makeAnalysis' (factor 10, modelMin [-30, -10, 0], offset [200, 300, 0]). */
+function withRoles(roles) {
+    const analysis = makeAnalysis();
+    const blocks = analysis.blocks.map((b) => ({ ...b, role: "original", step: 0 }));
+    for (const [index, role, step] of roles) Object.assign(blocks[index], { role, step });
+    return { ...analysis, blocks };
+}
+/** A column (block 6, cell (5, 4, 5)) and a footing (block 7, cell (6, 4, 5)) added in steps 1 and 2. */
+const TWO_ADDED = () => withRoles([[6, "column", 1], [7, "footing", 2]]);
+const MANY_ADDED = () => withRoles([[1, "column", 1], [2, "column", 1], [3, "column", 2], [8, "footing", 2], [9, "reinforcement", 3], [10, "reinforcement", 3]]);
+
+await test("which blocks are supports: a role other than original; a mesh's blocks have none", () => {
+    const m = supportsModule;
+    assert.deepEqual(m.addedBlockIndices(TWO_ADDED().blocks), [6, 7]);
+    assert.deepEqual(m.addedBlockIndices(makeAnalysis().blocks), [], "no roles at all: a mesh");
+    assert.deepEqual(m.addedBlockIndices(withRoles([]).blocks), [], "all original");
+    assert.equal(m.hasAddedSupports(TWO_ADDED()), true);
+    assert.equal(m.hasAddedSupports(makeAnalysis()), false);
+    assert.equal(m.hasAddedSupports(null), false);
+    assert.equal(m.isAddedBlock({ role: "original" }), false);
+    assert.equal(m.isAddedBlock({}), false);
+    assert.equal(m.isAddedBlock({ role: "bridge" }), true);
+    // The real engine's result: 12 blocks it started with, 5 columns and a bracket added.
+    assert.equal(m.addedBlockIndices(STABILIZED.blocks).length, ADDED.length);
+});
+
+await test("the legend chip's text: 1 column · 1 footing; counts per role in the role order, plural by count", () => {
+    const m = supportsModule;
+    assert.equal(m.supportsLegendText(m.supportCounts(TWO_ADDED().blocks)), "Added supports: 1 column · 1 footing");
+    assert.equal(m.supportsLegendText(m.supportCounts(MANY_ADDED().blocks)), "Added supports: 3 columns · 1 footing · 2 reinforcements", "BLOCK_ROLES order, whatever order the blocks come in");
+    assert.equal(m.supportsLegendText(m.supportCounts(STABILIZED.blocks)), "Added supports: 5 columns · 1 bracket");
+    assert.equal(m.supportsLegendText(m.supportCounts(makeAnalysis().blocks)), "", "nothing added: no chip");
+    const counts = m.supportCounts(MANY_ADDED().blocks);
+    assert.deepEqual(counts.map((c) => [c.role, c.count]), [["column", 3], ["footing", 1], ["reinforcement", 2]]);
+    assert.deepEqual(counts.map((c) => c.color), ["#f59e0b", "#8b5cf6", "#ec4899"], "the role colours of the 3D tab");
+    assert.equal(m.supportsTotal(counts), 6);
+    // Every added role has its colour and noun.
+    for (const role of ["column", "footing", "bracket", "bridge", "reinforcement"]) assert.ok(m.ROLE_NOUNS[role][0] && m.ROLE_NOUNS[role][1] && sharedAssembly.ROLE_HEX[role], role);
+    assert.deepEqual([sharedAssembly.ROLE_HEX.column, sharedAssembly.ROLE_HEX.footing, sharedAssembly.ROLE_HEX.bracket, sharedAssembly.ROLE_HEX.bridge, sharedAssembly.ROLE_HEX.reinforcement], ["#f59e0b", "#8b5cf6", "#22c55e", "#06b6d4", "#ec4899"]);
+});
+
+await test("a support's tooltip and card: Column · added in step 1; steps count the run on screen; an original block has none", () => {
+    const m = supportsModule;
+    const a = TWO_ADDED();
+    const column = m.describeSupport(a.blocks[6], a.settings);
+    assert.equal(column.tooltip, "Column · added in step 1");
+    assert.equal(column.heading, "Added support: column, step 1");
+    assert.equal(column.zRange, "500–600 mm up");
+    assert.ok(!("cell" in column), "a support's card gives its height in words, not its cell");
+    assert.equal(column.color, "#f59e0b");
+    assert.equal(column.index, 6);
+    assert.equal(column.text, "Column · added in step 1 · 500–600 mm up");
+    assert.equal(m.describeSupport(a.blocks[7], a.settings).tooltip, "Footing · added in step 2");
+    assert.equal(m.describeSupport(a.blocks[0], a.settings), null, "an original block is not a support");
+    // A re-stabilized model: the first run's blocks are an earlier version, the second run counts from 1.
+    assert.equal(m.describeSupport(a.blocks[6], a.settings, 1).tooltip, "Column · added in an earlier version");
+    assert.equal(m.describeSupport(a.blocks[6], a.settings, 1).step, null);
+    assert.equal(m.describeSupport(a.blocks[6], a.settings, 1).heading, "Added support: column, earlier version");
+    assert.equal(m.describeSupport(a.blocks[7], a.settings, 1).tooltip, "Footing · added in step 1");
+    // It agrees with the block view's own wording for the same block.
+    assert.equal(geom.describeBlock(a.blocks[6], a.settings).added, "Column, added in step 1");
+});
+
+await test("support ids are theirs alone: a part's id is never one, and only a whole index reads back", () => {
+    const m = supportsModule;
+    assert.equal(m.supportId(7), "support:7");
+    assert.equal(m.supportIndexOf("support:7"), 7);
+    assert.equal(m.supportIndexOf("support:0"), 0);
+    for (const id of ["p1", "s2", "7", "support:", "support:x", "support:-1", "support:1.5", "", null, undefined]) assert.equal(m.supportIndexOf(id), null, String(id));
+});
+
+await test("a known cell lands where the mesh's transform puts it: the display frame of the loaded model", () => {
+    const m = supportsModule;
+    const a = TWO_ADDED();
+    // Cell (5, 4, 5): centre (550, 450, 550) mm; x = (550 - 200) / 10 - 30 = 5, y = (450 - 300) / 10 - 10 = 5, z = 550 / 10 = 55.
+    assert.deepEqual(m.blockDisplayCenter(a.blocks[6], a.transform), [5, 5, 55]);
+    assert.deepEqual(m.blockDisplayBox(a.blocks[6], 100, a.transform), { min: [0, 0, 50], max: [10, 10, 60] });
+    // The same numbers the block view's own mapping gives (they must never drift).
+    assert.deepEqual(m.blockDisplayCenter(a.blocks[6], a.transform), geom.mmToDisplay(a.blocks[6].centerMm, a.transform));
+    // Both added cells: the footing next to the column, along +x.
+    assert.deepEqual(m.blockDisplayBox(a.blocks[7], 100, a.transform), { min: [10, 0, 50], max: [20, 10, 60] });
+    assert.deepEqual(m.supportsDisplayBox(a), { min: [0, 0, 50], max: [20, 10, 60] }, "what Fit has to hold");
+    assert.equal(m.supportsDisplayBox(makeAnalysis()), null);
+    // A mesh at another scale: the factor shrinks or grows the cell in the display frame.
+    const doubled = { ...a.transform, factor: 5 };
+    assert.deepEqual(m.blockDisplayBox(a.blocks[6], 100, doubled), { min: [-30 + (500 - 200) / 5, -10 + (400 - 300) / 5, 100], max: [-30 + (600 - 200) / 5, -10 + (500 - 300) / 5, 120] });
+    // A factor that is not a positive number would collapse the cubes: the block view's fallback of 1.
+    assert.equal(m.usableTransform({ ...a.transform, factor: 0 }).factor, 1);
+    assert.equal(m.usableTransform({ ...a.transform, factor: Number.NaN }).factor, 1);
+    assert.equal(m.usableTransform(a.transform), a.transform);
+});
+
+// ---- the cubes ----
+
+const meshOf = (layer, name) => layer.object.getObjectByName(name);
+
+await test("the layer draws one cube per added block in its role colour, placed in the display frame by one transform", () => {
+    const a = TWO_ADDED();
+    const layer = createSupportsLayer({ analysis: a, theme: "light" });
+    assert.equal(layer.count, 2);
+    assert.deepEqual([...layer.indices], [6, 7]);
+    assert.equal(layer.object.scale.x, 0.1);
+    assert.deepEqual(layer.object.position.toArray(), [-50, -40, 0], "the volume's corner in the display frame");
+    const cubes = meshOf(layer, "supports:blocks");
+    assert.equal(cubes.isInstancedMesh, true);
+    assert.equal(cubes.count, 2);
+    // Instance 0 is the column: its world centre is the cell's display centre, its edge is the inset cube.
+    const world = new THREE.Matrix4();
+    cubes.getMatrixAt(0, world);
+    world.premultiply(layer.object.matrixWorld);
+    const centre = new THREE.Vector3().setFromMatrixPosition(world);
+    assert.deepEqual(centre.toArray().map((v) => Math.round(v * 1e6) / 1e6), [5, 5, 55]);
+    near(new THREE.Vector3().setFromMatrixScale(world).x, 100 * 0.92 * 0.1, 1e-9, "the cube is 92% of the 10 unit cell");
+    const colour = new THREE.Color();
+    cubes.getColorAt(0, colour);
+    assert.equal(colour.getHexString(), new THREE.Color("#f59e0b").getHexString(), "column amber");
+    cubes.getColorAt(1, colour);
+    assert.equal(colour.getHexString(), new THREE.Color("#8b5cf6").getHexString(), "footing violet");
+    // Crisp edges: 12 segments (24 vertices) a cube, in the theme's edge colour.
+    const edges = meshOf(layer, "supports:edges");
+    assert.equal(edges.geometry.drawRange.count, 2 * 24);
+    assert.equal(edges.material.color.getHexString(), new THREE.Color(geom.PALETTE.light.edge).getHexString());
+    // The box Fit holds: the two cells.
+    assert.deepEqual(layer.box.min.toArray(), [0, 0, 50]);
+    assert.deepEqual(layer.box.max.toArray(), [20, 10, 60]);
+    assert.deepEqual(new THREE.Box3().setFromObject(layer.framed).min.toArray().map((v) => Math.round(v * 1e6) / 1e6), [0.4, 0.4, 50.4], "the framed object measures the cubes, not the hover marks");
+    layer.object.updateMatrixWorld(true);
+    assert.deepEqual(layer.anchorOf(6), [5, 5, 60], "the top centre of the column");
+    assert.equal(layer.anchorOf(0), null, "an original block is not drawn");
+    assert.equal(layer.info(6).tooltip, "Column · added in step 1");
+    assert.equal(layer.info(0), null);
+    layer.dispose();
+});
+
+await test("picking: the nearest cube along a world ray, with its distance; a miss, an original block and a behind-the-ray cube are null", () => {
+    const a = withRoles([[6, "column", 1], [7, "footing", 2]]);
+    const layer = createSupportsLayer({ analysis: a, theme: "light" });
+    const scene = new THREE.Scene();
+    scene.add(layer.object);
+    scene.updateMatrixWorld(true);
+    // Straight down onto the column's cell (display x 0-10, y 0-10, z 50-60) from z = 100.
+    const down = layer.pickRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1)));
+    assert.equal(down.id, "support:6");
+    near(down.distance, 40, 1e-6, "from z 100 to the top face at z 60");
+    near(down.point[2], 60, 1e-6);
+    // Along +x through both: the column is met first, the footing is behind it.
+    const along = layer.pickRay(new THREE.Ray(new THREE.Vector3(-30, 5, 55), new THREE.Vector3(1, 0, 0)));
+    assert.equal(along.id, "support:6");
+    near(along.distance, 30, 1e-6);
+    // From the other side the footing is first.
+    assert.equal(layer.pickRay(new THREE.Ray(new THREE.Vector3(60, 5, 55), new THREE.Vector3(-1, 0, 0))).id, "support:7");
+    // Over the tower's original blocks (display x -10..0, y -10..0): nothing drawn there.
+    assert.equal(layer.pickRay(new THREE.Ray(new THREE.Vector3(-5, -5, 100), new THREE.Vector3(0, 0, -1))), null);
+    // A ray pointing away.
+    assert.equal(layer.pickRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, 1))), null);
+    layer.dispose();
+    assert.equal(layer.pickRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))), null, "a freed layer picks nothing");
+});
+
+await test("hover and selection marks sit on the cube, ask for a frame once per change, and ignore blocks that are not drawn", () => {
+    let frames = 0;
+    const layer = createSupportsLayer({ analysis: TWO_ADDED(), theme: "light", onChange: () => (frames += 1) });
+    const marks = layer.object.getObjectByName("supports:marks");
+    assert.equal(marks.children.filter((o) => o.visible).length, 0, "nothing marked at first");
+    layer.setHover(6);
+    assert.equal(frames, 1);
+    assert.equal(marks.children.filter((o) => o.visible).length, 2, "an outline and a wash");
+    assert.deepEqual(marks.children.find((o) => o.visible).position.toArray(), [550, 450, 550], "at the cell, in mm (the group scales it)");
+    layer.setHover(6);
+    assert.equal(frames, 1, "the same hover again costs nothing");
+    layer.setHover(0);
+    assert.equal(marks.children.filter((o) => o.visible).length, 0, "an original block is no support: the hover ends");
+    layer.setSelected(7);
+    assert.equal(marks.children.filter((o) => o.visible).length, 2);
+    layer.setSelected(null);
+    assert.equal(marks.children.filter((o) => o.visible).length, 0);
+    layer.setSelected(99);
+    layer.setSelected(-1);
+    // The marks are outside what Fit frames.
+    layer.setHover(6);
+    assert.equal(layer.framed.getObjectByName("supports:marks"), undefined);
+    // The theme repaints the edges and the hover outline.
+    layer.setTheme("dark");
+    assert.equal(meshOf(layer, "supports:edges").material.color.getHexString(), new THREE.Color(geom.PALETTE.dark.edge).getHexString());
+    layer.dispose();
+});
+
+await test("disposing frees every geometry and material the layer made, takes it out of its scene, and is idempotent", () => {
+    const layer = createSupportsLayer({ analysis: MANY_ADDED(), theme: "light" });
+    const scene = new THREE.Scene();
+    scene.add(layer.object);
+    const freed = { geometries: 0, materials: 0, instanced: 0 };
+    const seen = { geometries: new Set(), materials: new Set() };
+    layer.object.traverse((o) => {
+        if (o.geometry && !seen.geometries.has(o.geometry)) {
+            seen.geometries.add(o.geometry);
+            o.geometry.addEventListener("dispose", () => (freed.geometries += 1));
+        }
+        for (const m of [o.material].flat().filter(Boolean)) {
+            if (!seen.materials.has(m)) {
+                seen.materials.add(m);
+                m.addEventListener("dispose", () => (freed.materials += 1));
+            }
+        }
+        if (o.isInstancedMesh) o.addEventListener("dispose", () => (freed.instanced += 1));
+    });
+    assert.ok(seen.geometries.size >= 3 && seen.materials.size >= 3);
+    layer.dispose();
+    assert.equal(freed.geometries, seen.geometries.size, "every geometry");
+    assert.equal(freed.materials, seen.materials.size, "every material");
+    assert.equal(freed.instanced, 1, "the instance buffers");
+    assert.equal(layer.object.parent, null, "out of its scene");
+    layer.dispose();
+    assert.equal(freed.geometries, seen.geometries.size, "twice frees nothing more");
+});
+
+// ---- in the model's scene ----
+
+/** A model scene (two boxes) and a layer for TWO_ADDED, attached as the viewer's hook does. */
+function modelWithSupports(analysis = TWO_ADDED()) {
+    const scene = buildGlbScene(modelOf(2), {});
+    const layer = createSupportsLayer({ analysis, theme: "light" });
+    return { scene, layer, attach: () => scene.setOverlay({ object: layer.object, framed: layer.framed, box: layer.box, pick: layer.pickRay }) };
+}
+
+await test("an overlay joins the scene's bounds and framing while it is shown, and is no part: no row, no hiding, no pick of a part", () => {
+    const { scene, layer, attach } = modelWithSupports();
+    const before = scene.bounds.clone();
+    const revision = scene.revision();
+    const rows = scene.rows.length;
+    const frames = [];
+    attach();
+    assert.ok(scene.revision() > revision, "what Fit re-reads");
+    assert.equal(scene.scene.getObjectByName("supports:root"), layer.object, "in the scene");
+    assert.ok(scene.bounds.containsBox(layer.box), "the cubes are inside the bounds");
+    assert.ok(scene.bounds.containsBox(before), "and the model still is");
+    assert.ok(scene.framed().includes(layer.framed), "Fit frames them");
+    assert.equal(scene.framed().length, scene.rows.length + 1);
+    assert.equal(scene.rows.length, rows, "no new part");
+    assert.equal(scene.parts.size, rows);
+    // Hidden: back to the model's own bounds and framing.
+    assert.equal(scene.setOverlayVisible(false), true);
+    assert.deepEqual(scene.bounds.min.toArray(), before.min.toArray());
+    assert.deepEqual(scene.bounds.max.toArray(), before.max.toArray());
+    assert.equal(scene.setOverlayVisible(false), false, "no change, no work");
+    assert.equal(scene.overlayRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))), null, "a hidden overlay is not picked");
+    assert.equal(scene.setOverlayVisible(true), true);
+    assert.ok(scene.overlayRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))));
+    assert.equal(frames.length, 0);
+    // Taken away: the scene is as it was.
+    scene.setOverlay(null);
+    assert.equal(layer.object.parent, null);
+    assert.deepEqual(scene.bounds.max.toArray(), before.max.toArray());
+    assert.equal(scene.overlayRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))), null);
+    assert.equal(scene.framed().length, scene.rows.length);
+    layer.dispose();
+    scene.dispose();
+});
+
+await test("a scene that is disposed ignores its overlay, and does not free it (the owner does)", () => {
+    const { scene, layer, attach } = modelWithSupports();
+    attach();
+    let freed = 0;
+    layer.object.getObjectByName("supports:blocks").addEventListener("dispose", () => (freed += 1));
+    scene.dispose();
+    assert.equal(freed, 0, "the layer is the hook's to free");
+    assert.equal(scene.setOverlay(null), undefined);
+    assert.equal(scene.setOverlayVisible(true), false);
+    assert.equal(scene.overlayRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))), null);
+    layer.dispose();
+    assert.equal(freed, 1);
+});
+
+await test("Fit and the presets include the supports when shown (a footing can stick out of the mesh), and not when hidden", () => {
+    const dom = stubDom();
+    const v = mountOrbitViewer(dom.container, createEmptyViewerScene(), { theme: "light" });
+    const a = TWO_ADDED();
+    // A footing far out on +x of the little model: the transform puts display x at (cell - 200) / 10 - 30.
+    a.blocks[7] = { ...a.blocks[7], cell: [9, 4, 0], centerMm: [950, 450, 50] };
+    const { scene, layer, attach } = modelWithSupports(a);
+    v.setScene(scene);
+    v.setView("iso");
+    const distance = () => new THREE.Vector3(...v.camera().position).distanceTo(new THREE.Vector3(...v.camera().target));
+    const bare = distance();
+    attach();
+    v.refresh();
+    const withSupports = distance();
+    assert.ok(withSupports > bare * 1.05, `the camera backs off to hold the footing (${bare} -> ${withSupports})`);
+    scene.setOverlayVisible(false);
+    v.refresh();
+    near(distance(), bare, 1e-6, "hidden: framed on the model alone again");
+    scene.setOverlayVisible(true);
+    v.setView("top");
+    const top = distance();
+    assert.ok(top > 0);
+    // The thumbnail's shot is framed on the model with the supports too.
+    return v.snapshot({ width: 64, height: 48, scene }).then((blob) => {
+        assert.ok(blob);
+        v.dispose();
+        layer.dispose();
+        scene.dispose();
+    });
+});
+
+await test("the viewer picks a support in front of a part and a part in front of a support; a support alone is what is under the pointer over empty space", () => {
+    const dom = stubDom();
+    const v = mountOrbitViewer(dom.container, createEmptyViewerScene(), { theme: "light" });
+    const scene = buildGlbScene(modelOf(1), {});
+    v.setScene(scene);
+    v.setView("iso");
+    const fake = (hit) => ({ object: new THREE.Group(), framed: new THREE.Group(), box: new THREE.Box3(new THREE.Vector3(), new THREE.Vector3(1, 1, 1)), pick: () => hit });
+    // The model's single box is at the middle of the canvas.
+    assert.equal(v.pick(200, 150), "p1");
+    scene.setOverlay(fake({ id: "support:3", point: [0, 0, 0], distance: 0.001 }));
+    assert.equal(v.pick(200, 150), "support:3", "the support is nearer than the part");
+    assert.equal(v.hit(200, 150).normal, null);
+    scene.setOverlay(fake({ id: "support:3", point: [0, 0, 0], distance: 1e9 }));
+    assert.equal(v.pick(200, 150), "p1", "the part is nearer");
+    assert.equal(v.pick(2, 2), "support:3", "nothing of the model there: the support is what is under the pointer");
+    scene.setOverlay(fake(null));
+    assert.equal(v.pick(200, 150), "p1");
+    assert.equal(v.pick(2, 2), null);
+    // Hidden parts are clicked through, to a support behind them.
+    scene.setOverlay(fake({ id: "support:3", point: [0, 0, 0], distance: 1e9 }));
+    scene.update({ hidden: ["p1"] });
+    assert.equal(v.pick(200, 150), "support:3");
+    v.dispose();
+    scene.dispose();
+});
+
+// ---- the hook ----
+
+/** The hook over a real model scene, with a stand-in viewer. */
+async function overlayStage(overrides = {}) {
+    const dom = stubDom();
+    const model = { current: buildGlbScene(modelOf(1), {}) };
+    const log = { refreshes: 0, frames: 0, flights: [] };
+    let onStage = model.current;
+    const viewer = {
+        scene: () => onStage,
+        refresh: () => (log.refreshes += 1),
+        requestFrame: () => (log.frames += 1),
+        contextLost: () => false,
+        flyToBox: (box, ms) => log.flights.push({ box, ms }),
+    };
+    void dom;
+    const base = { viewerRef: { current: viewer }, sceneRef: model, ready: true, viewerEpoch: 1, modelEpoch: 1, theme: "light", supports: TWO_ADDED(), visible: true, ...overrides };
+    const hook = renderHook(useSupportsOverlay, base);
+    const state = { hook, model, log, viewer, base, props: { ...base } };
+    state.update = async (patch) => {
+        state.props = { ...state.props, ...patch };
+        hook.rerender(state.props);
+        await wait();
+    };
+    state.setScene = (scene) => (onStage = scene);
+    state.layerRoot = (scene = model.current) => scene.scene.getObjectByName("supports:root") ?? null;
+    await wait();
+    return state;
+}
+
+await test("hook: the cubes are built once the model is shown, put into its scene, framed, and freed on unmount", async () => {
+    const t = await overlayStage();
+    assert.equal(t.hook.result.built, true);
+    assert.equal(t.hook.result.failed, false);
+    const root = t.layerRoot();
+    assert.ok(root, "in the model's scene");
+    assert.ok(t.model.current.bounds.containsBox(new THREE.Box3(new THREE.Vector3(0, 0, 50), new THREE.Vector3(20, 10, 60))));
+    assert.ok(t.log.refreshes >= 1, "the viewer re-read the bounds and framing");
+    let freed = 0;
+    root.getObjectByName("supports:blocks").addEventListener("dispose", () => (freed += 1));
+    t.hook.unmount();
+    assert.equal(t.layerRoot(), null, "out of the scene");
+    assert.equal(freed, 1, "and freed");
+    t.model.current.dispose();
+});
+
+await test("hook: nothing is built until the model is ready, or for no result; a result that goes takes the cubes with it", async () => {
+    const t = await overlayStage({ ready: false });
+    const bare = t.model.current.bounds.clone();
+    assert.equal(t.layerRoot(), null);
+    assert.equal(t.hook.result.built, false);
+    await t.update({ ready: true });
+    assert.ok(t.layerRoot());
+    const refreshes = t.log.refreshes;
+    await t.update({ supports: null });
+    assert.equal(t.layerRoot(), null, "the version without supports is shown: no cubes");
+    assert.equal(t.hook.result.built, false);
+    assert.ok(t.log.refreshes > refreshes, "the camera is told to frame the model alone again");
+    assert.ok(t.model.current.bounds.equals(bare), "and the bounds are the model's again");
+    await t.update({ supports: TWO_ADDED() });
+    assert.ok(t.layerRoot());
+    await t.update({ ready: false });
+    assert.equal(t.layerRoot(), null, "a model that is loading has none");
+    t.hook.unmount();
+    t.model.current.dispose();
+});
+
+await test("hook: a new result replaces the cubes in place (the bare mesh never shows), and the old ones are freed", async () => {
+    const t = await overlayStage();
+    const first = t.layerRoot();
+    let freed = 0;
+    first.getObjectByName("supports:blocks").addEventListener("dispose", () => (freed += 1));
+    const seen = [];
+    const scene = t.model.current.scene;
+    const originalAdd = scene.add.bind(scene);
+    scene.add = (...objects) => (seen.push(...objects.map((o) => o.name)), originalAdd(...objects));
+    await t.update({ supports: MANY_ADDED() });
+    const second = t.layerRoot();
+    assert.ok(second && second !== first, "other cubes");
+    assert.equal(second.getObjectByName("supports:blocks").count, 6);
+    assert.equal(first.parent, null);
+    assert.equal(freed, 1, "the old cubes are freed");
+    assert.ok(seen.includes("supports:root"));
+    assert.equal(scene.children.filter((o) => o.name === "supports:root").length, 1, "one layer at a time");
+    t.hook.unmount();
+    t.model.current.dispose();
+});
+
+await test("hook: the switch hides the cubes and re-frames; a new model's scene gets its own cubes and the old scene's are freed", async () => {
+    const t = await overlayStage();
+    const refreshes = t.log.refreshes;
+    await t.update({ visible: false });
+    assert.equal(t.layerRoot().visible, false);
+    assert.ok(t.log.refreshes > refreshes, "framed on the model alone again");
+    assert.equal(t.model.current.overlayRay(new THREE.Ray(new THREE.Vector3(5, 5, 100), new THREE.Vector3(0, 0, -1))), null);
+    await t.update({ visible: true });
+    assert.equal(t.layerRoot().visible, true);
+    // The model is replaced (another url): its scene is disposed, the hook is told through the epoch.
+    const old = t.model.current;
+    const oldRoot = t.layerRoot();
+    const next = buildGlbScene(modelOf(1), {});
+    t.model.current = next;
+    t.setScene(next);
+    old.dispose();
+    await t.update({ modelEpoch: 2 });
+    assert.equal(oldRoot.parent, null);
+    assert.ok(t.layerRoot(next), "cubes in the new scene");
+    t.hook.unmount();
+    next.dispose();
+});
+
+await test("hook: hover, selection and framing go to the cube; the theme repaints; with nothing asked for there is nothing to hover", async () => {
+    const t = await overlayStage();
+    const marks = t.layerRoot().getObjectByName("supports:marks");
+    t.hook.result.setHover(6);
+    assert.equal(marks.children.filter((o) => o.visible).length, 2);
+    t.hook.result.setHover(null);
+    t.hook.result.setSelected(7);
+    assert.equal(marks.children.filter((o) => o.visible).length, 2);
+    t.hook.result.setSelected(null);
+    t.hook.result.frame(6);
+    assert.equal(t.log.flights.length, 1);
+    const { box } = t.log.flights[0];
+    assert.ok(box.containsBox(new THREE.Box3(new THREE.Vector3(0, 0, 50), new THREE.Vector3(10, 10, 60))), "the cube, with room round it");
+    near(t.log.flights[0].ms, 400, 0);
+    t.hook.result.frame(0);
+    assert.equal(t.log.flights.length, 1, "an original block has no cube to fly to");
+    await t.update({ theme: "dark" });
+    assert.equal(t.layerRoot().getObjectByName("supports:edges").material.color.getHexString(), new THREE.Color(geom.PALETTE.dark.edge).getHexString());
+    t.hook.unmount();
+    t.model.current.dispose();
+    const none = await overlayStage({ supports: null });
+    none.hook.result.setHover(1);
+    none.hook.unmount();
+    none.model.current.dispose();
+});
+
+await test("hook: a cube layer that cannot be built says so, and the mesh stays", async () => {
+    const log = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args);
+    const t = await overlayStage({ supports: TWO_ADDED() });
+    try {
+        // A result the cubes cannot be made from (what a lazy chunk that will not load looks like to the hook: the build rejects).
+        await t.update({ supports: { ...TWO_ADDED(), settings: null } });
+        assert.equal(t.hook.result.failed, true);
+        assert.equal(t.layerRoot(), null, "the old cubes went with the result they were made from");
+        assert.ok(errors.length >= 1, "logged");
+        await t.update({ supports: TWO_ADDED() });
+        assert.equal(t.hook.result.failed, false, "a result it can build: cleared");
+        assert.ok(t.layerRoot());
+    } finally {
+        console.error = log;
+    }
+    t.hook.unmount();
+    t.model.current.dispose();
+});
+
+await test("the block view of a stabilized result over its source mesh: the ghost is that mesh, and the counts come from the result", async () => {
+    const source = { geometry: new THREE.BoxGeometry(100, 100, 100), matrix: new THREE.Matrix4() };
+    const scene = { current: { ghostSources: () => [source] } };
+    const t = await hookStage({ sceneRef: scene, analysis: STABILIZED, view: { ...BLOCKS_VIEW, showGhost: true } });
+    const ghost = t.viewer.scene().scene.getObjectByName("blocks:ghost");
+    assert.equal(ghost.children.length, 1, "a stabilized result on a mesh keeps the mesh's ghost (noGhost is only for a loaded assembly)");
+    assert.equal(ghost.visible, true);
+    assert.ok(ghost.children[0].geometry === source.geometry, "the source mesh's geometry, shared");
+    assert.equal(t.viewer.scene().info(STABILIZED.blocks.find((b) => b.role === "column").index).added, "Column, added in step 1");
+    t.hook.unmount();
+    source.geometry.dispose();
+    // The numbers the stage names a stabilized model by when the model on stage is a mesh come from the result's assembly.
+    assert.deepEqual(assemblyParts.assemblyCounts(STABILIZED.assembly.descriptor), { original: 12, added: 6 });
+});
+
+// ---------- fixes found in review (V1-V5) ----------
+
+await test("V1: a re-stabilized model shown on its source mesh numbers its steps from its own run; the mesh has no log, so the host says how many came before", async () => {
+    const { stepsBeforeOwnRun, stageStepOffset, topStep } = assemblyParts;
+    // O -> V1 (steps 1-2) -> V2 (steps 3-4; V2's own log lists 2 steps). The viewer loads the ROOT mesh: no assembly, no log, `earlier` is 0.
+    assert.equal(topStep(RE_DESC), 4);
+    assert.equal(stepsBeforeOwnRun(topStep(RE_DESC), 2), 2, "two steps of V1 sit under V2's own two");
+    assert.equal(stepsBeforeOwnRun(2, 2), 0, "a first run");
+    assert.equal(stepsBeforeOwnRun(2, 9), 0, "never negative");
+    for (const none of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(stepsBeforeOwnRun(4, none), 0, `no usable log: ${none}`);
+    // earlierSteps is the same arithmetic over the log a loaded GLB carries.
+    const log = (n) => ({ "nevo:stabilization": { steps: Array.from({ length: n }, (_, i) => ({ n: i + 1 })) } });
+    assert.equal(assemblyParts.earlierSteps(log(2), RE_DESC), stepsBeforeOwnRun(topStep(RE_DESC), 2));
+
+    // What the stage uses.
+    const base = { assembly: RE_DESC, previewing: false, earlier: 0 };
+    assert.equal(stageStepOffset({ ...base, assembly: null, hosted: 2, earlier: 5 }), 0, "a plain mesh with nothing behind it");
+    assert.equal(stageStepOffset(base), 0, "the old behaviour: the mesh on stage has no log, so nothing is subtracted");
+    assert.equal(stageStepOffset({ ...base, hosted: 2 }), 2, "the host's count");
+    assert.equal(stageStepOffset({ ...base, hosted: 0, earlier: 3 }), 0, "an explicit 0 is a count too");
+    for (const bad of [undefined, null, -1, Number.NaN]) assert.equal(stageStepOffset({ ...base, hosted: bad, earlier: 3 }), 3, `not a count (${bad}): the loaded assembly's own log decides`);
+    assert.equal(stageStepOffset({ ...base, hosted: 1.9 }), 1, "whole steps");
+    assert.equal(stageStepOffset({ ...base, previewing: true, hosted: 2, earlier: 1 }), 4, "the stabilizer's preview continues from the top step, whatever the host says");
+
+    // The wording the tooltip and the card give, on the real engine's result of V2 under the offset the host computes.
+    const v2 = solved(RE_DESC);
+    const block = (role, step) => v2.blocks.find((b) => b.role === role && b.step === step);
+    const offset = stageStepOffset({ ...base, hosted: stepsBeforeOwnRun(topStep(RE_DESC), 2) });
+    const say = (b, o) => supportsModule.describeSupport(b, v2.settings, o).tooltip;
+    assert.equal(say(block("footing", 3), 0), "Footing · added in step 3", "what the unfixed viewer said: the timeline says step 1");
+    assert.equal(say(block("footing", 3), offset), "Footing · added in step 1");
+    assert.equal(say(block("column", 4), offset), "Column · added in step 2");
+    assert.equal(say(block("column", 1), offset), "Column · added in an earlier version", "V1's column");
+    assert.equal(supportsModule.describeSupport(block("column", 1), v2.settings, offset).heading, "Added support: column, earlier version");
+    assert.equal(geom.describeBlock(block("footing", 3), v2.settings, null, offset).added, "Footing, added in step 1", "the Analysis tab's block tooltip agrees");
+});
+
+await test("V1: the cubes are rebuilt when the step offset changes, so their tooltips are never numbered by a stale one", async () => {
+    const t = await overlayStage({ stepOffset: 0 });
+    const first = t.layerRoot();
+    assert.ok(first);
+    await t.update({ stepOffset: 2 });
+    const second = t.layerRoot();
+    assert.ok(second && second !== first, "other cubes");
+    assert.equal(first.parent, null, "the old ones are out of the scene");
+    await t.update({ stepOffset: 2 });
+    assert.ok(t.layerRoot() === second, "the same offset: the same cubes");
+    t.hook.unmount();
+    t.model.current.dispose();
+});
+
+await test("V2: a one-part model gets neither the part tint nor the part tooltip from a hover, even while the pointer tracks it for the cubes; a support is always routed", () => {
+    const { routeHover, supportId } = supportsModule;
+    assert.deepEqual(routeHover("p1", 1), { support: null, part: null, tip: null }, "the lone mesh: nothing to point at");
+    assert.deepEqual(routeHover("p1", 0), { support: null, part: null, tip: null });
+    assert.deepEqual(routeHover("p2", 3), { support: null, part: "p2", tip: "p2" }, "several parts: lit and described");
+    assert.deepEqual(routeHover(supportId(6), 1), { support: 6, part: null, tip: "support:6" }, "a cube on a one-part mesh");
+    assert.deepEqual(routeHover(supportId(6), 4), { support: 6, part: null, tip: "support:6" }, "a cube is never lit as a part");
+    for (const none of [null, undefined, ""]) assert.deepEqual(routeHover(none, 3), { support: null, part: null, tip: null }, `no hit (${JSON.stringify(none)})`);
+});
+
+await test("V4: a cube is only pointed at, described and carded while it is drawn: the switch, the parts exploded and the block view put it away", () => {
+    const { supportsDrawn } = supportsModule;
+    const on = { has: true, shown: true, explode: 0, blocks: false };
+    assert.equal(supportsDrawn(on), true);
+    assert.equal(supportsDrawn({ ...on, has: false }), false, "nothing was added");
+    assert.equal(supportsDrawn({ ...on, shown: false }), false, "the switch is off");
+    assert.equal(supportsDrawn({ ...on, explode: 1 }), false, "exploded: the cubes would be left behind");
+    assert.equal(supportsDrawn({ ...on, explode: 60 }), false);
+    assert.equal(supportsDrawn({ ...on, blocks: true }), false, "the block view has its own blocks");
+});
+
+await test("V5: the toolbar download says it is the stabilized GLB whenever it is not the file on stage, result or no result", () => {
+    const { downloadLabelFor } = viewerFormat;
+    assert.equal(downloadLabelFor("/files/stab.glb", "/files/root.glb"), "Download stabilized GLB", "a stabilized model on its source mesh");
+    assert.equal(downloadLabelFor("/files/root.glb", "/files/root.glb"), undefined, "the file on stage: the toolbar's own wording");
+    assert.equal(downloadLabelFor(undefined, "/files/root.glb"), undefined, "no other file given");
+    assert.equal(downloadLabelFor(null, "/files/root.glb"), undefined, "no download at all");
+});
+
+// ---------- the stage's own view controls: the Colour chip, the layer cut, the Show menu, the legend ----------
+
+console.log("stage controls (Colour chip, Layers, Show, legend)");
+
+/** A model of `layers` layers (cells on the ground to the top), one block each. */
+const layersOf = (layers) => Array.from({ length: layers }, (_, k) => ({ index: k, cell: [0, 0, k] }));
+
+await test("hasAddedBlocks: only a result with blocks added to its assembly has the Added blocks colouring", () => {
+    const { hasAddedBlocks } = stageControls;
+    assert.equal(hasAddedBlocks(STABILIZED), true);
+    assert.equal(hasAddedBlocks(ONLY_ORIGINAL), false, "the original blocks on their own have nothing added");
+    assert.equal(hasAddedBlocks(ORIGINAL), false);
+    assert.equal(hasAddedBlocks(makeAnalysis()), false, "a mesh has no roles at all");
+    assert.equal(hasAddedBlocks(null), false);
+    assert.equal(hasAddedBlocks(undefined), false);
+});
+
+await test("the Colour menu lists Status, Overhang, Strength, Layers, and Added blocks only when blocks were added", () => {
+    const { colorOptions } = stageControls;
+    const labels = (analysis, extra) => colorOptions({ analysis, ...extra }).map((o) => o.label);
+    assert.deepEqual(labels(STABILIZED), ["Status", "Overhang", "Strength", "Layers", "Added blocks"]);
+    assert.deepEqual(labels(ORIGINAL), ["Status", "Overhang", "Strength", "Layers"], "an assembly with nothing added");
+    assert.deepEqual(labels(ONLY_ORIGINAL), ["Status", "Overhang", "Strength", "Layers"], "the original version of a stabilized model");
+    assert.deepEqual(labels(makeAnalysis()), ["Status", "Overhang", "Strength", "Layers"], "a mesh");
+    assert.deepEqual(colorOptions({ analysis: STABILIZED }).map((o) => o.value), ["status", "reach", "stress", "layer", "role"], "the values the view stores");
+    assert.deepEqual(Object.values(geom.COLOR_MODE_LABELS).sort(), ["Added blocks", "Layers", "Overhang", "Status", "Strength"]);
+    // The colouring on stage is always in the menu, so the chip never names something the menu lacks.
+    assert.deepEqual(labels(ORIGINAL, { current: "role" }), ["Status", "Overhang", "Strength", "Layers", "Added blocks"]);
+    // Every option says what it is in one plain line.
+    for (const option of colorOptions({ analysis: STABILIZED })) assert.ok(option.hint.length > 8 && !/cantilever|utilis|allowable|COG/i.test(option.hint), option.value);
+    assert.equal(colorOptions({ analysis: null }).length, 4, "no result: the four that need nothing special are listed");
+});
+
+await test("Strength is greyed with the reason when there is no stress estimate (still coming, or none for this model), and open otherwise", () => {
+    const { colorOptions } = stageControls;
+    const strength = (analysis, busy) => colorOptions({ analysis, busy }).find((o) => o.value === "stress");
+    assert.equal(strength(STABILIZED).disabled, undefined, "a stress estimate: usable");
+    assert.equal(strength(STABILIZED).reason, undefined);
+    const plain = strength(makeAnalysis());
+    assert.equal(plain.disabled, true);
+    assert.equal(plain.reason, "There is no strength estimate for this model.");
+    const coming = strength(makeAnalysis(), true);
+    assert.equal(coming.disabled, true);
+    assert.equal(coming.reason, "Still being worked out.", "an analysis is running: it may come");
+    assert.equal(strength({ ...ORIGINAL, stress: null }).disabled, true, "the estimate failed");
+    assert.equal(strength({ ...ORIGINAL, stress: null }, true).reason, "Still being worked out.");
+    // Nothing else is ever greyed.
+    for (const o of colorOptions({ analysis: makeAnalysis() })) if (o.value !== "stress") assert.equal(o.disabled, undefined, o.value);
+});
+
+await test("the Colour chip reads 'Colour: Status', and is locked to 'Added blocks (live preview)' while the stabilizer previews", () => {
+    const { colorChipModel, PREVIEW_COLOR_LABEL } = stageControls;
+    for (const [colorBy, label] of [["status", "Status"], ["reach", "Overhang"], ["stress", "Strength"], ["layer", "Layers"], ["role", "Added blocks"]]) {
+        const model = colorChipModel({ analysis: STABILIZED, colorBy });
+        assert.equal(model.text, `Colour: ${label}`);
+        assert.equal(model.value, colorBy);
+        assert.equal(model.locked, undefined);
+        assert.ok(model.options.some((o) => o.value === colorBy), "what is on stage is in the menu");
+    }
+    const locked = colorChipModel({ analysis: STABILIZED, colorBy: "stress", previewing: true });
+    assert.equal(PREVIEW_COLOR_LABEL, "Added blocks (live preview)");
+    assert.equal(locked.text, "Colour: Added blocks (live preview)");
+    assert.equal(locked.locked, PREVIEW_COLOR_LABEL);
+    assert.equal(locked.value, "role", "the stage paints what was added, whatever was chosen");
+    assert.equal(geom.resolveColorBy({ colorBy: "stress" }, STABILIZED, true), locked.value, "the chip says what resolveColorBy paints");
+});
+
+await test("the layer cut: 'Layers 1–7 of 10', 'up to 700 mm', a '1–7' badge when it hides something, none when everything shows", () => {
+    const { layerCut } = stageControls;
+    const ten = layersOf(10);
+    const cut = layerCut(ten, 6, 100);
+    assert.deepEqual(cut, { count: 10, shown: 7, cut: true, max: 6, badge: "1–7", heading: "Layers 1–7 of 10", upTo: "up to 700 mm" });
+    assert.deepEqual(layerCut(ten, 9, 100), { count: 10, shown: 10, cut: false, max: 9, badge: null, heading: "Layers 1–10 of 10", upTo: "up to 1000 mm" }, "Show all: no badge");
+    assert.equal(layerCut(ten, 99, 100).cut, false, "a cut above the top shows everything");
+    assert.equal(layerCut(ten, 99, 100).max, 9, "and the slider rests on the top layer");
+    assert.deepEqual(layerCut(ten, 0, 100), { count: 10, shown: 1, cut: true, max: 0, badge: "1", heading: "Layer 1 of 10", upTo: "up to 100 mm" }, "ground layer only");
+    assert.equal(layerCut(ten, -1, 100).max, 0, "the slider has no position below the ground layer");
+    assert.equal(layerCut(ten, Number.NaN, 100).cut, false, "no number: everything");
+    assert.equal(layerCut(ten, 4, 50).upTo, "up to 250 mm", "the block size sets the height");
+    const none = layerCut([], 3, 100);
+    assert.deepEqual([none.count, none.cut, none.badge], [1, false, null], "no blocks: one layer, nothing cut");
+    // The hand-built analysis: 8 layers (a floating block at layer 7).
+    const a = makeAnalysis();
+    for (let layerMax = -1; layerMax <= 9; layerMax += 1) {
+        if (layerMax < 0) continue;
+        assert.equal(layerCut(a.blocks, layerMax, 100).cut, geom.cutActive(a.blocks, layerMax), `agrees with the scene's own cut at ${layerMax}`);
+    }
+    assert.equal(layerCut(a.blocks, 3, 100).heading, "Layers 1–4 of 8", "and with the scene's cut label (Layers 1–4)");
+});
+
+await test("the stage's words: the legend, the colour names and the stage no longer say cantilever, overreach, allowable or load path", () => {
+    const words = [...Object.values(geom.STATUS_LABELS), ...Object.values(geom.COLOR_MODE_LABELS), ...Object.values(geom.COLOR_MODE_HINTS)].join(" | ");
+    assert.doesNotMatch(words, /cantilever|overreach|allowable|load path|utilis/i, words);
+    const a = makeAnalysis();
+    const all = a.blocks.map((b, i) => geom.describeBlock(b, a.settings, geom.describeStress(STABILIZED, i % STABILIZED.blocks.length)).text).join("\n") + geom.cogSummary(a.stability).sub + geom.cogSummary(makeAnalysis({ inside: true }).stability).sub;
+    assert.doesNotMatch(all, /cantilever|overreach|allowable|load path|utilis|margin/i, all);
+    assert.equal(geom.cogSummary(makeAnalysis({ inside: true }).stability).sub, "Inside the base by 50 mm");
+});
+
+// ---- the markup of the chip, the toolbar and the legend (React server-rendered; a closed menu shows only its trigger) ----
+
+const { build } = await import("esbuild");
+const { mkdirSync, readFileSync, existsSync, readdirSync } = await import("node:fs");
+const nodePath = await import("node:path");
+const { pathToFileURL } = await import("node:url");
+const repoRoot = nodePath.resolve(nodePath.dirname(fileURLToPath(import.meta.url)), "../..");
+const viewerBundleDir = nodePath.join(repoRoot, "node_modules/.tmp/assignment-viewer-test");
+mkdirSync(viewerBundleDir, { recursive: true });
+await build({
+    stdin: {
+        contents: `
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { TooltipProvider } from "@/assignment/components/ui/tooltip";
+export { React, renderToStaticMarkup, TooltipProvider };
+export { ColorChip } from "@/assignment/viewer/ColorChip";
+export { AnalysisLegend } from "@/assignment/viewer/AnalysisLegend";
+export { ViewerToolbar, LayersPopover } from "@/assignment/viewer/ViewerToolbar";
+// The report's Strength section, to check it counts what the stage's legend counts (S1).
+export { StrengthDetails } from "@/assignment/components/analysis/StrengthDetails";
+`,
+        resolveDir: repoRoot,
+        sourcefile: "viewer-entry.tsx",
+        loader: "tsx",
+    },
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    jsx: "automatic",
+    outfile: nodePath.join(viewerBundleDir, "bundle.mjs"),
+    tsconfig: nodePath.join(repoRoot, "tsconfig.app.json"),
+    nodePaths: [nodePath.join(repoRoot, "node_modules")],
+    define: { "process.env.NODE_ENV": '"production"' },
+    // react-dom/server is CommonJS and asks for node's own modules.
+    banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
+    logLevel: "error",
+});
+const ui = await import(pathToFileURL(nodePath.join(viewerBundleDir, "bundle.mjs")).href);
+const h = ui.React.createElement;
+const html = (el) => ui.renderToStaticMarkup(el);
+/** The visible text of some markup: tags gone, whitespace folded. */
+const textOf = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
+await test("ColorChip: a button 'Colour: Status' with a menu; without a handler or while previewing it is plain text, not a button", () => {
+    const { colorChipModel } = stageControls;
+    const live = html(h(ui.ColorChip, { model: colorChipModel({ analysis: STABILIZED, colorBy: "status" }), onChange: () => undefined }));
+    assert.match(live, /<button\b[^>]*data-testid="stage-color-chip"/);
+    assert.match(live, /aria-haspopup="menu"/);
+    assert.match(live, /aria-expanded="false"/);
+    assert.equal(textOf(live), "Colour: Status");
+    assert.doesNotMatch(live, /aria-label=/, "the visible text is the accessible name");
+    // Read-only (the host gave no handler): the colouring on stage, nothing to press.
+    const readOnly = html(h(ui.ColorChip, { model: colorChipModel({ analysis: STABILIZED, colorBy: "layer" }) }));
+    assert.doesNotMatch(readOnly, /<button/);
+    assert.equal(textOf(readOnly), "Colour: Layers");
+    // Locked by the stabilizer's preview, even with a handler.
+    const locked = html(h(ui.ColorChip, { model: colorChipModel({ analysis: STABILIZED, colorBy: "stress", previewing: true }), onChange: () => undefined }));
+    assert.doesNotMatch(locked, /<button/);
+    assert.match(locked, /data-locked="true"/);
+    assert.equal(textOf(locked), "Colour: Added blocks (live preview)");
+    assert.match(locked, /title="[^"]*previewing a run/);
+});
+
+await test("AnalysisLegend: the only legend, in plain words (Supported / Overhang / Overhang too long / Floating; Strength used (% of what the joints take))", () => {
+    const legend = (analysis, colorBy) => html(h(ui.AnalysisLegend, { analysis, colorBy, theme: "light" }));
+    const a = makeAnalysis();
+    const status = legend(a, "status");
+    assert.match(status, /aria-label="Block colours: status"/);
+    assert.equal(textOf(status), "Supported 6 Overhang 4 Overhang too long 1 Floating 1");
+    const reach = textOf(legend(a, "reach"));
+    assert.equal(reach, "Supported 1 4 blocks from support Overhang too long Floating");
+    const strength = legend(ORIGINAL, "stress");
+    assert.match(strength, /aria-label="Block colours: strength used"/);
+    assert.match(textOf(strength), /Strength used \(% of what the joints take\)/);
+    // The bands add up and do not overlap: heavily loaded is 75-100%, overloaded is above 100% (S1; the estimate's own "stressed" count
+    // includes the overloaded blocks). The arm here has 12 blocks that carry weight, 8 of them past the limit: none is merely heavy.
+    assert.match(textOf(strength), /Heavily loaded \(75–100%\) 0 Overloaded \(above 100%\) 8/);
+    assert.deepEqual([ORIGINAL.stress.analysedBlocks, ORIGINAL.stress.stressedBlocks, ORIGINAL.stress.overstressedBlocks], [12, 8, 8]);
+    // That strength is the model's own weight only is said in words on the stage, not in a tooltip the chip stack never delivers (S6).
+    assert.match(textOf(strength), /From its own weight only \(Concrete\)/);
+    assert.doesNotMatch(strength, /title=/, "no tooltip carries a caveat the stage must state");
+    assert.match(textOf(html(h(ui.AnalysisLegend, { analysis: { ...ORIGINAL, stress: { ...ORIGINAL.stress, material: "timber" } }, colorBy: "stress", theme: "light" }))), /From its own weight only \(Timber\)/);
+    const added = legend(STABILIZED, "role");
+    assert.match(added, /aria-label="Block colours: added blocks"/);
+    assert.match(textOf(added), /Original blocks 12 Columns 5 Brackets 1/);
+    const layers = legend(a, "layer");
+    assert.match(layers, /aria-label="Block colours: layers"/);
+    assert.match(textOf(layers), /Layers 1 8 8 × 100 mm/);
+    // A colouring the result cannot do is drawn, and so explained, as status.
+    assert.match(legend(a, "stress"), /Block colours: status/);
+    assert.match(legend(a, "role"), /Block colours: status/);
+    for (const markup of [status, reach, strength, added, layers]) assert.doesNotMatch(textOf(markup), /cantilever|overreach|allowable|load path|utilis|Over the limit/i, textOf(markup));
+});
+
+await test("S1: the stage's legend and the report's Strength section count 'heavily loaded' and 'overloaded' alike (three bands that add up)", () => {
+    const { stressBands } = geom;
+    assert.deepEqual(stressBands({ analysedBlocks: 12, stressedBlocks: 8, overstressedBlocks: 8 }), { over: 8, heavy: 0, fine: 4 });
+    assert.deepEqual(stressBands({ analysedBlocks: 12, stressedBlocks: 8, overstressedBlocks: 3 }), { over: 3, heavy: 5, fine: 4 });
+    assert.deepEqual(stressBands({ analysedBlocks: 12, stressedBlocks: 0, overstressedBlocks: 0 }), { over: 0, heavy: 0, fine: 12 });
+    assert.deepEqual(stressBands({ analysedBlocks: 5, stressedBlocks: 5, overstressedBlocks: 5 }), { over: 5, heavy: 0, fine: 0 });
+    for (const counts of [
+        { stressedBlocks: 8, overstressedBlocks: 8 },
+        { stressedBlocks: 8, overstressedBlocks: 3 },
+        { stressedBlocks: 0, overstressedBlocks: 0 },
+        { stressedBlocks: 12, overstressedBlocks: 1 },
+    ]) {
+        const result = { ...ORIGINAL, stress: { ...ORIGINAL.stress, analysedBlocks: 12, ...counts } };
+        const { over, heavy, fine } = stressBands(result.stress);
+        assert.equal(over + heavy + fine, 12, "every block that carries weight is in exactly one band");
+        const legend = textOf(html(h(ui.AnalysisLegend, { analysis: result, colorBy: "stress", theme: "light" })));
+        assert.match(legend, new RegExp(`Heavily loaded \\(75–100%\\) ${heavy} Overloaded \\(above 100%\\) ${over}\\b`), legend);
+        // The report's section, rendered for the very same stress: its three counts are the legend's (and the 'fine' one, which the stage does not print).
+        const panel = html(h(ui.TooltipProvider, null, h(ui.StrengthDetails, { result, onAbout: () => undefined })));
+        const countIn = (id) => Number(textOf(panel.match(new RegExp(`<div[^>]*data-testid="${id}"[\\s\\S]*?</div>`))[0]).match(/\d+/)[0]);
+        assert.deepEqual([countIn("stress-over"), countIn("stress-high"), countIn("stress-fine")], [over, heavy, fine], `the panel and the legend agree for ${JSON.stringify(counts)}`);
+    }
+});
+
+const toolbarProps = (extra = {}) => ({
+    compact: false,
+    blocks: true,
+    partCount: 0,
+    treeOpen: false,
+    onToggleTree: () => undefined,
+    onView: () => undefined,
+    onZoom: () => undefined,
+    canExplode: false,
+    explode: 0,
+    onExplode: () => undefined,
+    canSplit: false,
+    split: "off",
+    splitProgress: 0,
+    onSplit: () => undefined,
+    downloadUrl: "/m.glb",
+    downloadName: "m",
+    ...extra,
+});
+const toolbar = (extra) => html(h(ui.TooltipProvider, null, h(ui.ViewerToolbar, toolbarProps(extra))));
+
+await test("the toolbar of the block view: a Layers button with a '1–7' badge when the cut hides something, and a Show menu; no Parts, Explode or Split", () => {
+    const { layerCut } = stageControls;
+    const ten = layersOf(10);
+    const show = { cog: true, onCog: () => undefined, ghost: false, onGhost: () => undefined };
+    const cutOn = toolbar({ layers: { cut: layerCut(ten, 6, 100), onChange: () => undefined }, show });
+    assert.match(cutOn, /data-testid="stage-layers"/);
+    assert.match(cutOn, /aria-label="Layers, showing 1–7"/);
+    assert.match(cutOn, /aria-expanded="false"/);
+    assert.match(textOf(cutOn), /Layers 1–7/, "the visible name and the badge");
+    assert.match(cutOn, /data-testid="stage-show"/);
+    assert.match(cutOn, /aria-label="Show"/);
+    for (const gone of ['aria-label="Parts"', 'aria-label="Explode"', 'aria-label="Split into parts"']) assert.ok(!cutOn.includes(gone), gone);
+    assert.match(cutOn, /aria-label="Fit"/, "the rest of the bar is as it was");
+    assert.match(cutOn, /aria-label="Download GLB"/);
+    // Nothing hidden: no badge, the plain name.
+    const all = toolbar({ layers: { cut: layerCut(ten, 9, 100), onChange: () => undefined }, show });
+    assert.match(all, /aria-label="Layers"/);
+    assert.doesNotMatch(all, /showing/);
+    assert.doesNotMatch(textOf(all), /1–/);
+    // A narrow stage keeps the icons and drops the words (the names stay for assistive technology).
+    const narrow = toolbar({ compact: true, layers: { cut: layerCut(ten, 6, 100), onChange: () => undefined }, show });
+    assert.match(narrow, /aria-label="Layers, showing 1–7"/);
+    assert.doesNotMatch(textOf(narrow), /Layers|Show/);
+    // Without the host's handlers the controls are not offered; in the model view they are never.
+    const bare = toolbar({});
+    assert.ok(!bare.includes("stage-layers") && !bare.includes("stage-show"));
+    const model = toolbar({ blocks: false, canExplode: true, partCount: 3, layers: { cut: layerCut(ten, 6, 100), onChange: () => undefined }, show });
+    assert.ok(!model.includes("stage-layers") && !model.includes("stage-show"), "the model view has no block controls");
+    assert.match(model, /aria-label="Parts"/);
+    assert.match(model, /aria-label="Explode"/);
+    // Only Layers, or only Show: each alone.
+    const layersOnly = toolbar({ layers: { cut: layerCut(ten, 6, 100), onChange: () => undefined } });
+    assert.ok(layersOnly.includes("stage-layers") && !layersOnly.includes("stage-show"));
+    const showOnly = toolbar({ show });
+    assert.ok(!showOnly.includes("stage-layers") && showOnly.includes("stage-show"));
+});
+
+await test("the Layers popover: 'Layers 1–7 of 10', 'up to 700 mm', a slider over the layers, Show all (off while nothing is cut), and the raised note", () => {
+    const { layerCut } = stageControls;
+    const ten = layersOf(10);
+    const pop = (cut, raised) => html(h(ui.LayersPopover, { cut, raised, onChange: () => undefined, onClose: () => undefined }));
+    const cutOn = pop(layerCut(ten, 6, 100), false);
+    assert.match(cutOn, /role="group"[^>]*aria-label="Layers"|aria-label="Layers"[^>]*role="group"/);
+    assert.match(cutOn, /<label[^>]*for="stage-layers"[^>]*>Layers 1–7 of 10<\/label>/);
+    assert.match(textOf(cutOn), /up to 700 mm/);
+    assert.match(cutOn, /<input[^>]*type="range"[^>]*min="0"[^>]*max="9"[^>]*step="1"[^>]*value="6"/);
+    assert.match(cutOn, /aria-valuetext="Layers 1–7 of 10, up to 700 mm"/);
+    assert.doesNotMatch(cutOn, /<button[^>]*\sdisabled(=""|\s|>)/, "Show all works while something is cut");
+    assert.doesNotMatch(textOf(cutOn), /raised/);
+    const all = pop(layerCut(ten, 9, 100), true);
+    assert.match(all, /<button[^>]*\sdisabled=""[^>]*>Show all<\/button>/, "everything is shown: nothing to show");
+    assert.match(textOf(all), /The cut was raised to show what you picked\./);
+    const one = pop(layerCut(layersOf(1), 0, 100), false);
+    assert.match(one, /<input[^>]*\sdisabled=""/, "one layer: nothing to cut");
+    assert.doesNotMatch(cutOn, /<input[^>]*\sdisabled=""/, "and a model with layers can be cut");
+});
+
+await test("P3: the compare chip, the compare state and the 'Stabilized from' chip are gone; the Colour chip sits right above the legend", () => {
+    const viewerDir = nodePath.join(repoRoot, "src/assignment/viewer");
+    assert.ok(!existsSync(nodePath.join(viewerDir, "CompareChip.tsx")));
+    assert.ok(!existsSync(nodePath.join(viewerDir, "compareState.ts")));
+    const source = readFileSync(nodePath.join(viewerDir, "GlbViewer.tsx"), "utf8");
+    for (const gone of ["CompareChip", "compareState", "compareStatus", "onCompareChange", "derivedFrom", "ORIGINAL_WAIT_MS", "Stabilized from", "View original"]) assert.ok(!source.includes(gone), `GlbViewer still mentions ${gone}`);
+    for (const there of ["onViewChange", "layerRaised", "<ColorChip", "<AnalysisLegend"]) assert.ok(source.includes(there), `GlbViewer lacks ${there}`);
+    assert.ok(source.indexOf("<ColorChip") < source.indexOf("<AnalysisLegend"), "the legend comes right after the Colour chip");
+    // The legend is drawn by the viewer alone.
+    const users = [];
+    const walk = (dir) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const full = nodePath.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (/\.tsx?$/.test(entry.name) && /import[^;]*\bAnalysisLegend\b/.test(readFileSync(full, "utf8"))) users.push(nodePath.relative(repoRoot, full));
+        }
+    };
+    walk(nodePath.join(repoRoot, "src/assignment"));
+    assert.deepEqual(users, ["src/assignment/viewer/GlbViewer.tsx"]);
+});
+
+// ---------- the stage between two versions (S2) ----------
+
+console.log("the stage between two versions (stageHold)");
+
+const { holdStage, useHeldStage, stageColorBy } = await import("../../src/assignment/components/workspace/stageHold.ts");
+
+await test("S2: a version whose own analysis is still on its way is drawn over the last picture; the report never gets it", () => {
+    const source = { id: "source's result" };
+    const preview = { id: "the run's final preview" };
+    const landed = { id: "the stabilized version's result" };
+    const on = { url: "/m.glb", family: "m" };
+    // The run is finishing: the stage draws the preview of the source, whose own result is there too.
+    const running = holdStage(null, { ...on, own: source, preview, waiting: false });
+    assert.equal(running.analysis, source, "the viewer is handed the model's own result (it draws the preview over it)");
+    assert.equal(running.holding, false);
+    assert.equal(running.held?.result, preview, "what the stage draws is what is kept: the preview wins");
+    // The run is saved and the new version opens by itself: no result, no preview, the analysis not started yet or running.
+    for (const phase of ["loading", "running"]) {
+        const between = holdStage(running.held, { ...on, own: null, preview: null, waiting: true });
+        assert.equal(between.analysis, preview, `${phase}: the stage keeps drawing the last picture, so it never falls back to the plain mesh`);
+        assert.equal(between.holding, true, "and says so, so the host ignores hovers and clicks on blocks that are not the report's");
+        assert.equal(between.held, running.held, "the hold is kept as it was");
+    }
+    // The version's own result lands: that is drawn, and kept in turn.
+    const done = holdStage(running.held, { ...on, own: landed, preview: null, waiting: false });
+    assert.deepEqual([done.analysis, done.holding, done.held?.result], [landed, false, landed]);
+    // A flip back (same mesh, the other model's result is gone from the store): the stabilized picture is held while the original's analysis runs.
+    const back = holdStage(done.held, { ...on, own: null, preview: null, waiting: true });
+    assert.deepEqual([back.analysis, back.holding], [landed, true]);
+    // The same inputs give the same hold: a render that is thrown away leaves nothing behind.
+    assert.equal(holdStage(done.held, { ...on, own: landed, preview: null, waiting: false }).held, done.held);
+});
+
+await test("S2: nothing is held for a stage that is not coming back: another mesh, another model, a failed analysis, a viewer that cannot show it", () => {
+    const picture = { id: "picture" };
+    const held = holdStage(null, { url: "/m.glb", family: "m", own: picture, preview: null, waiting: false }).held;
+    const wait = { own: null, preview: null, waiting: true };
+    assert.equal(holdStage(held, { ...wait, url: "/m.glb", family: "m" }).analysis, picture, "the control: same mesh, same family");
+    for (const [name, input] of [
+        ["another mesh (the source failed to load, so the version shows its own file)", { ...wait, url: "/s1.glb", family: "m" }],
+        ["another model's family", { ...wait, url: "/m.glb", family: "other" }],
+        ["no mesh on stage", { ...wait, url: null, family: "m" }],
+        ["the analysis failed (the plain stage and the error are the honest picture)", { ...wait, url: "/m.glb", family: "m", waiting: false }],
+    ]) {
+        const out = holdStage(held, input);
+        assert.deepEqual([out.analysis, out.holding, out.held], [null, false, null], name);
+    }
+    // Nothing was ever drawn: nothing to hold.
+    assert.deepEqual(holdStage(null, { ...wait, url: "/m.glb", family: "m" }), { analysis: null, held: null, holding: false });
+    // The active model's own result is always handed over as it is, hold or no hold.
+    assert.equal(holdStage(held, { url: "/m.glb", family: "m", own: picture, preview: null, waiting: true }).analysis, picture);
+});
+
+await test("S2: while a picture is held it is coloured as the user asked (the store settled that choice against the other version's result)", () => {
+    assert.equal(stageColorBy("status", "role", true), "role");
+    assert.equal(stageColorBy("status", "role", false), "status", "no hold: the store's settled colouring, as ever");
+    assert.equal(stageColorBy("stress", "stress", true), "stress");
+});
+
+await test("S2: the hook keeps the hold between renders and lets go of it when the mesh changes", () => {
+    const source = { id: "source" };
+    const preview = { id: "preview" };
+    const landed = { id: "landed" };
+    const on = { url: "/m.glb", family: "m" };
+    const hook = renderHook(useHeldStage, { ...on, own: source, preview, waiting: false });
+    assert.deepEqual(hook.result, { analysis: source, holding: false });
+    hook.rerender({ ...on, own: null, preview: null, waiting: true }); // the saved run opens the new version
+    assert.deepEqual(hook.result, { analysis: preview, holding: true });
+    hook.rerender({ ...on, own: null, preview: null, waiting: true }); // still on its way (the analysis starts)
+    assert.deepEqual(hook.result, { analysis: preview, holding: true });
+    hook.rerender({ ...on, own: landed, preview: null, waiting: false });
+    assert.deepEqual(hook.result, { analysis: landed, holding: false });
+    hook.rerender({ ...on, own: null, preview: null, waiting: true }); // flipped to the other version
+    assert.deepEqual(hook.result, { analysis: landed, holding: true });
+    hook.rerender({ url: "/other.glb", family: "o", own: null, preview: null, waiting: true }); // another model altogether
+    assert.deepEqual(hook.result, { analysis: null, holding: false });
+    hook.rerender({ ...on, own: null, preview: null, waiting: true }); // and back: what was held is gone
+    assert.deepEqual(hook.result, { analysis: null, holding: false });
+    hook.unmount();
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

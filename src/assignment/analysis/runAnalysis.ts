@@ -15,12 +15,14 @@
 //   that module lazily, so the solver is not part of the page's own bundle.
 // - A stabilized model is a block assembly: pass `options.assembly` (the descriptor read from its GLB) and the cells are
 //   analysed exactly, never voxelised. The soup is then only used for its bounds, which tie the lattice to the frame the
-//   viewer draws in.
+//   viewer draws in. A stabilized model shown on the mesh it was made from passes `options.sourceTransform` as well (the
+//   source's own transform and scaled box, assembly.ts sourcePlacementOf): the blocks are placed by it, the model is as big as that
+//   mesh, and the soup is not needed at all.
 // - A soup with no triangle at all is never remembered: a viewer that is not loaded (or was disposed) hands back
 //   an empty soup, and caching that as "No blocks" would stick to the model. With `rejectEmpty` it is an error
 //   the caller can retry instead.
 
-import type { AnalysisResult, AnalysisSettings, TriangleSoup } from "./types.ts";
+import type { AnalysisResult, AnalysisSettings, AnalysisTransform, TriangleSoup, Vec3 } from "./types.ts";
 import { CELL_STRIDE, type AssemblyDescriptor } from "../shared/assembly.ts";
 import { analyzeGrid } from "./analyze.ts";
 import { annotateRoles, boundsOf, gridFromAssembly, settingsForAssembly, type Bounds } from "./assembly.ts";
@@ -53,8 +55,21 @@ export interface RunOptions {
      * and the triangles are voxelised. With it the triangles are only used for their bounds.
      */
     assembly?: AssemblyDescriptor | null;
-    /** The assembly the triangles belong to, when `assembly` is only a part of it (the compare view's original blocks). */
+    /** The assembly the triangles belong to, when `assembly` is only a part of it (for instance the original blocks of a stabilized model, analysed on their own). */
     frame?: AssemblyDescriptor | null;
+    /**
+     * With `assembly`: the transform of the mesh the blocks are drawn over (the stabilized model's SOURCE, which the viewer
+     * shows instead of the stabilized GLB). It becomes the result's transform; the soup is then never read, and `frame`
+     * is not used. `cacheKey` should name the pair (stabilized model + the mesh it is shown on); the transform is also part
+     * of the cache key, so a result is never reused for another placement.
+     */
+    sourceTransform?: AnalysisTransform | null;
+    /**
+     * With `sourceTransform`: the scaled bounding box of that mesh (assembly.ts sourcePlacementOf). It is the result's size
+     * (`sizeMm`, the summary's `size_mm`), so the stabilized model and the original on the same mesh say the same; without it the
+     * size is the lattice's own extent. Part of the cache key, like the transform.
+     */
+    sourceSizeMm?: Vec3 | null;
 }
 
 /** The triangle source returned no triangle: the model is not loaded (yet). Retrying later may work. */
@@ -84,6 +99,10 @@ interface Job {
     /** Set for a block assembly; the grid is then built from it. */
     assembly: AssemblyDescriptor | null;
     frame: AssemblyDescriptor | null;
+    /** The placement over the source mesh (assembly only), else null: then it comes from the soup's bounds. */
+    sourceTransform: AnalysisTransform | null;
+    /** The source mesh's scaled box (only with `sourceTransform`), else null. */
+    sourceSizeMm: Vec3 | null;
 }
 
 export type SoupSource = TriangleSoup | (() => TriangleSoup);
@@ -123,6 +142,9 @@ function assemblyKey(d: AssemblyDescriptor): string {
     return `${d.cells.length / CELL_STRIDE}:${(a >>> 0).toString(16)}:${(b >>> 0).toString(16)}:${d.inset}`;
 }
 
+/** Identity of a transform: its seven numbers, exactly. */
+const transformKey = (t: AnalysisTransform): string => `${t.factor},${t.modelMin.join(",")},${t.offsetMm.join(",")}`;
+
 export function clearAnalysisCache(): void {
     results.clear();
     mainGrids.clear();
@@ -148,7 +170,9 @@ async function runOnMainThread(soupOf: () => TriangleSoup, job: Job, settings: A
     const onProgress = (fraction: number, step: AnalysisStage) => report(Math.min(fraction, STRESS_FROM), step);
     let result: AnalysisResult;
     if (job.assembly) {
-        const grid = gridFromAssembly(job.assembly, soupBounds(soupOf()), settings, job.frame ?? job.assembly);
+        // With the source's transform the triangles are not needed (and may not even exist: the viewer may show another model).
+        const bounds = job.sourceTransform ? null : soupBounds(soupOf());
+        const grid = gridFromAssembly(job.assembly, bounds, settings, job.frame ?? job.assembly, job.sourceTransform, job.sourceSizeMm);
         result = annotateRoles(analyzeGrid(grid, settings, { onProgress }), job.assembly);
     } else {
         let grid = mainGrids.get(job.gridKey);
@@ -207,7 +231,7 @@ function releaseWorker(worker: Worker): void {
 }
 
 function runInWorker(worker: Worker, soupOf: () => TriangleSoup, job: Job, settings: AnalysisSettings, options: RunOptions): Promise<AnalysisResult> {
-    const { gridKey, assembly, frame } = job;
+    const { gridKey, assembly, frame, sourceTransform, sourceSizeMm } = job;
     return new Promise<AnalysisResult>((resolve, reject) => {
         const id = nextId++;
         let settled = false;
@@ -236,6 +260,12 @@ function runInWorker(worker: Worker, soupOf: () => TriangleSoup, job: Job, setti
         // The worker does not remember a grid made from an empty soup (see analysis.worker.ts), so neither do we.
         let sentEmpty = false;
         const sendSoup = () => {
+            if (assembly && sourceTransform) {
+                // The cells are the blocks and the placement is given: nothing of the triangles is needed.
+                const request: WorkerRequest = { kind: "run", id, gridKey, positions: null, settings, assembly, soupBounds: null, frame: null, sourceTransform, sourceSizeMm };
+                worker.postMessage(request);
+                return;
+            }
             const soup = soupOf();
             if (assembly) {
                 // The cells are the blocks: only the triangles' bounds are needed, not the triangles.
@@ -332,15 +362,18 @@ export async function runAnalysis(source: SoupSource, settingsInput: Partial<Ana
         if (options.rejectEmpty && isEmptySoup(soup)) throw new EmptyModelError();
         return soup;
     };
-    const modelKey = options.cacheKey ?? fingerprint(soupOf().positions);
-    const frame = assembly ? (options.frame ?? null) : null;
+    const sourceTransform = assembly ? (options.sourceTransform ?? null) : null;
+    const sourceSizeMm = sourceTransform ? (options.sourceSizeMm ?? null) : null;
+    // With the placement given, the triangles say nothing the key needs (and are not read): the transform is in the key.
+    const modelKey = options.cacheKey ?? (sourceTransform ? "" : fingerprint(soupOf().positions));
+    const frame = assembly && !sourceTransform ? (options.frame ?? null) : null;
     // A voxel grid is identified by the model and the scale; an assembly by its cells (roles and steps included), plus
-    // the model for the frame its bounds give.
+    // the model for the frame its bounds give, or the placement it was given.
     const gridKey = assembly
-        ? `asm:${assemblyKey(assembly)}${frame ? `+${assemblyKey(frame)}` : ""}|${modelKey}`
+        ? `asm:${assemblyKey(assembly)}${frame ? `+${assemblyKey(frame)}` : ""}${sourceTransform ? `@${transformKey(sourceTransform)}${sourceSizeMm ? `~${sourceSizeMm.join(",")}` : ""}` : ""}|${modelKey}`
         : `${modelKey}|${settings.targetSizeMm}|${settings.blockSizeMm}`;
     const resultKey = `${gridKey}|${settings.fillThreshold}|${settings.cantileverLimit}|${settings.maxBlocks ?? "-"}|${settings.material}`;
-    const job: Job = { gridKey, assembly, frame };
+    const job: Job = { gridKey, assembly, frame, sourceTransform, sourceSizeMm };
 
     const cached = results.get(resultKey);
     if (cached) {

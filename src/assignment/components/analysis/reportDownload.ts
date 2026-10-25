@@ -1,4 +1,4 @@
-// The report files of the analysis (JSON and the blocks as CSV), shared by the panel's footer and the stabilizer's banner.
+// The report files of the analysis (JSON and the blocks as CSV), for the panel's "..." export menu.
 
 import type { AnalysisResult } from "@/assignment/analysis/types";
 import { downloadText } from "@/assignment/components/analysis/download";

@@ -1,49 +1,18 @@
 // Small building blocks of the report panel.
 
-import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronDown, Layers, type LucideIcon } from "lucide-react";
+import { type KeyboardEvent, type ReactNode } from "react";
+import { type LucideIcon } from "lucide-react";
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/assignment/components/ui/collapsible";
-import { TONE, type Tone } from "@/assignment/components/analysis/style";
+import { MARK_ICON, MARK_TONE, MARK_WORD, TONE, type Mark, type Tone } from "@/assignment/components/analysis/style";
 import { cn } from "@/assignment/lib/utils";
-import { useAnalysisStore } from "@/assignment/store/analysis";
 
-/** A foldable block of the panel: an uppercase caption with an optional badge, and a chevron. */
-export function Section({
-    title,
-    icon: Icon,
-    badge,
-    action,
-    defaultOpen = true,
-    children,
-    testId,
-}: {
-    title: string;
-    icon: LucideIcon;
-    badge?: ReactNode;
-    /** Right-aligned control that must not toggle the section (e.g. "Clear"). */
-    action?: ReactNode;
-    defaultOpen?: boolean;
-    children: ReactNode;
-    testId?: string;
-}) {
-    const [open, setOpen] = useState(defaultOpen);
+/** A mark as a symbol (tick, cross, warning triangle, dot) in its tone, with its word for a screen reader. */
+export function MarkGlyph({ mark, className, label }: { mark: Mark; className?: string; label?: string }) {
+    const Icon = MARK_ICON[mark];
     return (
-        <Collapsible open={open} onOpenChange={setOpen} className="border-t border-border/60" data-testid={testId}>
-            <div className="flex items-center gap-2 pr-3">
-                <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground">
-                    <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                    <span>{title}</span>
-                    {badge}
-                    <ChevronDown
-                        className="ml-auto h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=closed]:-rotate-90"
-                        aria-hidden
-                    />
-                </CollapsibleTrigger>
-                {action}
-            </div>
-            <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
-        </Collapsible>
+        <span role="img" aria-label={label ?? MARK_WORD[mark]} data-mark={mark} className={cn("inline-grid shrink-0 place-items-center", TONE[MARK_TONE[mark]].icon, className)}>
+            <Icon className="h-full w-full" strokeWidth={mark === "none" ? 5 : 3} aria-hidden />
+        </span>
     );
 }
 
@@ -62,48 +31,6 @@ export function CountBadge({ tone = "muted", children, label }: { tone?: Tone; c
         >
             {children}
         </span>
-    );
-}
-
-/** A compact on/off switch with a label and a one-line explanation; the whole text is the click target. */
-export function ToggleRow({
-    label,
-    hint,
-    checked,
-    onChange,
-}: {
-    label: string;
-    hint: string;
-    checked: boolean;
-    onChange: (checked: boolean) => void;
-}) {
-    const id = useId();
-    return (
-        <div className="flex items-center gap-3">
-            <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
-                <span className="block text-xs font-medium text-foreground">{label}</span>
-                <span className="block text-[11px] leading-snug text-muted-foreground">{hint}</span>
-            </label>
-            <button
-                id={id}
-                type="button"
-                role="switch"
-                aria-checked={checked}
-                onClick={() => onChange(!checked)}
-                className={cn(
-                    "relative h-[18px] w-8 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                    checked ? "bg-primary" : "bg-input",
-                )}
-            >
-                <span
-                    aria-hidden
-                    className={cn(
-                        "absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-background shadow-sm transition-transform",
-                        checked && "translate-x-3.5",
-                    )}
-                />
-            </button>
-        </div>
     );
 }
 
@@ -194,69 +121,11 @@ export function Segmented<T extends string>({
     );
 }
 
-/** A number in the metrics grid: caption, value in the mono face, one line of context. */
-export function Metric({
-    label,
-    value,
-    unit,
-    hint,
-    tone = "muted",
-    className,
-    title,
-    testId,
-}: {
-    label: string;
-    value: ReactNode;
-    unit?: string;
-    hint?: string;
-    tone?: Tone;
-    className?: string;
-    title?: string;
-    testId?: string;
-}) {
-    const valueClass = tone === "muted" ? "text-foreground" : TONE[tone].text;
-    return (
-        <div
-            title={title}
-            data-testid={testId}
-            className={cn("rounded-lg border border-border/70 bg-card/60 px-2.5 py-2", className)}
-        >
-            <p className="text-[11px] text-muted-foreground">{label}</p>
-            <p className={cn("mt-0.5 font-mono text-sm font-semibold tabular-nums", valueClass)}>
-                {value}
-                {unit && <span className="ml-0.5 text-[11px] font-normal text-muted-foreground">{unit}</span>}
-            </p>
-            {hint && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{hint}</p>}
-        </div>
-    );
-}
-
-/**
- * The last pick would have been hidden by the layer cut, so the cut was raised to show it. Said where the pick is
- * made, so the slider's new position is no surprise.
- */
-export function LayerRaisedNote({ className }: { className?: string }) {
-    const raised = useAnalysisStore((s) => s.layerRaised);
-    const layerMax = useAnalysisStore((s) => s.view.layerMax);
-    if (!raised) return null;
-    return (
-        <p
-            role="status"
-            data-testid="layer-raised-note"
-            className={cn("flex items-center gap-1.5 rounded-lg bg-muted px-2 py-1 text-[11px] text-muted-foreground", className)}
-        >
-            <Layers className="h-3 w-3 shrink-0" aria-hidden />
-            Layer cut raised to layer {layerMax + 1} to show this.
-        </p>
-    );
-}
-
-/** Which way +X, -Y and +Z point, for report lines that name a direction. */
+/** Which way right, left, front and back are, for lines that name a direction. */
 export function DirectionsHint({ className }: { className?: string }) {
     return (
         <p className={cn("text-[11px] leading-snug text-muted-foreground", className)} data-testid="directions-hint">
-            Directions: <span className="font-mono text-foreground">+X</span> is right and <span className="font-mono text-foreground">−Y</span> is
-            towards you in the Front view; <span className="font-mono text-foreground">+Z</span> is up.
+            Right, left, front and back are as the Front view shows them: the front is the side that faces you.
         </p>
     );
 }

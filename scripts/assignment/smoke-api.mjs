@@ -79,10 +79,27 @@ const generateHeaders = () => (ACCESS_CODE ? { "x-access-code": ACCESS_CODE } : 
 
 // ---- database access for the checks that need it (wrangler dev only)
 let DB_ID = "";
+// The deployment is open (ALLOW_OPEN_GENERATION=1 in wrangler.jsonc: paid models need no code), so a server with real provider keys offers them.
+let OPEN_GENERATION = false;
 try {
-    DB_ID = /"database_id":\s*"([^"]+)"/.exec(readFileSync(resolve(ROOT, "wrangler.jsonc"), "utf8"))?.[1] ?? "";
+    const config = readFileSync(resolve(ROOT, "wrangler.jsonc"), "utf8");
+    DB_ID = /"database_id":\s*"([^"]+)"/.exec(config)?.[1] ?? "";
+    OPEN_GENERATION = /^\s*"ALLOW_OPEN_GENERATION":\s*"1"/m.test(config);
 } catch {
     // no wrangler.jsonc next to the script: the database checks are skipped
+}
+
+// Is the OpenRouter key set for the server under test? Only the fact is read (from the environment, or .dev.vars when the server
+// is local), never printed. EXPECT_MUSE=1 / EXPECT_MUSE=0 overrides the guess (a deployed server).
+function museKeyExpected() {
+    if (process.env.EXPECT_MUSE) return process.env.EXPECT_MUSE === "1";
+    if (process.env.OPENROUTER_API_KEY) return true;
+    if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(BASE)) return null;
+    try {
+        return /^OPENROUTER_API_KEY=\S/m.test(readFileSync(resolve(ROOT, ".dev.vars"), "utf8"));
+    } catch {
+        return null;
+    }
 }
 
 /** Runs SQL on the local D1 database behind `wrangler dev`; null when that is not reachable. */
@@ -163,6 +180,17 @@ async function main() {
         providers.headers.get("x-content-type-options") === "nosniff");
     const mock = providers.json.providers.find((p) => p.id === "mock");
     check("mock provider is listed and available", mock?.available === true && mock.via === "mock");
+    // The Muse designer (an LLM via OpenRouter) is always listed, after Hunyuan; it is offered when OPENROUTER_API_KEY is set.
+    // This smoke test never generates with it: every design costs real money (the job flow is covered by test-muse.mjs).
+    const muse = providers.json.providers.find((p) => p.id === "muse");
+    const order = providers.json.providers.map((p) => p.id);
+    check("Muse Spark 1.3 is listed after Hunyuan, as a multi-part, untextured model via OpenRouter",
+        muse?.label === "Muse Spark 1.3" && muse.vendor === "Meta via OpenRouter" && muse.parts === true && muse.textured === false &&
+        muse.approx_seconds === 35 && order.indexOf("muse") > order.indexOf("hunyuan"), JSON.stringify(muse));
+    const museExpected = museKeyExpected();
+    if (museExpected === true) check("Muse Spark 1.3 is available via openrouter (the OpenRouter key is set)", muse?.available === true && muse.via === "openrouter", JSON.stringify(muse));
+    else if (museExpected === false) check("Muse Spark 1.3 is unavailable without the OpenRouter key", muse?.available === false && muse.via === null, JSON.stringify(muse));
+    else note(`Muse Spark 1.3: available=${muse?.available} via=${muse?.via} (set EXPECT_MUSE=1 or 0 to assert it)`);
     check("provider info carries label, vendor, parts, approx_seconds",
         providers.json.providers.every((p) => p.label && p.vendor && typeof p.parts === "boolean" && p.approx_seconds > 0));
     check("default_provider is an available provider", providers.json.providers.some((p) => p.id === providers.json.default_provider && p.available));
@@ -183,9 +211,10 @@ async function main() {
     }
     check("access check rejects a non-object body", (await call("POST", "/access/check", "[1]")).status === 400);
     if (!accessRequired) {
-        // No ACCESS_CODE: paid models must be switched off (unless the server sets ALLOW_OPEN_GENERATION=1).
+        // No ACCESS_CODE: paid models must be switched off (unless the server sets ALLOW_OPEN_GENERATION=1, as wrangler.jsonc does).
         const paid = providers.json.providers.filter((p) => p.available && p.id !== "mock");
-        check("without an access code no paid model is offered (fail closed)", paid.length === 0, paid.map((p) => p.id).join(","));
+        if (OPEN_GENERATION) note(`open generation (ALLOW_OPEN_GENERATION=1): paid models offered without a code: ${paid.map((p) => p.id).join(",") || "none"}`);
+        else check("without an access code no paid model is offered (fail closed)", paid.length === 0, paid.map((p) => p.id).join(","));
     }
     if (accessRequired) {
         const right = await call("POST", "/access/check", { code: `  ${ACCESS_CODE}\n` });

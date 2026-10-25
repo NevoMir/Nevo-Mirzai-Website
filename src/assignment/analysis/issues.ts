@@ -1,5 +1,9 @@
 // Turns the structural model into what the user reads: issues that say where and why a constraint is violated,
 // the five constraint rows of the report, and the headline summary that is saved with the model.
+//
+// The issue titles and details are written for a student: plain words ("Arm too long: 6 blocks (max 4)"), a place as a height and
+// a side as the Front view shows it (never a cell coordinate), no jargon. The constraint rows (buildChecks) and the
+// exported report keep the technical terms; the panel words the rows itself (store/analysisBrief.ts checkRows).
 
 import type { AnalysisSummary } from "@/assignment/shared/contract";
 import type { AnalysisSettings, Block, Body, CheckRow, Issue, Stability, Vec3 } from "./types.ts";
@@ -8,6 +12,7 @@ import { coverageAt, groundedCellsAt, occupancyOf, reachFrom } from "./structure
 import { CELLS_PER_BLOCK } from "./voxelize.ts";
 import type { VoxelGrid } from "./voxelize.ts";
 import { directionLabel, hullDistance, outwardNormal } from "./geometry.ts";
+import { heightRange, plainDirection, towardsText } from "./plain.ts";
 
 /** Coverage below this raises the "thin features" warning. */
 export const COVERAGE_WARN = 0.8;
@@ -34,11 +39,6 @@ const pct = (v: number): string => `${Math.round(v * 100)}%`;
 /** A distance for the "outside the base" wording: "13 mm", or "less than 1 mm" instead of a misleading "0 mm". */
 const missText = (v: number): string => (v < 1 ? "less than 1 mm" : mm(v));
 const missShort = (v: number): string => (v < 1 ? "< 1 mm" : mm(v));
-
-/** "500-600 mm" for the layers [k0, k1]. */
-function heightRange(k0: number, k1: number, bs: number): string {
-    return `${Math.round(k0 * bs)}-${Math.round((k1 + 1) * bs)} mm`;
-}
 
 function centroid(blocks: Block[], ids: number[]): Vec3 {
     let x = 0;
@@ -118,7 +118,7 @@ export function buildIssues(structure: Structure, grid: VoxelGrid, settings: Ana
                 far = b;
                 farDist = dist;
             }
-            const label = directionLabel(dx, dy);
+            const label = plainDirection(dx, dy);
             if (label) {
                 counts.set(label, (counts.get(label) ?? 0) + 1);
                 labelled++;
@@ -131,16 +131,16 @@ export function buildIssues(structure: Structure, grid: VoxelGrid, settings: Ana
             k0 = Math.min(k0, blocks[id].cell[2]);
             k1 = Math.max(k1, blocks[id].cell[2]);
         }
-        // One direction: "sticks out 6 blocks towards +X". Several (a cap, an umbrella, an arm with branches on
-        // both sides): "sticks out up to 6 blocks in 3 directions (+X, -X, +Y)" instead of pointing at one corner.
+        // One direction: "sticks out 6 blocks towards the right". Several (a cap, an umbrella, an arm with branches on
+        // both sides): "sticks out up to 6 blocks in 3 directions (right, left, back)" instead of pointing at one corner.
         const sticks = where.directions > 1 ? `sticks out up to ${plural(run.reach, "block")} (${mm(run.reach * bs)})` : `sticks out ${plural(run.reach, "block")} (${mm(run.reach * bs)})`;
         errors.push({
             id: `cantilever-${run.id}`,
             kind: "cantilever-too-long",
             severity: "error",
-            title: `Cantilever too long: ${plural(run.reach, "block")}`,
+            title: `Arm too long: ${plural(run.reach, "block")} (max ${limit})`,
             detail:
-                `At ${heightRange(k0, k1, bs)} height, a part ${sticks}` +
+                `At a height of ${heightRange(k0, k1, bs)}, a part ${sticks}` +
                 `${where.text ? ` ${where.text}` : ""} from its last support; the limit is ${plural(limit, "block")} (${mm(limit * bs)}). ` +
                 `${plural(run.overLimit.length, "block")} ${run.overLimit.length === 1 ? "is" : "are"} beyond the limit and would need extra support.`,
             blocks: run.overLimit,
@@ -170,7 +170,7 @@ export function buildIssues(structure: Structure, grid: VoxelGrid, settings: Ana
             severity: "error",
             title: `Floating part: ${plural(body.blocks.length, "block")}`,
             detail:
-                `${plural(body.blocks.length, "block")} at ${heightRange(k0, k1, bs)} height ${many ? "are" : "is"} not connected to the ground or to anything resting on it${gap}. ` +
+                `${plural(body.blocks.length, "block")} at a height of ${heightRange(k0, k1, bs)} ${many ? "are" : "is"} not connected to the ground or to anything resting on it${gap}. ` +
                 `${many ? "They" : "It"} would fall.${joint ? ` ${joint.text}` : ""}${stability ? "" : " No block of the design reaches the ground."}`,
             blocks: body.blocks,
             focusMm: centroid(blocks, body.blocks),
@@ -184,9 +184,9 @@ export function buildIssues(structure: Structure, grid: VoxelGrid, settings: Ana
             id: "too-many-blocks",
             kind: "too-many-blocks",
             severity: "error",
-            title: `Too many components: ${plural(stats.blockCount, "block")}`,
+            title: `Too many blocks: ${stats.blockCount} (budget ${settings.maxBlocks})`,
             detail:
-                `The design uses ${plural(stats.blockCount, "block")} but the budget is ${settings.maxBlocks}: ${plural(over, "block")} over. ` +
+                `The model uses ${plural(stats.blockCount, "block")} but the block budget is ${settings.maxBlocks}: ${plural(over, "block")} over. ` +
                 // Every block of an assembly is whole, so no fill threshold drops any of them.
                 (grid.fromAssembly ? "Remove blocks or raise the budget." : `Raising the fill threshold above ${pct(settings.fillThreshold)} drops the most weakly filled blocks first.`),
             blocks: [],
@@ -271,12 +271,12 @@ function stabilityIssue(structure: Structure, stability: Stability): Issue | nul
     const body = stability.bodyId !== undefined ? bodies[stability.bodyId] : null;
     const members = body ? body.blocks.map((id) => blocks[id]) : blocks.filter((b) => b.status !== "floating");
     const several = (stability.groundedBodies ?? 1) > 1;
-    const who = several ? `one of the ${stability.groundedBodies} separate structures standing on the ground (${plural(members.length, "block")})` : "";
+    const who = several ? `one of the ${stability.groundedBodies} separate pieces standing on the ground (${plural(members.length, "block")})` : "";
 
     if (!stability.inside) {
         const dist = -stability.marginMm;
-        const dir = stability.tipDirection ? directionLabel(stability.tipDirection[0], stability.tipDirection[1]) : "";
-        const towards = dir ? `, towards ${dir}` : "";
+        const dir = stability.tipDirection ? plainDirection(stability.tipDirection[0], stability.tipDirection[1]) : "";
+        const towards = dir ? `, ${towardsText(dir)}` : "";
         // The blocks pulling the structure over: beyond the base AND on the side it tips to. Blocks beyond the
         // base on the far side balance it and are not part of the cause.
         const beyond = members.filter((b) => beyondBase(b, stability) < 0);
@@ -289,12 +289,12 @@ function stabilityIssue(structure: Structure, stability: Stability): Issue | nul
             id: "cog",
             kind: "cog-outside",
             severity: "error",
-            title: "Centre of gravity outside the base",
+            title: `Tips over: ${missText(dist)} past the base`,
             detail:
                 (several
-                    ? `The centre of gravity of ${who} is ${missText(dist)} outside its support base${towards}: that structure would tip over. `
-                    : `The centre of gravity is ${missText(dist)} outside the support base${towards}: the structure would tip over. `) +
-                `${plural(culprits.length, "block")} ${culprits.length === 1 ? "lies" : "lie"} beyond the base${tip ? " on the side it tips to" : ""}; widen the base or move mass back over it.${counterNote}`,
+                    ? `The weight of ${who} is centred ${missText(dist)} past the edge of its base${towards}, so that piece would tip over. `
+                    : `The model's weight is centred ${missText(dist)} past the edge of its base${towards}, so it would tip over. `) +
+                `${plural(culprits.length, "block")} ${culprits.length === 1 ? "lies" : "lie"} beyond the base${tip ? " on the side it tips to" : ""}; widen the base or move weight back over it.${counterNote}`,
             blocks: culprits,
             focusMm: stability.cogMm,
         };
@@ -304,7 +304,7 @@ function stabilityIssue(structure: Structure, stability: Stability): Issue | nul
         // Balanced on the edge: the next block added on that side, or a threshold that moves one, tips it.
         const { edge } = hullDistance(stability.groundPointMm, stability.supportHull);
         const out = outwardNormal(stability.supportHull, edge);
-        const towards = out ? directionLabel(out[0], out[1]) : "";
+        const towards = out ? plainDirection(out[0], out[1]) : "";
         const lean = out
             ? members
                   .filter((b) => beyondBase(b, stability) < 0 && (b.centerMm[0] - stability.groundPointMm[0]) * out[0] + (b.centerMm[1] - stability.groundPointMm[1]) * out[1] > 0)
@@ -314,10 +314,10 @@ function stabilityIssue(structure: Structure, stability: Stability): Issue | nul
             id: "cog-edge",
             kind: "cog-outside",
             severity: "warning",
-            title: "Centre of gravity on the edge of the base",
+            title: "Balanced on the edge of the base",
             detail:
-                `The centre of gravity is within ${EDGE_MARGIN_MM} mm of the edge of ${several ? `the support base of ${who}` : "the support base"}${towards ? ` (the ${towards} side)` : ""}: ` +
-                `the structure is balanced on the edge of tipping, and the smallest change moves it outside. Widen the base or move mass back over it.`,
+                `The ${several ? `weight of ${who}` : "model's weight"} is centred within ${EDGE_MARGIN_MM} mm of the edge of its base${towards ? ` (the ${towards} side)` : ""}: ` +
+                `it is balanced on the edge of tipping, and the smallest change would tip it over. Widen the base or move weight back over it.`,
             blocks: lean,
             focusMm: stability.cogMm,
         };
@@ -326,18 +326,18 @@ function stabilityIssue(structure: Structure, stability: Stability): Issue | nul
 }
 
 /**
- * "towards +X", "in 3 directions (+X, -X, +Y)" or "in all directions" for the way the over-limit blocks of a
- * cantilever stick out, from the share of blocks that point each way.
+ * "towards the right", "in 3 directions (right, left, back)" or "in all directions" for the way the over-limit blocks of an
+ * arm stick out, from the share of blocks that point each way (labels are plainDirection words).
  */
 function describeDirections(counts: Map<string, number>, total: number): { text: string; directions: number } {
     if (total === 0 || counts.size === 0) return { text: "", directions: 0 };
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
     const notable = ranked.filter(([, n]) => n / total >= DIRECTION_SHARE).map(([label]) => label);
     if (notable.length === 0) notable.push(ranked[0][0]);
-    if (notable.length === 1) return { text: `towards ${notable[0]}`, directions: 1 };
+    if (notable.length === 1) return { text: towardsText(notable[0]), directions: 1 };
     // 5 or more of the 8 compass sectors: a cap or a fan, not a few arms.
     if (notable.length >= 5) return { text: "in all directions", directions: notable.length };
-    return { text: `in ${notable.length} directions (${notable.map((label) => label.replace(" and ", "/")).join(", ")})`, directions: notable.length };
+    return { text: `in ${notable.length} directions (${notable.join(", ")})`, directions: notable.length };
 }
 
 // ---------- floating parts ----------

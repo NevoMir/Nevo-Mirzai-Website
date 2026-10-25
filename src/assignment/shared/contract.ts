@@ -12,6 +12,7 @@ export const ACCESS_HEADER = "x-access-code";
  * A text-to-3D model the app can call. "via" says which API key it needs:
  * fal = FAL_KEY (fal.ai queue API), tripo = TRIPO_API_KEY, meshy = MESHY_API_KEY,
  * tencent = TENCENTCLOUD_SECRET_ID + TENCENTCLOUD_SECRET_KEY (Hunyuan 3D official API, 200 free credits),
+ * openrouter = OPENROUTER_API_KEY (an LLM designs the object as named primitive parts; the app builds the GLB),
  * mock = no key (replays a bundled multi-part GLB; only when MOCK_PROVIDER = "1").
  */
 export type ProviderId =
@@ -20,13 +21,14 @@ export type ProviderId =
     | "meshy" // Meshy 7.1 (Meshy direct API, else via fal)
     | "rodin" // Hyper3D Rodin Gen-2.5 (via fal)
     | "hunyuan" // Tencent Hunyuan 3D (Tencent Cloud official API, else via fal)
+    | "muse" // Meta Muse Spark 1.3 (via OpenRouter): a text model that designs the object as named parts (multi-part, untextured)
     | "mock";
 
 export interface ProviderInfo {
     id: ProviderId;
     label: string; // "Meshy 7.1"
     vendor: string; // "Meshy"
-    via: "fal" | "tripo" | "meshy" | "tencent" | "mock" | null; // null when no key is configured
+    via: "fal" | "tripo" | "meshy" | "tencent" | "openrouter" | "mock" | null; // null when no key is configured
     available: boolean; // false when its key is missing
     description: string; // one line for the picker
     parts: boolean; // returns separate meshes per part (an assembly)

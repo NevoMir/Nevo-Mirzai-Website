@@ -1,10 +1,12 @@
 // Worker entry for the text-to-3D assignment. Only these paths reach it (see run_worker_first in wrangler.jsonc):
 //   /api/assignment_alex/*          the JSON API (worker/api.ts)
 //   /assignment_alex[/...]          the single-page app shell, plus its static files
+//   queue "assignment-alex-llm"     the Muse assembly designer's LLM calls (worker/llm.ts)
 // Everything else on nevomirzai.com is served from ./dist without invoking the Worker.
 
 import { API_BASE, APP_BASE } from "../src/assignment/shared/contract.ts";
 import { handleApi } from "./api.ts";
+import { handleLlmBatch } from "./llm.ts";
 import type { Env } from "./providers/types.ts";
 import { errorSummary, jsonError } from "./util.ts";
 
@@ -48,5 +50,10 @@ export default {
                 ? jsonError(500, "Something went wrong on the server. Please try again.")
                 : new Response("Something went wrong.", { status: 500 });
         }
+    },
+
+    // The Muse assembly designer's queue (wrangler.jsonc: assignment-alex-llm): one message designs one object.
+    async queue(batch, env): Promise<void> {
+        await handleLlmBatch(batch, env);
     },
 } satisfies ExportedHandler<Env>;

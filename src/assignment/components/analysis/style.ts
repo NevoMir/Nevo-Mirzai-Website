@@ -1,23 +1,8 @@
-// Colours and icons the analysis report shares: the tone of a verdict or a row, the swatches of the legend
-// and the icon of each kind of issue. Class names are written out in full so Tailwind finds them.
+// Colours and icons the analysis report shares: the tone of a verdict or a row, and the mark of a figure. Class names are written out in full so Tailwind finds them.
 
-import {
-    Activity,
-    ArrowRightFromLine,
-    CircleCheck,
-    CircleX,
-    Flame,
-    Info,
-    Package,
-    PackageOpen,
-    Ruler,
-    Scale,
-    TriangleAlert,
-    Unplug,
-    type LucideIcon,
-} from "lucide-react";
+import { Check, CircleCheck, CircleX, Dot, TriangleAlert, X, type LucideIcon } from "lucide-react";
 
-import type { IssueKind } from "@/assignment/analysis/types";
+import type { Mark } from "@/assignment/store/analysisBrief";
 import type { VerdictKind } from "@/assignment/store/analysisLogic";
 
 export type Tone = "pass" | "warn" | "fail" | "info" | "muted";
@@ -72,19 +57,15 @@ export const TONE: Record<Tone, ToneStyle> = {
     },
 };
 
+/**
+ * What a figure or a row says about itself, as a symbol and a word as well as a colour: a tick, a cross, a warning triangle or
+ * a quiet dot (no pass or fail to speak of). Never colour alone.
+ */
+export type { Mark };
+export const MARK_ICON: Record<Mark, LucideIcon> = { pass: Check, warn: TriangleAlert, fail: X, none: Dot };
+export const MARK_TONE: Record<Mark, Tone> = { pass: "pass", warn: "warn", fail: "fail", none: "muted" };
+/** The word a screen reader hears for a mark ("Balance: fails"). */
+export const MARK_WORD: Record<Mark, string> = { pass: "passes", warn: "needs a look", fail: "fails", none: "for information" };
+
 export const VERDICT_TONE: Record<VerdictKind, Tone> = { pass: "pass", warn: "warn", fail: "fail" };
 export const VERDICT_ICON: Record<VerdictKind, LucideIcon> = { pass: CircleCheck, warn: TriangleAlert, fail: CircleX };
-
-export const CHECK_ICON: Record<"pass" | "fail" | "info", LucideIcon> = { pass: CircleCheck, fail: CircleX, info: Info };
-export const CHECK_TONE: Record<"pass" | "fail" | "info", Tone> = { pass: "pass", fail: "fail", info: "info" };
-
-export const ISSUE_ICON: Record<IssueKind, LucideIcon> = {
-    empty: PackageOpen,
-    "cog-outside": Scale,
-    "cantilever-too-long": ArrowRightFromLine,
-    floating: Unplug,
-    "too-many-blocks": Package,
-    "thin-features": Ruler,
-    overstressed: Flame,
-    "highly-stressed": Activity,
-};

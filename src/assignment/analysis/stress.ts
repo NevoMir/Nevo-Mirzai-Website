@@ -5,8 +5,10 @@
 //                                  blocks fixed. The solver's end forces give, for every joint, the tension across it,
 //                                  the crushing and the shear, each as a share of what the material allows: its
 //                                  utilisation. A block gets the worst of its joints.
-//   applyStress(result, stress)    turns that into what the report shows: issues ("Joint overstressed: 198 %"), the
+//   applyStress(result, stress)    turns that into what the report shows: issues ("Joint overloaded: 198%"), the
 //                                  "Joint stress" check row, and the numbers in the summary that is saved with the model.
+//                                  The issues are worded for a student (a height and a side, no cell or kPa); the check row
+//                                  and the exported report keep the technical terms.
 //
 // What this is not: a certificate. It is a linear elastic estimate for a perfectly bonded assembly under its own
 // weight (no wind, no people, no buckling, no sliding of loose blocks, an infinitely stiff ground). It ranks where a
@@ -26,6 +28,7 @@ import {
     type FrameSolver,
 } from "./fem/index.ts";
 import { STRESS_FAIL, STRESS_WARN, materialOf, pct } from "./materials.ts";
+import { placeOf } from "./plain.ts";
 import type { AnalysisResult, CheckRow, Issue, StressAnalysis, StressMode, StressPoint, Vec3 } from "./types.ts";
 
 export interface SolverHandle {
@@ -229,24 +232,24 @@ export function computeStress(result: AnalysisResult, solver: SolverHandle, mate
 
 const cellText = (c: Vec3): string => `(${c[0]}, ${c[1]}, ${c[2]})`;
 
+const MODE_PHRASE: Record<StressMode, string> = { tension: "pulled apart", compression: "crushed", shear: "sheared" };
+
 function stressIssue(result: AnalysisResult, point: StressPoint, material: string): Issue {
     const over = point.utilisation > STRESS_FAIL;
     const peak = result.blocks[point.blocks[0]];
-    const where = point.joint ? `The joint between block ${cellText(point.joint[0])} and block ${cellText(point.joint[1])}` : `Block ${cellText(point.cell)}`;
-    const what =
-        point.mode === "tension"
-            ? `carries ${Math.round(point.tensionKPa)} kPa of tension against ${Math.round(point.allowableKPa)} kPa allowed for ${material}`
-            : point.mode === "compression"
-              ? `is crushed at ${pct(point.utilisation)} of what ${material} takes`
-              : `is sheared at ${pct(point.utilisation)} of what ${material} takes`;
+    // Where the joint that governs is: the peak block (the first of the point), not the whole region around it.
+    const place = placeOf(result.blocks, point.blocks.slice(0, 1), result.settings.blockSizeMm);
+    // "At a height of 200-300 mm, at the back left, a concrete joint is pulled apart and uses 132% of its strength ..."
+    const where = place ? `${place.sentence[0].toUpperCase()}${place.sentence.slice(1)}, a` : "A";
+    const what = `${material} joint is ${MODE_PHRASE[point.mode]} and uses ${pct(point.utilisation)} of its strength`;
     const arm = peak.status === "cantilever" || peak.status === "overreach";
-    const help = arm ? "A column or bracket under the arm, or a thicker joint, lowers it." : "A support under the span, a thicker joint or a shorter reach lowers it.";
+    const help = arm ? "A column or bracket under the arm, or a thicker joint, lowers it." : "A support under the span, a thicker joint or a shorter overhang lowers it.";
     return {
         id: `stress-${point.rank}`,
         kind: over ? "overstressed" : "highly-stressed",
         severity: over ? "error" : "warning",
-        title: over ? `Joint overstressed: ${pct(point.utilisation)} of allowable` : `Highly stressed joint: ${pct(point.utilisation)} of allowable`,
-        detail: `${where} ${what} under the structure's own weight. ${over ? "It would open or crush. " : "It is close to the limit. "}${help}`,
+        title: over ? `Joint overloaded: ${pct(point.utilisation)}` : `Joint heavily loaded: ${pct(point.utilisation)}`,
+        detail: `${where} ${what} under the model's own weight. ${over ? "It would open or crush. " : "It is close to its limit. "}${help}`,
         blocks: point.blocks,
         focusMm: point.centreMm,
     };

@@ -14,16 +14,36 @@ import {
     Pin,
     PinOff,
     Trash2,
+    TriangleAlert,
 } from "lucide-react";
 
-import { AnalysisDock, AnalysisPeek, AnalysisSheet, ANALYSIS_PEEK_PX } from "@/assignment/components/analysis/AnalysisDock";
+import { AnalysisDock, AnalysisSheet } from "@/assignment/components/analysis/AnalysisDock";
+import { ANALYSIS_PEEK_CARD_PX, AnalysisPeekCard } from "@/assignment/components/analysis/AnalysisPeekCard";
 import { ANALYSIS_DOCK_INSET_PX } from "@/assignment/components/analysis/AnalysisPanel";
+import { SelectionPeek } from "@/assignment/components/analysis/SelectionPeek";
 import { useAnalysisSnapshot, type AnalysisSnapshot } from "@/assignment/components/analysis/useAnalysis";
 import { useAnalysisRunner } from "@/assignment/components/analysis/useAnalysisRunner";
 import { GenerationOverlay } from "@/assignment/components/workspace/GenerationOverlay";
 import { InlineName } from "@/assignment/components/hub/InlineName";
 import { ModelsPanel } from "@/assignment/components/workspace/ModelsPanel";
+import { SupportsFailedNotice } from "@/assignment/components/workspace/SupportsFailedNotice";
+import { VersionSwitcher } from "@/assignment/components/workspace/VersionSwitcher";
+import { useVersionSwitcherState } from "@/assignment/components/workspace/useVersionSwitcherState";
+import { PhonePeekDock } from "@/assignment/components/workspace/PhonePeekDock";
 import { modelFileName, modelTitle } from "@/assignment/components/workspace/format";
+import {
+    PHONE_PEEK_MARGIN_PX,
+    STABILITY_TAB_LABEL,
+    applyViewPatch,
+    sheetOnTabTap,
+    stabilityTabLabel,
+    viewerInsetsFor,
+    type ViewPatch,
+} from "@/assignment/components/workspace/shellLogic";
+import { handleVersionKey, openVersion, versionKeyEvent } from "@/assignment/components/workspace/versionActions";
+import { inTypingContext, stabilizedTarget, supportsFailure, switcherLayout } from "@/assignment/components/workspace/versionLogic";
+import { useShowSupports } from "@/assignment/components/workspace/useShowSupports";
+import { stageColorBy, useHeldStage } from "@/assignment/components/workspace/stageHold";
 import { SettingsMenu } from "@/assignment/components/SettingsMenu";
 import { Button } from "@/assignment/components/ui/button";
 import {
@@ -45,14 +65,16 @@ import {
     setProjectPinned,
     trashProjects,
 } from "@/assignment/lib/hub/hubClient";
-import type { AnalysisViewState, CompareMode, LoadedModel } from "@/assignment/analysis/types";
+import type { AnalysisViewState, LoadedModel } from "@/assignment/analysis/types";
 import type { HubProject, ModelAsset } from "@/assignment/shared/contract";
 import { useAnalysisStore } from "@/assignment/store/analysis";
-import { dockFits, dockInset } from "@/assignment/store/analysisLogic";
+import { dockFits } from "@/assignment/store/analysisLogic";
 import { completedThisSession, isTerminalJob, latestJobIds } from "@/assignment/store/jobs";
 import { deleteStabilized } from "@/assignment/store/models";
 import { saveNow, whenSaved } from "@/assignment/store/persist";
+import { savedStepOffset } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
+import { clearMeshFailures, markMeshFailed, useAssemblyFor, useVersionFamily } from "@/assignment/store/versions";
 
 // three.js is imported by the viewer on first use; lazy here keeps even its React shell out of the
 // first paint of the page.
@@ -72,17 +94,20 @@ export interface WorkspaceShellProps {
 
 const TABS: { id: WorkspaceTab; label: string; icon: typeof Box }[] = [
     { id: "3d", label: "3D", icon: Box },
-    { id: "analysis", label: "Analysis", icon: Blocks },
+    // The report. Its id stays "analysis" (links, saved state, tests); the tab is called Stability.
+    { id: "analysis", label: STABILITY_TAB_LABEL, icon: Blocks },
     { id: "models", label: "Models", icon: Layers },
 ];
 
 /**
- * The Analysis tab's status next to its name: a spinner while it runs, a tick when the design passes, a count
- * of problems or warnings otherwise. Symbols and numbers, so it never relies on colour alone.
+ * The Stability tab's status next to its name: a spinner while it runs, a warning triangle when the run failed, a tick when the
+ * design passes, a count of problems or warnings otherwise. Symbols and numbers, so it never relies on colour alone.
  */
-function AnalysisTabStatus({ snapshot }: { snapshot: AnalysisSnapshot }) {
+function StabilityTabStatus({ snapshot }: { snapshot: AnalysisSnapshot }) {
     const { phase, verdict } = snapshot;
     if (phase === "running") return <Loader2 className="ml-0.5 h-3 w-3 animate-spin text-muted-foreground" aria-hidden />;
+    // A run that failed says so here too: on the 3D tab nothing else does (the report's error card is on the other tab).
+    if (phase === "error") return <TriangleAlert className="ml-0.5 h-3.5 w-3.5 text-destructive" aria-hidden />;
     if (!verdict) return null;
     if (verdict.kind === "pass") return <Check className="ml-0.5 h-3.5 w-3.5 text-success" strokeWidth={3} aria-hidden />;
     const count = verdict.kind === "fail" ? verdict.errors : verdict.warnings;
@@ -96,12 +121,6 @@ function AnalysisTabStatus({ snapshot }: { snapshot: AnalysisSnapshot }) {
             {count}
         </span>
     );
-}
-
-/** "Analysis, 3 problems" for the tab's accessible name. */
-function analysisTabLabel(snapshot: AnalysisSnapshot): string {
-    if (snapshot.phase === "running") return "Analysis, running";
-    return snapshot.verdict ? `Analysis, ${snapshot.verdict.short.toLowerCase()}` : "Analysis";
 }
 
 /**
@@ -124,26 +143,70 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     const providers = useWorkspaceStore((s) => s.providers?.providers);
 
     const activeModel = models.find((m) => m.id === activeModelId) ?? null;
-    // A stabilized model names and downloads as its own version, and links back to the model it was made from (when that is in the project).
+    // A stabilized model names and downloads as its own version. The way back to the model it was made from is the bar's
+    // version switcher (the viewer's "Stabilized from … · View original" chip is not passed: it would say the same thing twice).
     const stageTitle = activeModel ? modelTitle(activeModel) : undefined;
     const stageDownloadName = activeModel ? modelFileName(activeModel).replace(/\.glb$/i, "") : undefined;
-    const sourceId = activeModel?.kind === "stabilized" ? activeModel.source_model_id : null;
-    const sourcePrompt = sourceId ? (models.find((m) => m.id === sourceId)?.prompt ?? null) : null;
-    const derivedFrom = useMemo(
-        () => (sourceId && sourcePrompt !== null ? { title: sourcePrompt, onOpen: () => useWorkspaceStore.getState().setActiveModel(sourceId) } : null),
-        [sourceId, sourcePrompt],
-    );
+
+    // ---- the mesh on stage: a stabilized model is shown over the model it was made from ----
+    // The 3D tab then draws the original mesh with only the ADDED blocks on it; the Stability tab draws all the blocks
+    // of the stabilized model mapped over that mesh. Without the source (deleted) the stabilized GLB itself is shown.
+    const family = useVersionFamily();
+    const displayModel = family && activeModel && family.active.id === activeModel.id ? family.display : activeModel;
+    const displayUrl = displayModel?.glb_url ?? null;
+    const onSource = Boolean(family?.isStabilized && activeModel && displayModel && displayModel.id !== activeModel.id);
+    const [showSupports, setShowSupports] = useShowSupports();
+    // Read the blocks of the version the switcher would open before it is asked for (a few KB, kept for the analysis run that needs
+    // them): the first flip to Stabilized then waits for the analysis only, not for a download and a parse as well.
+    useAssemblyFor(family ? stabilizedTarget(family) : null);
+    /** The url the viewer was last given: a load error is about that mesh, not about the active model's own file. */
+    const viewerUrl = useRef<string | null>(null);
+    viewerUrl.current = displayUrl;
+    /** The model whose mesh is on stage behind a stabilized version (null when the stage shows the active model's own file). */
+    const sourceOnStage = useRef<string | null>(null);
+    sourceOnStage.current = onSource && displayModel ? displayModel.id : null;
+    // A source mesh that failed to load is given up for the version on stage (it shows its own blocks, as when the source is
+    // deleted); opening another model, or leaving, tries the sources again.
+    useEffect(() => {
+        clearMeshFailures();
+    }, [activeModelId]);
+    useEffect(() => () => clearMeshFailures(), []);
 
     // ---- analysis: runs on its own once the model's GLB is in the viewer ----
     useAnalysisRunner(activeModel);
     const snapshot = useAnalysisSnapshot(activeModel);
+    const switcher = useVersionSwitcherState(tab);
+    // A stabilized model on its source mesh draws its added blocks from the analysis of the stabilized file. When that run fails the
+    // stage is the bare mesh, which reads as "nothing was added": the viewer says so, with a way to try again.
+    const supportsError = supportsFailure({ onSource, tab, phase: snapshot.phase, error: snapshot.run.error });
+    const retryAnalysis = useCallback(() => useAnalysisStore.getState().retry(), []);
+    // The tooltips and cards number the supports of the model's own run from 1 ("added in step 1"), as the Stabilize timeline does: a
+    // version made from another version carries its predecessors' steps, which the source mesh on stage has no log to count.
+    // (No log to count: left to the viewer, which then numbers from the file's top step rather than guess.)
+    const ownSteps = activeModel?.derived?.steps;
+    const stepOffset = onSource && Array.isArray(ownSteps) ? savedStepOffset(snapshot.result, ownSteps.length) : undefined;
+    // The block view between two versions of a model (the bar's switch, or the switch a saved run makes by itself): the new version
+    // has no result until its own analysis lands, and the viewer would drop to the plain mesh (the model chrome, a re-framed camera,
+    // the blocks back a moment later). The stage keeps drawing the last picture over the same mesh meanwhile; the report does not:
+    // it shows its skeleton, not the other version's verdict (see stageHold.ts).
+    const stage = useHeldStage({
+        own: snapshot.viewResult,
+        preview: snapshot.previewResult,
+        url: displayUrl,
+        family: family ? (family.root?.id ?? family.active.id) : activeModelId,
+        waiting: snapshot.phase === "loading" || snapshot.phase === "running",
+    });
     const analysisView = useAnalysisStore((s) => s.view);
-    const originalState = useAnalysisStore((s) => s.originalState);
+    // The last pick raised the layer cut to keep its blocks in view: the stage says so (its cut note).
+    const layerRaised = useAnalysisStore((s) => s.layerRaised);
     const analysisPanelOpen = useAnalysisStore((s) => s.panelOpen);
     const analysisOn = tab === "analysis";
+    // The store settles the user's colouring against the result it has, which is the other version's while a picture is held (it has
+    // no added blocks, say): the held picture is coloured as asked instead (the viewer still falls back where it cannot be drawn).
+    const colorChoice = useAnalysisStore((s) => s.colorChoice);
     const viewerAnalysisView = useMemo<AnalysisViewState>(
-        () => ({ ...analysisView, mode: analysisOn ? "blocks" : "model" }),
-        [analysisView, analysisOn],
+        () => ({ ...analysisView, colorBy: stageColorBy(analysisView.colorBy, colorChoice, stage.holding), mode: analysisOn ? "blocks" : "model" }),
+        [analysisView, analysisOn, colorChoice, stage.holding],
     );
     const handleModelReady = useCallback((loaded: LoadedModel | null) => {
         useAnalysisStore.getState().setLoaded(loaded);
@@ -151,28 +214,30 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     // The viewer hands over a model once and never takes it back, but its scene is gone as soon as another model
     // is shown: a handle for any other url is stale (its triangles read as empty), and a pick made on the last
     // model's result no longer means anything.
-    const activeGlbUrl = activeModel?.glb_url ?? null;
     useEffect(() => {
-        useAnalysisStore.getState().modelChanged(activeModelId, activeGlbUrl);
-    }, [activeGlbUrl, activeModelId]);
+        useAnalysisStore.getState().modelChanged(activeModelId, displayUrl);
+    }, [displayUrl, activeModelId]);
     // Leaving the workspace disposes the viewer with its scene; its handle must not outlive it.
     useEffect(() => () => useAnalysisStore.getState().setLoaded(null), []);
-    // "A" flips between the 3D view and the report, like the viewer's own letter keys: only while the 3D view has
-    // focus, never as a bare key anywhere on the page (a single-letter shortcut that cannot be switched off).
+    // "A" flips between the 3D view and the Stability tab, and "V" between the original and the stabilized version, like the
+    // viewer's own letter keys: only while the 3D view has focus (the version switch handles "V" itself), never as a bare key
+    // anywhere on the page (a single-letter shortcut that cannot be switched off). The tab was called Analysis; the key stays "A".
     const handleViewerKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (handleVersionKey(versionKeyEvent(e))) return;
         if (e.key.toLowerCase() !== "a" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat || e.nativeEvent.isComposing) return;
-        if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog'], [role='listbox']")) return;
+        if (inTypingContext(e.target)) return;
         e.preventDefault();
         const workspace = useWorkspaceStore.getState();
         if (workspace.workspaceTab === "analysis") {
             workspace.setWorkspaceTab("3d");
             return;
         }
+        // On a phone this lands on the peek card; the full report is one tap on it.
         workspace.setWorkspaceTab("analysis");
-        useAnalysisStore.getState().setSheetOpen(true);
     }, []);
-    // The viewer's Original | Stabilized | Overlay chip: the store decides which result the stage draws (and computes the original half).
-    const handleCompareChange = useCallback((mode: CompareMode) => useAnalysisStore.getState().setCompare(mode), []);
+    // The stage owns the view controls (its Colour menu, the Layers popover, the Show menu): they report here and the store decides
+    // what each may be (a colour mode that cannot be drawn is refused). Switching versions is not one of them: only the bar does that.
+    const handleViewChange = useCallback((patch: ViewPatch) => applyViewPatch(patch, useAnalysisStore.getState()), []);
     const handleBlockHover = useCallback((index: number | null) => useAnalysisStore.getState().hoverBlock(index), []);
     const handleBlockClick = useCallback((index: number | null) => useAnalysisStore.getState().clickBlock(index), []);
     // The viewer stops reporting hovers once the blocks leave the stage: a card must not stay lit.
@@ -221,9 +286,17 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     }, []);
 
     const handleLoadError = useCallback((message: string) => {
+        // The mesh behind a stabilized version could not be loaded: the version still can, so it is shown as its own blocks
+        // (the stage, the analysis and the buttons all follow the same file) and the original stays one click away.
+        const sourceId = sourceOnStage.current;
+        if (sourceId) {
+            markMeshFailed(sourceId);
+            toast.error("The original model could not be displayed", { id: "viewer-load-error", description: `Showing the stabilized model's blocks instead. ${message}` });
+            return;
+        }
         toast.error("This model could not be displayed", { id: "viewer-load-error", description: message });
         // The report says so too, instead of waiting for geometry that will not come.
-        const url = viewerModel.current?.glb_url;
+        const url = viewerUrl.current;
         if (url) useAnalysisStore.getState().modelFailed(url, message);
     }, []);
 
@@ -300,11 +373,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
         onOpenProjects();
     };
 
-    const viewModel = (model: ModelAsset) => {
-        const state = useWorkspaceStore.getState();
-        state.setActiveModel(model.id);
-        state.setWorkspaceTab("3d");
-    };
+    // The Models tab's View and its Original / Stabilized link: the same switch as the bar's, landing on the 3D tab.
+    const viewModel = (model: ModelAsset) => openVersion(model, { tab: "3d" });
 
     // ---- layout ----
     const tabStripFade = useEdgeFade();
@@ -321,15 +391,34 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     // The report floats over the viewer, so the viewer frames the model in what it leaves free: beside the
     // desktop panel, under the folded pill, or under the phone's pill (the sheet is an overlay).
     const freeWidth = Math.max(0, width - insets.left - insets.right);
-    const viewerInsets = useMemo(() => {
-        if (!analysisOn) return insets;
-        if (mobile) return { ...insets, top: insets.top + ANALYSIS_PEEK_PX };
-        // In a narrow window the panel overlaps the model rather than squeezing it to a sliver.
-        return analysisPanelOpen
-            ? { ...insets, left: insets.left + dockInset(freeWidth, ANALYSIS_DOCK_INSET_PX) }
-            : { ...insets, top: insets.top + ANALYSIS_PEEK_PX + 4 };
-    }, [analysisOn, mobile, analysisPanelOpen, insets, freeWidth]);
-    // Opening the Analysis tab in a window too narrow to show the report beside the model starts it folded
+    // The version switcher sits in the bar's tab card, in the room the tab strip leaves free. On a phone, and in a window too narrow
+    // for that, it has a row of its own under the bar. The row is kept (empty) while the first analysis may still bring a switcher,
+    // so the model is not re-framed when the verdict lands.
+    const { inRow: switcherInRow, rowKept: switcherRowKept, rowPx: switcherRowPx, compact: switcherCompact } = switcherLayout({
+        mobile: Boolean(mobile),
+        freeWidth,
+        mode: switcher.mode,
+        pending: switcher.pending,
+    });
+    // Phone: the peek card sits at the bottom of the stage (below), and the stage's toolbar must sit above it. Its height is measured
+    // (it changes with the state of the check) and kept while the full report covers it.
+    const [peekPx, setPeekPx] = useState(ANALYSIS_PEEK_CARD_PX + PHONE_PEEK_MARGIN_PX);
+    const sheetOpen = useAnalysisStore((s) => s.sheetOpen);
+    const viewerInsets = useMemo(
+        () =>
+            viewerInsetsFor({
+                insets,
+                analysisOn,
+                mobile: Boolean(mobile),
+                switcherRowPx,
+                panelOpen: analysisPanelOpen,
+                freeWidth,
+                dockInsetPx: ANALYSIS_DOCK_INSET_PX,
+                peekPx,
+            }),
+        [analysisOn, mobile, switcherRowPx, analysisPanelOpen, insets, freeWidth, peekPx],
+    );
+    // Opening the Stability tab in a window too narrow to show the report beside the model starts it folded
     // into its pill (the user can still open it, over the stage).
     const dockRoom = useRef(true);
     dockRoom.current = dockFits(freeWidth, ANALYSIS_DOCK_INSET_PX);
@@ -339,11 +428,10 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
 
     const selectTab = (id: WorkspaceTab) => {
         const workspace = useWorkspaceStore.getState();
-        if (id === "analysis" && mobile) {
-            // On a phone the report is a sheet: the tab opens it, and tapping the open tab again toggles it.
-            const analysis = useAnalysisStore.getState();
-            analysis.setSheetOpen(workspace.workspaceTab === "analysis" ? !analysis.sheetOpen : true);
-        }
+        // On a phone the tab lands on the peek card; tapping the open tab again opens the full report (a sheet), and again folds it.
+        const analysis = useAnalysisStore.getState();
+        const sheet = sheetOnTabTap({ mobile: Boolean(mobile), tapped: id, current: workspace.workspaceTab, sheetOpen: analysis.sheetOpen });
+        if (sheet !== null) analysis.setSheetOpen(sheet);
         workspace.setWorkspaceTab(id);
     };
 
@@ -368,24 +456,35 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                 <div className={cn("absolute inset-0", tab === "models" && "invisible")} onKeyDown={handleViewerKeyDown}>
                     <Suspense fallback={null}>
                         <GlbViewer
-                            url={activeModel?.glb_url ?? null}
+                            url={displayUrl}
                             title={stageTitle}
                             downloadName={stageDownloadName}
-                            derivedFrom={derivedFrom}
-                            compareStatus={originalState}
+                            downloadUrl={activeModel?.glb_url ?? null}
+                            supports={onSource ? snapshot.result : null}
+                            stepOffset={stepOffset}
+                            showSupports={showSupports}
+                            onShowSupportsChange={setShowSupports}
                             insets={viewerInsets}
-                            overlay={showOverlay ? <GenerationOverlay jobs={running} providers={providers} /> : null}
+                            overlay={
+                                showOverlay ? (
+                                    <GenerationOverlay jobs={running} providers={providers} />
+                                ) : supportsError ? (
+                                    <SupportsFailedNotice message={supportsError} onRetry={retryAnalysis} />
+                                ) : null
+                            }
                             emptyState={emptyState}
                             onThumbnail={handleThumbnail}
                             onLoadError={handleLoadError}
                             onModelReady={handleModelReady}
-                            analysis={snapshot.viewResult}
+                            analysis={stage.analysis}
                             analysisView={viewerAnalysisView}
                             previewResult={snapshot.previewResult}
-                            onCompareChange={handleCompareChange}
+                            onViewChange={handleViewChange}
+                            layerRaised={layerRaised}
                             analysisBusy={snapshot.phase === "running"}
-                            onBlockHover={handleBlockHover}
-                            onBlockClick={handleBlockClick}
+                            // The blocks on stage are the last version's while it is held: not the report's, so a hover or a click means nothing yet.
+                            onBlockHover={stage.holding ? undefined : handleBlockHover}
+                            onBlockClick={stage.holding ? undefined : handleBlockClick}
                         />
                     </Suspense>
                 </div>
@@ -510,8 +609,8 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                     type="button"
                                     ref={tab === id ? activeTabRef : undefined}
                                     onClick={() => selectTab(id)}
-                                    title={id === "analysis" ? "Analysis (A while the 3D view has focus)" : mobile ? label : undefined}
-                                    aria-label={id === "analysis" ? analysisTabLabel(snapshot) : mobile ? label : undefined}
+                                    title={id === "analysis" ? `${label} (A while the 3D view has focus)` : mobile ? label : undefined}
+                                    aria-label={id === "analysis" ? stabilityTabLabel(snapshot) : mobile ? label : undefined}
                                     data-testid={`tab-${id}`}
                                     aria-pressed={tab === id}
                                     className={`flex items-center ${mobile ? "gap-1.5 px-2.5" : "gap-1 px-3"} py-2 text-xs border-b-2 transition-colors whitespace-nowrap ${
@@ -523,7 +622,7 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                     <Icon className="h-3.5 w-3.5" />
                                     {/* Icons only on phones: labelled tabs would crowd the bar. */}
                                     {!mobile && label}
-                                    {id === "analysis" && <AnalysisTabStatus snapshot={snapshot} />}
+                                    {id === "analysis" && <StabilityTabStatus snapshot={snapshot} />}
                                     {id === "models" && models.length > 0 && !mobile && (
                                         <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground">
                                             {models.length}
@@ -532,7 +631,11 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                                 </button>
                             ))}
                         </div>
-                        <div className="flex-1" />
+                        {/* The room between the tabs and the save state: the version switcher fills it on the 3D and the Stability tab, so
+                            neither the tabs nor the controls on the right move when it comes and goes. */}
+                        <div className="flex flex-1 items-center">
+                            {!switcherInRow && <VersionSwitcher state={switcher} compact={switcherCompact} embedded className="mx-2" />}
+                        </div>
 
                         {/* The save text overflows the icon-packed phone bar (which fits 375px
                             exactly): autosave still runs there, it is just not narrated. */}
@@ -585,6 +688,13 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                     </div>
                 </div>
 
+                {!mobile && switcherRowKept && (
+                    // A window too narrow for the switcher in the bar: its row under the bar (kept empty while it may still appear).
+                    <div className="mt-2 flex min-h-9 items-center" style={barStyle}>
+                        <VersionSwitcher state={switcher} compact />
+                    </div>
+                )}
+
                 {analysisOn && !mobile && (
                     // Under the bar, at the left edge of the free area: the viewer's insets leave this strip alone.
                     <div className="min-h-0 flex-1 py-3" style={{ marginLeft: side.left + 12, marginRight: side.right }}>
@@ -592,9 +702,16 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                     </div>
                 )}
 
-                {analysisOn && mobile && (
-                    <div className="mt-2" style={contentStyle}>
-                        <AnalysisPeek snapshot={snapshot} />
+                {mobile && (switcherRowKept || analysisOn) && (
+                    // On a phone the row holds the switcher and the issue being shown (tap x to clear it). The row keeps its height
+                    // (a 32 px chip under 8 px of air) with nothing picked, so the stage does not move when a pick comes and goes.
+                    <div className={cn("mt-2 flex items-center gap-2", switcherRowKept && "min-h-10", analysisOn && !switcherRowKept && "min-h-8")} style={contentStyle}>
+                        <VersionSwitcher state={switcher} row />
+                        {analysisOn && (
+                            <div className="min-w-0 flex-1">
+                                <SelectionPeek />
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -613,6 +730,13 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                 )}
             </div>
 
+            {mobile && analysisOn && !sheetOpen && (
+                // The peek card is the Stability tab at rest: the answer, four figures and the one action, over the foot of the stage.
+                // It is gone while the full report covers it (one copy of the buttons, one live region), and its room is kept.
+                <PhonePeekDock onHeight={setPeekPx}>
+                    <AnalysisPeekCard model={activeModel} snapshot={snapshot} />
+                </PhonePeekDock>
+            )}
             {mobile && analysisOn && <AnalysisSheet model={activeModel} snapshot={snapshot} />}
         </div>
     );
