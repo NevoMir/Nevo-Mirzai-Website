@@ -1175,6 +1175,27 @@ await test("bar: the 3D tab of a stabilized model shows the original mesh alone 
     lib.useAnalysisStore.setState({ result: null, resultModelId: null });
 });
 
+await test("bar: a version on its source mesh still tells the viewer the step offset of its own run (the block tabs number its steps from 1)", async () => {
+    // Original m1 -> S1 (steps 1-2) -> S2 (steps 3-4, its own log has the two steps 1-2): S2's blocks are numbered 1-2 on screen.
+    const log = (n) => ({ n, move: "column", at_mm: [0, 0, 0], added: 1 });
+    const s1 = stab("s1", "m1", 2, 5, { derived: { added_blocks: 2, steps: [log(1), log(2)] } });
+    const s2 = stab("s2", "s1", 2, 10, { derived: { added_blocks: 2, steps: [log(1), log(2)] } });
+    const models = [model("m1"), s1, s2];
+    const cells = [[0, 0, 0], [1, 0, 0], [2, 0, 0]].map((cell) => ({ cell }));
+    const descriptor = lib.descriptorFromBlocks([...cells, { cell: [0, 0, 1], role: "column", step: 1 }, { cell: [1, 0, 1], role: "column", step: 2 }, { cell: [2, 0, 1], role: "column", step: 3 }, { cell: [0, 1, 0], role: "footing", step: 4 }]);
+    const result = lib.analyzeAssembly(descriptor, null, lib.sanitizeSettings(null));
+    lib.useAnalysisStore.setState({ result, resultModelId: "s2", loaded: { url: "/m1.glb" } });
+    for (const tab of ["3d", "analysis"]) {
+        const html = await shellHtml({ models, active: "s2", tab });
+        assert.equal(attr(html, "data-url"), "/m1.glb", `${tab}: the original mesh is on stage`);
+        assert.equal(attr(html, "data-supports"), "no", `${tab}: no cubes over the mesh`);
+        assert.equal(attr(html, "data-step-offset"), "2", `${tab}: the 4 steps of the file minus the 2 of its own log`);
+    }
+    lib.useAnalysisStore.setState({ result: null, resultModelId: null });
+    const original = await shellHtml({ models, active: "m1" });
+    assert.equal(attr(original, "data-step-offset"), "(omitted)", "the original has nothing to count");
+});
+
 await test("bar: when the original mesh cannot be loaded, the stabilized version shows its own blocks (one file for the stage and the analysis), says so, and the original stays its own", async () => {
     lib.toasts.length = 0;
     lib.clearMeshFailures();

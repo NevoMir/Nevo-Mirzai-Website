@@ -204,7 +204,7 @@ export function meshBaseOf<T extends TreeModel>(models: readonly T[], m: T): T |
 
 /**
  * What the viewer loads for `m`: `display.glb_url`, with the blocks of `m` drawn over it unless `own`. `own` is true when the stage shows the
- * version's own file (a mesh version, a block edit, a thinned optimization, an orphan).
+ * version's own file (a mesh version, a block edit made with words or a version made from one, an orphan).
  */
 export function stageOf<T extends TreeModel>(models: readonly T[], m: T): { display: T; own: boolean } {
     if (representation(m) === "mesh") return { display: m, own: true };
@@ -312,6 +312,25 @@ export function headOf<T extends TreeModel>(models: readonly T[], active: T): T 
     const all = versionsBelow(models, root.id);
     if (all.length === 0) return null;
     return all.find((m) => m.id === lastHead.get(root.id)) ?? all[all.length - 1];
+}
+
+/**
+ * The two models of the Stability tab's switch. Around a stabilization it is the model that was stabilized and its stabilized version (the
+ * original, or a version edited with words), so "back" is exactly what the person stabilized; elsewhere the original and the head, as the
+ * bar's control. Null when the family has no version (or no root).
+ */
+export function stabilityPair<T extends TreeModel>(models: readonly T[], active: T): { before: T; after: T } | null {
+    const root = rootOf(models, active);
+    if (!root) return null;
+    if (active.kind === "stabilized") {
+        const parent = parentOf(models, active);
+        if (parent) return { before: parent, after: active };
+    }
+    // Back on the model that was stabilized: forward is the stabilized version seen last, when it was made from this one.
+    const seen = headOf(models, root);
+    if (seen && seen.kind === "stabilized" && seen.source_model_id === active.id) return { before: active, after: seen };
+    const head = headOf(models, active);
+    return head && head.id !== root.id ? { before: root, after: head } : null;
 }
 
 /** `[` goes to the parent, `]` to the newest child. */

@@ -3590,7 +3590,7 @@ await test("stabilizing an edited version counts the stabilizations along its pa
     assert.equal(lib.currentWork(), null, "left: the work is over");
 });
 
-await test("a block version sits on its mesh only while the mesh describes its blocks: the family's display follows the tree", () => {
+await test("a block version sits on its mesh unless a block edit made with words changed it: the family's display follows the tree", () => {
     const P = crypto.randomUUID();
     S().setProject(detail(P));
     const root = { ...modelFor(makeJob(P)), id: "r" };
@@ -3605,11 +3605,11 @@ await test("a block version sits on its mesh only while the mesh describes its b
     assert.equal(display("s1"), "r", "stabilized: on the original's mesh");
     assert.equal(display("e1"), "e1", "a block edit: its own blocks");
     assert.equal(display("o1"), "r", "an optimization that kept the outside: on the mesh");
-    assert.equal(display("o2"), "o2", "one that thinned the outside: its own blocks");
+    assert.equal(display("o2"), "r", "one that thinned the outside: still on the original mesh (only edits with words leave it)");
     assert.equal(display("d1"), "d1", "a design edit is its own mesh");
     assert.equal(display("sd"), "d1", "the stabilizer worked on the edited mesh");
     assert.equal(lib.versionFamily(S().models, "o1").onSource, true);
-    assert.equal(lib.versionFamily(S().models, "o2").onSource, false);
+    assert.equal(lib.versionFamily(S().models, "o2").onSource, true);
     // A mesh that would not load: the version shows its own blocks until it is tried again.
     lib.markMeshFailed("r");
     assert.equal(display("s1"), "s1");

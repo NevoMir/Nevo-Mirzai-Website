@@ -129,6 +129,13 @@ export interface GlbViewerProps {
      * assembly's own log (a stabilized model shown as itself), else 0.
      */
     stepOffset?: number;
+    /**
+     * The assembly of the version shown on its source mesh, for the step numbering only (the 3D tab no longer draws its added blocks, so
+     * `supports` is not given): with `stepOffset`, the Stability and Optimization tabs number the run on screen from 1.
+     */
+    stepAssembly?: AssemblyDescriptor | null;
+    /** What the toolbar's download says when `downloadUrl` is not the file on stage. Omitted: "Download stabilized GLB". */
+    downloadLabel?: string;
 }
 
 type Phase = "idle" | "loading" | "ready" | "error" | "nowebgl" | "lost";
@@ -194,6 +201,8 @@ export default function GlbViewer({
     onShowSupportsChange,
     downloadUrl: downloadUrlProp,
     stepOffset: stepOffsetProp,
+    stepAssembly,
+    downloadLabel: downloadLabelProp,
 }: GlbViewerProps) {
     const free = insets ?? NO_INSETS;
     const dark = useIsDark();
@@ -584,7 +593,7 @@ export default function GlbViewer({
     };
     // The tooltips number the steps of the run on screen from 1: a preview continues from the model's top step, a saved model from its own log.
     // A stabilized model shown on its source mesh has no log on stage (`earlier` is 0 there): the host gives the offset (`stepOffset`).
-    const modelAssembly = assembly ?? supports?.assembly?.descriptor ?? null;
+    const modelAssembly = assembly ?? supports?.assembly?.descriptor ?? stepAssembly ?? null;
     const savedStepOffset = stageStepOffset({ assembly: modelAssembly, previewing: false, hosted: stepOffsetProp, earlier });
     const stepOffset = previewing ? stageStepOffset({ assembly: modelAssembly, previewing: true, earlier }) : savedStepOffset;
     // The block view: the analysis drawn as blocks, in place of the model's scene.
@@ -1107,7 +1116,7 @@ export default function GlbViewer({
                                     onSplit={() => void toggleSplit()}
                                     downloadUrl={downloadUrlProp !== undefined ? downloadUrlProp : url}
                                     downloadName={downloadName || downloadStem(title, stabilized)}
-                                    downloadLabel={downloadLabelFor(downloadUrlProp, url)}
+                                    downloadLabel={downloadLabelFor(downloadUrlProp, url, downloadLabelProp)}
                                     layers={layerState && onViewChange ? { cut: layerState, onChange: (layerMax) => onViewChange({ layerMax }), raised: !!layerRaised } : undefined}
                                     show={
                                         blocksOn && analysisView && onViewChange

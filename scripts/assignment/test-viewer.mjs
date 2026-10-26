@@ -3872,6 +3872,8 @@ await test("V5: the toolbar download says it is the stabilized GLB whenever it i
     assert.equal(downloadLabelFor("/files/root.glb", "/files/root.glb"), undefined, "the file on stage: the toolbar's own wording");
     assert.equal(downloadLabelFor(undefined, "/files/root.glb"), undefined, "no other file given");
     assert.equal(downloadLabelFor(null, "/files/root.glb"), undefined, "no download at all");
+    assert.equal(downloadLabelFor("/files/opt.glb", "/files/root.glb", "Download optimized GLB"), "Download optimized GLB", "an optimized version on the original mesh says so");
+    assert.equal(downloadLabelFor("/files/root.glb", "/files/root.glb", "Download optimized GLB"), undefined, "the given words only apply to another file");
 });
 
 // ---------- the stage's own view controls: the Colour chip, the layer cut, the Show menu, the legend ----------

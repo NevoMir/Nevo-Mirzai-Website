@@ -1683,7 +1683,7 @@ await test("the panel does not switch versions, and the old sections, the compar
     const offenders = (re) => files.filter((f) => re.test(source[f]));
     // (The block-edit card opens the version it has just saved; that is a new model, not a switch between the versions of this one.)
     assert.deepEqual(offenders(/setActiveModel/).filter((f) => f !== "EditBlocksCard.tsx"), [], "no component switches the model itself");
-    assert.deepEqual(offenders(/\bopenVersion\b/), ["RunStrip.tsx"], "the only way across is the run strip's 'Go to that model'");
+    assert.deepEqual(offenders(/\bopenVersion\b/).sort(), ["RunStrip.tsx", "StabilityVersionToggle.tsx"], "the only ways across are the run strip's 'Go to that model' and the Original | Stabilized switch");
     assert.deepEqual(offenders(/requestCompare|setCompare|ensureOriginal|originalResult|originalFor|originalState|compareStatus|onCompareChange|derivedFrom|CompareChip|CompareNotice|pendingCompare/), []);
     assert.deepEqual(offenders(/View original|Open stabilized version|stabilize-compare|stabilize-open"/), []);
     assert.deepEqual(offenders(/Colour blocks by stress|ViewSection|StressLegend|LayerRaisedNote|MetricsSection/), []);

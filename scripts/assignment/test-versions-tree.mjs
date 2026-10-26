@@ -118,6 +118,27 @@ await test("stage: a design or mesh edit is its own mesh; a version of a design 
     assert.deepEqual([T.stageOf(L, L[2]).display.id, T.stageOf(L, L[2]).own], ["d1", false]);
 });
 
+await test("stability pair: around a stabilization it is the model that was stabilized and its stabilized version; elsewhere the original and the head", () => {
+    T.forgetHeads();
+    const L = [root("r", 1), edit("m", "r", 2, "mesh", "Taller back"), stab("s", "m", 3), stab("s0", "r", 4), opt("o", "s0", 5, true)];
+    const pair = (id) => {
+        const p = T.stabilityPair(L, by(L, id));
+        return p ? [p.before.id, p.after.id] : null;
+    };
+    assert.deepEqual(pair("s"), ["m", "s"], "a stabilized edit goes back to the edit, not the original");
+    assert.deepEqual(pair("s0"), ["r", "s0"], "a stabilized original goes back to the original");
+    // Back on the edit after looking at its stabilized version: forward is that version again.
+    T.rememberHead(L, by(L, "s"));
+    assert.deepEqual(pair("m"), ["m", "s"]);
+    // From the original: the original and the version seen last (here the stabilized edit, which was not made from the original).
+    assert.deepEqual(pair("r"), ["r", "s"]);
+    T.rememberHead(L, by(L, "s0"));
+    assert.deepEqual(pair("r"), ["r", "s0"]);
+    assert.deepEqual(pair("o"), ["r", "o"], "an optimization: the original and the optimization");
+    assert.equal(T.stabilityPair([root("x", 1)], root("x", 1)), null, "no version: no switch");
+    T.forgetHeads();
+});
+
 await test("orphans and loops: a version with no parent stands alone; a loop has no root; nothing hangs", () => {
     const orphan = [opt("x", "gone", 1, false)];
     assert.equal(T.rootOf(orphan, orphan[0]), null);

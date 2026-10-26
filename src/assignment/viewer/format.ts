@@ -49,8 +49,8 @@ export function downloadStem(title: string | undefined, stabilized = false): str
  * source mesh, and that file is the stabilized block assembly: say so from the moment the toolbar is there, not once an analysis
  * has counted the added blocks (it may be late, fail, or find none). undefined: the toolbar's own "Download GLB".
  */
-export function downloadLabelFor(downloadUrl: string | null | undefined, url: string | null): string | undefined {
-    return downloadUrl && downloadUrl !== url ? "Download stabilized GLB" : undefined;
+export function downloadLabelFor(downloadUrl: string | null | undefined, url: string | null, label?: string): string | undefined {
+    return downloadUrl && downloadUrl !== url ? (label ?? "Download stabilized GLB") : undefined;
 }
 
 /** What the parts list and the hover tooltip say about a part: its own line ("12 blocks" for a role), else its triangle count. */

@@ -618,7 +618,7 @@ if (!LIMIT_MODE) {
             const stored = (await S.getProject(projectB)).models.find((m) => m.id === v6.id);
             assert.equal(stored.optimization.after.blocks, resultCard.meta.after.blocks);
         });
-        await test("an optimization that may take out any block changes the outside: shape_changed is true and the stage shows its own blocks, not the mesh", async () => {
+        await test("an optimization that may take out any block changes the outside: shape_changed is true, and the 3D tab still shows the original mesh", async () => {
             const O = S.useOptimizeStore;
             ws.getState().setActiveModel(v3.id);
             an.getState().modelChanged(v3.id, v3.glb_url);
@@ -637,8 +637,10 @@ if (!LIMIT_MODE) {
             const v7 = ws.getState().models.find((m) => m.id === O.getState().savedModelId);
             assert.equal(v7.kind, "optimized");
             assert.equal(v7.optimization.shape_changed, true);
-            assert.equal(S.meshBaseOf(ws.getState().models, v7), null, "no mesh describes these blocks any more");
-            assert.equal(S.stageOf(ws.getState().models, v7).display.id, v7.id, "the 3D tab shows the blocks themselves");
+            // Only a block edit made with words takes the 3D tab off the mesh; an optimization (like a stabilization) leaves it there.
+            const base = S.meshBaseOf(ws.getState().models, v7);
+            assert.ok(base && base.id !== v7.id, "the mesh it was made from is still the picture");
+            assert.deepEqual([S.stageOf(ws.getState().models, v7).display.id, S.stageOf(ws.getState().models, v7).own], [base.id, false], "the 3D tab shows that mesh");
             ws.getState().setActiveModel(v6.id);
         });
         await test("the Stability tab on the saved version says what the result card said", async () => {

@@ -76,6 +76,7 @@ import { dockFits } from "@/assignment/store/analysisLogic";
 import { completedThisSession, isTerminalJob, latestJobIds } from "@/assignment/store/jobs";
 import { deleteVersion } from "@/assignment/store/models";
 import { saveNow, whenSaved } from "@/assignment/store/persist";
+import { savedStepOffset } from "@/assignment/store/stabilizeLogic";
 import { useWorkspaceStore, type WorkspaceTab } from "@/assignment/store/useWorkspaceStore";
 import { clearMeshFailures, markMeshFailed, useAssemblyFor, useVersionFamily } from "@/assignment/store/versions";
 import { useCurrentWork } from "@/assignment/store/workGuard";
@@ -198,6 +199,14 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
     useAnalysisRunner(activeModel);
     const snapshot = useAnalysisSnapshot(activeModel);
     const switcher = useVersionSwitcherState(tab);
+    // The tooltips and cards number the supports of the model's own run from 1 ("added in step 1"), as the Stabilize timeline does: a
+    // version made from another version carries its predecessors' steps, which the source mesh on stage has no log to count.
+    // (No log to count: left to the viewer, which then numbers from the file's top step rather than guess.)
+    const ownSteps = activeModel?.derived?.steps;
+    const stepOffset = onSource && Array.isArray(ownSteps) ? savedStepOffset(snapshot.result, ownSteps.length) : undefined;
+    const stepAssembly = onSource ? (snapshot.result?.assembly?.descriptor ?? null) : null;
+    // The download of a version shown on its source mesh is the version's own blocks file: say which.
+    const downloadLabel = onSource && activeModel ? `Download ${activeModel.kind === "stabilized" ? "stabilized" : activeModel.kind === "optimized" ? "optimized" : "blocks"} GLB` : undefined;
     // The block view between two versions of a model (the bar's switch, or the switch a saved run makes by itself): the new version
     // has no result until its own analysis lands, and the viewer would drop to the plain mesh (the model chrome, a re-framed camera,
     // the blocks back a moment later). The stage keeps drawing the last picture over the same mesh meanwhile; the report does not:
@@ -490,6 +499,9 @@ export function WorkspaceShell({ onOpenProjects, onShowChat, mobile, chatStarted
                             // The 3D tab is the model as it was made (or as the person changed it with words): the blocks the stabilizer
                             // and the optimizer added are shown on the Stability and Optimization tabs only.
                             supports={null}
+                            stepOffset={stepOffset}
+                            stepAssembly={stepAssembly}
+                            downloadLabel={downloadLabel}
                             insets={viewerInsets}
                             overlay={
                                 showOverlay ? <GenerationOverlay jobs={running} providers={providers} /> : null
