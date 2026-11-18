@@ -9,7 +9,6 @@ const About = loadLazy(() => import("@/pages/about"));
 const Awards = loadLazy(() => import("@/pages/awards"));
 const Projects = loadLazy(() => import("@/pages/projects"));
 const Outreach = loadLazy(() => import("@/pages/outreach"));
-const ClientOutreach = loadLazy(() => import("@/pages/client-outreach"));
 const NotFound = loadLazy(() => import("@/pages/notfound"));
 
 export default function App() {
@@ -24,7 +23,6 @@ export default function App() {
                         <Route path="projects/:slug" element={<Projects />} />
                         <Route path="awards" element={<Awards />} />
                         <Route path="outreach" element={<Outreach />} />
-                        <Route path="client-outreach" element={<ClientOutreach />} />
                         <Route path="*" element={<NotFound />} />
                     </Route>
                 </Routes>

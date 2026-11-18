@@ -8,6 +8,10 @@ export interface Env {
     ASSETS: Fetcher;
     DB: D1Database;
     FILES: R2Bucket;
+    // The client-outreach page (worker/outreach/types.ts): its own database, the research files, and the owner key.
+    OUTREACH_DB?: D1Database;
+    OUTREACH_KV?: KVNamespace;
+    OUTREACH_KEY?: string;
     // Secrets (wrangler secret put / .dev.vars). A provider is available only when its key is set.
     FAL_KEY?: string;
     TRIPO_API_KEY?: string;

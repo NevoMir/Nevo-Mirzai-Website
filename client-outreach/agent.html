@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Outreach console</title>
+<style>
+:root { --bg:#f3f5f4; --surface:#fff; --ink:#182020; --muted:#5c6866; --line:#dbe0de; --accent:#0d6668; --accent-soft:#dceeec; --warn:#8f600d; --warn-soft:#f7eed9; --no:#b42318; --no-soft:#fbe2df; --ok:#2f7d4f; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111716; --surface:#19211f; --ink:#e4ebe8; --muted:#9aa7a3; --line:#2b3633; --accent:#4fb3ad; --accent-soft:#16302e; --warn:#e3b45c; --warn-soft:#33290f; --no:#f2867c; --no-soft:#3a1d1a; --ok:#6cc08f; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 "Public Sans", "Helvetica Neue", Arial, system-ui, sans-serif; }
+header, main { max-width: 900px; margin: 0 auto; padding: 0 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 24px; }
+h1 { font: 700 24px/1.2 "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif; margin: 0; }
+h2 { font: 700 18px/1.3 "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif; margin: 0 0 8px; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; }
+.muted, .src { color: var(--muted); font-size: 13.5px; }
+.btn { padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: 600 14px/1 inherit; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { opacity: .5; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; }
+.person { border-top: 1px solid var(--line); padding: 12px 0; }
+.person:first-of-type { border-top: 0; }
+.person h3 { margin: 0; font-size: 16px; }
+pre.mail { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13.5px/1.5 "IBM Plex Mono", ui-monospace, Menlo, monospace; margin: 8px 0; }
+.warn { color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; margin: 6px 0; }
+.stop { color: var(--no); background: var(--no-soft); border-radius: 8px; padding: 8px 12px; }
+.ok { color: var(--ok); font-weight: 600; }
+.addr { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 13.5px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13.5px; }
+form.reply { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Outreach console</h1>
+  <span class="muted" id="who"></span>
+  <form method="post" action="/client-outreach/logout" style="margin-left:auto"><button class="btn" type="submit">Sign out</button></form>
+</header>
+<main>
+  <section id="status-box" aria-live="polite"><p class="muted">Loading…</p></section>
+
+  <section>
+    <h2>1. Check the mailbox first</h2>
+    <p class="muted">Search the founder's mailbox for every reply, bounce and stop request from the people below (everyone already written to). Record each one here, then press "I checked the mailbox". Taking people is refused until someone checked in the last 12 hours.</p>
+    <div id="written"></div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" id="inbox-done">I checked the mailbox</button><span class="src" id="inbox-when"></span></div>
+  </section>
+
+  <section>
+    <h2>2. Take people and write to them</h2>
+    <p class="muted" id="mode-line"></p>
+    <div class="row">
+      <label class="muted">How many <select id="take-n" class="field"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
+      <button class="btn primary" id="take">Take</button>
+      <button class="btn" id="refresh">Refresh</button>
+    </div>
+    <div id="mine"></div>
+    <div class="row" id="bulk-row" hidden style="margin-top:10px">
+      <button class="btn" id="bulk-done"></button>
+      <button class="btn" id="bulk-release">Give all back</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Rules</h2>
+    <p class="muted">One person per email, plain text, no tracking, never change the last paragraph or the signature. Someone who replied gets no template. A stop request is recorded the same day and gets no confirmation email. The full guide: <a href="/client-outreach/agents" target="_blank" rel="noopener">/client-outreach/agents</a>.</p>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="/src/client-outreach/agent.js"></script>
+</body>
+</html>

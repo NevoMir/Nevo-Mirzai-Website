@@ -2,11 +2,13 @@
 //   /api/assignment_alex/*          the JSON API (worker/api.ts)
 //   /assignment_alex[/...]          the single-page app shell, plus its static files
 //   queue "assignment-alex-llm"     the Muse assembly designer's LLM calls (worker/llm.ts)
+//   /client-outreach[/...], /api/outreach/*   the founder's private outreach page and its API for agents (worker/outreach/)
 // Everything else on nevomirzai.com is served from ./dist without invoking the Worker.
 
 import { API_BASE, APP_BASE } from "../src/assignment/shared/contract.ts";
 import { handleApi } from "./api.ts";
 import { handleLlmBatch } from "./llm.ts";
+import { handleOutreach, isOutreachPath } from "./outreach/index.ts";
 import type { Env } from "./providers/types.ts";
 import { errorSummary, jsonError } from "./util.ts";
 
@@ -36,6 +38,7 @@ async function serveApp(request: Request, env: Env): Promise<Response> {
 export default {
     async fetch(request, env, ctx): Promise<Response> {
         const { pathname } = new URL(request.url);
+        if (isOutreachPath(pathname)) return handleOutreach(request, env);
         try {
             if (pathname === API_BASE || pathname.startsWith(`${API_BASE}/`)) {
                 return await handleApi(request, env, ctx);

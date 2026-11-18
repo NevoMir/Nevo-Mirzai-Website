@@ -22,5 +22,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["worker", "src/assignment/shared"]
+  "include": ["worker", "src/assignment/shared", "src/client-outreach/shared"]
 }

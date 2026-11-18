@@ -1,14 +1,22 @@
 {
   "name": "nevo-mirzai-website",
   "compatibility_date": "2026-03-28",
-  // The Worker only runs for the text-to-3D assignment (/assignment_alex and its API).
-  // Every other path is served straight from ./dist as before, without invoking it.
+  // The Worker runs for the text-to-3D assignment (/assignment_alex and its API) and for the private client-outreach page
+  // (/client-outreach and /api/outreach, worker/outreach/README.md). Every other path is served straight from ./dist.
   "main": "./worker/index.ts",
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/assignment_alex/*", "/assignment_alex", "/assignment_alex/*"]
+    "run_worker_first": [
+      "/api/assignment_alex/*",
+      "/assignment_alex",
+      "/assignment_alex/*",
+      "/client-outreach",
+      "/client-outreach/*",
+      "/api/outreach",
+      "/api/outreach/*"
+    ]
   },
   "d1_databases": [
     {
@@ -16,8 +24,20 @@
       "database_name": "assignment-alex",
       "database_id": "eef6ff34-a14d-4da9-b33f-ff0f9758d76d",
       "migrations_dir": "migrations"
+    },
+    {
+      // The client-outreach page: statuses, settings, claims, agent keys, log and the research records (personal data:
+      // it never goes to git). Create once with `npx wrangler d1 create llo-outreach`, then
+      // `npx wrangler d1 migrations apply llo-outreach --remote` before deploying.
+      "binding": "OUTREACH_DB",
+      "database_name": "llo-outreach",
+      "database_id": "efdca375-1fb3-499f-a280-b26af41f9473",
+      "migrations_dir": "migrations_outreach"
     }
   ],
+  // The research files of the client-outreach page as uploaded (scripts/outreach/upload-data.mjs).
+  // Create once with `npx wrangler kv namespace create OUTREACH_KV`.
+  "kv_namespaces": [{ "binding": "OUTREACH_KV", "id": "ad7c75d854494b7da3f7a07214eeab09" }],
   "r2_buckets": [
     {
       "binding": "FILES",

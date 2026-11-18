@@ -14,6 +14,7 @@ const assignmentSpaFallback = (): Plugin => ({
             const url = req.url ?? "";
             const pathname = url.split("?")[0];
             if (/^\/assignment_alex(\/[^.]*)?$/.test(pathname)) req.url = "/assignment_alex/index.html";
+            // The outreach pages need the Worker's sign-in: in dev, open them through `npx wrangler dev` (port 8787).
             next();
         });
     },
@@ -32,13 +33,17 @@ export default defineConfig({
     },
     server: {
         // `npx wrangler dev` serves the assignment API on 8787.
-        proxy: { "/api/assignment_alex": "http://127.0.0.1:8787" },
+        proxy: { "/api/assignment_alex": "http://127.0.0.1:8787", "/api/outreach": "http://127.0.0.1:8787" },
     },
     build: {
         rollupOptions: {
             input: {
                 main: path.resolve(__dirname, "index.html"),
                 assignment: path.resolve(__dirname, "assignment_alex/index.html"),
+                // The private outreach page and the agents' console: the Worker serves them only after sign-in
+                // (worker/outreach/pages.ts). They hold no data; it comes from /api/outreach.
+                outreach: path.resolve(__dirname, "client-outreach/index.html"),
+                outreachAgent: path.resolve(__dirname, "client-outreach/agent.html"),
             },
         },
     },
